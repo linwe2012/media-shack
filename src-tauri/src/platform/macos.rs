@@ -57,7 +57,7 @@ pub struct PowerAssertion {
 impl PowerAssertion {
     pub fn acquire(reason: &str) -> Result<Self, String> {
         let type_c = CString::new("PreventUserIdleSystemSleep").unwrap();
-        let name_c = CString::new(reason).unwrap_or_else(|_| CString::new("FFmpeg Queue active").unwrap());
+        let name_c = CString::new(reason).unwrap_or_else(|_| CString::new("Media Shack active").unwrap());
         unsafe {
             let cf_type = CFStringCreateWithCString(std::ptr::null(), type_c.as_ptr(), K_CF_STRING_ENCODING_UTF8);
             let cf_name = CFStringCreateWithCString(std::ptr::null(), name_c.as_ptr(), K_CF_STRING_ENCODING_UTF8);
@@ -100,7 +100,7 @@ pub struct InstanceLock {
 
 pub fn acquire_instance_lock(app_data_dir: &Path) -> Result<InstanceLock, String> {
     std::fs::create_dir_all(app_data_dir).map_err(|e| e.to_string())?;
-    let lock_path = app_data_dir.join("ffmpeg_queue.lock");
+    let lock_path = app_data_dir.join("media_shack.lock");
     let file = OpenOptions::new()
         .create(true)
         .read(true)
@@ -109,7 +109,7 @@ pub fn acquire_instance_lock(app_data_dir: &Path) -> Result<InstanceLock, String
         .map_err(|e| format!("Failed to open instance lock: {e}"))?;
     let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     if rc != 0 {
-        return Err("Another FFmpeg Queue instance is already running.".to_string());
+        return Err("Another Media Shack instance is already running.".to_string());
     }
     Ok(InstanceLock { _file: file })
 }
@@ -177,14 +177,14 @@ pub fn spawn_supervised_ffmpeg(
 
     let mut exe = std::env::current_exe().map_err(|e| format!("current_exe error: {e}"))?;
     // When running inside `cargo test`, `current_exe()` is `target/<profile>/deps/<test_bin>`.
-    // Resolve the sibling `ffmpeg-queue` binary built by Cargo in `target/<profile>/ffmpeg-queue`.
+    // Resolve the sibling `media-shack` binary built by Cargo in `target/<profile>/media-shack`.
     if exe
         .parent()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         == Some("deps")
     {
-        if let Some(candidate) = exe.parent().and_then(|p| p.parent()).map(|p| p.join("ffmpeg-queue")) {
+        if let Some(candidate) = exe.parent().and_then(|p| p.parent()).map(|p| p.join("media-shack")) {
             if candidate.is_file() {
                 exe = candidate;
             }

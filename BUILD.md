@@ -1,6 +1,6 @@
-# Building FFmpeg Queue
+# Building Media Shack
 
-FFmpeg Queue is built with **Tauri 2**, **Rust**, and a static **HTML/CSS/JavaScript** frontend (`ui/`), using the Cargo Tauri CLI with no Node.js toolchain required.
+Media Shack is built with **Tauri 2**, **Rust**, and a static **HTML/CSS/JavaScript** frontend (`ui/`), using the Cargo Tauri CLI with no Node.js toolchain required.
 
 ## Pinned Toolchain
 
@@ -26,7 +26,7 @@ FFmpeg Queue is built with **Tauri 2**, **Rust**, and a static **HTML/CSS/JavaSc
    ```sh
    brew install ffmpeg
    ```
-   On first launch, FFmpeg Queue searches configured tools directories, `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, and trusted `PATH` entries (skipping the current working directory). You can also click **Locate FFmpeg tools** in the app.
+   On first launch, Media Shack searches configured tools directories, `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, and trusted `PATH` entries (skipping the current working directory). You can also click **Locate FFmpeg tools** in the app.
 5. Run in development or build the native bundle (`.app` and `.dmg`) from the project root:
    ```sh
    cargo tauri dev

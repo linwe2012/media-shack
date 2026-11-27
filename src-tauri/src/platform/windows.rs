@@ -96,7 +96,7 @@ impl Drop for InstanceLock {
 }
 
 pub fn acquire_instance_lock(_app_data_dir: &Path) -> Result<InstanceLock, String> {
-    let name = to_wide_null(std::ffi::OsStr::new("Local\\FFmpegQueueSingleInstanceMutex"));
+    let name = to_wide_null(std::ffi::OsStr::new("Local\\MediaShackSingleInstanceMutex"));
     let h = unsafe { CreateMutexW(std::ptr::null(), 1, name.as_ptr()) };
     if h.is_null() {
         return Err(format!(
@@ -106,7 +106,7 @@ pub fn acquire_instance_lock(_app_data_dir: &Path) -> Result<InstanceLock, Strin
     }
     if unsafe { windows_sys::Win32::Foundation::GetLastError() } == ERROR_ALREADY_EXISTS {
         unsafe { CloseHandle(h) };
-        return Err("Another FFmpeg Queue instance is already running.".to_string());
+        return Err("Another Media Shack instance is already running.".to_string());
     }
     Ok(InstanceLock { mutex_handle: h })
 }

@@ -352,12 +352,12 @@ pub fn default_destination_root_for(input_paths: &[PathBuf]) -> String {
             first.parent().unwrap_or_else(|| Path::new("."))
         };
         return base
-            .join("FFmpeg Queue Output")
+            .join("Media Shack Output")
             .to_string_lossy()
             .to_string();
     }
     std::env::temp_dir()
-        .join("FFmpeg Queue Output")
+        .join("Media Shack Output")
         .to_string_lossy()
         .to_string()
 }

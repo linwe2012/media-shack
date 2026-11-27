@@ -1,22 +1,22 @@
-use ffmpeg_queue_lib::cleanup::{
+use media_shack_lib::cleanup::{
     evaluate_cleanup_eligibility, execute_cleanup_for_job, reconcile_cleanup_intents_on_launch,
     record_batch_cleanup_consent,
 };
-use ffmpeg_queue_lib::db::{CleanupIntentRecord, Database};
-use ffmpeg_queue_lib::models::*;
-use ffmpeg_queue_lib::planner::{
+use media_shack_lib::db::{CleanupIntentRecord, Database};
+use media_shack_lib::models::*;
+use media_shack_lib::planner::{
     build_track_plan, derive_destination_root_from_job, materialize_argv, probe_file,
     resolve_destination_path, sanitize_path_segment,
 };
-use ffmpeg_queue_lib::platform::{
+use media_shack_lib::platform::{
     atomic_publish_no_replace, capture_file_identity, disk_space_for_path, PublishOutcome,
 };
-use ffmpeg_queue_lib::preview::PreviewManager;
-use ffmpeg_queue_lib::runner::{run_ffmpeg_attempt, EncodeRunOutcome, PreviewPacketBuffer, RunEncodeParams};
-use ffmpeg_queue_lib::scanner::scan_import_paths;
-use ffmpeg_queue_lib::scheduler::Scheduler;
-use ffmpeg_queue_lib::tools::{discover_and_probe, find_tool_pair};
-use ffmpeg_queue_lib::verify::{run_full_decode_check, verify_staged_output};
+use media_shack_lib::preview::PreviewManager;
+use media_shack_lib::runner::{run_ffmpeg_attempt, EncodeRunOutcome, PreviewPacketBuffer, RunEncodeParams};
+use media_shack_lib::scanner::scan_import_paths;
+use media_shack_lib::scheduler::Scheduler;
+use media_shack_lib::tools::{discover_and_probe, find_tool_pair};
+use media_shack_lib::verify::{run_full_decode_check, verify_staged_output};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;

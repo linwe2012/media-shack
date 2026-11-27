@@ -71,7 +71,7 @@ pub fn run() {
             let app_data_dir: PathBuf = app
                 .path()
                 .app_data_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("ffmpeg-queue"));
+                .unwrap_or_else(|_| std::env::temp_dir().join("media-shack"));
             let instance_lock = acquire_instance_lock(&app_data_dir)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::AlreadyExists, e))?;
             let database = Database::open(&app_data_dir)
@@ -134,7 +134,7 @@ pub fn run() {
             commands::stop_and_quit,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running FFmpeg Queue");
+        .expect("error while running Media Shack");
 }
 
 fn parse_byte_range(header: &str, total_len: usize) -> Option<(usize, usize)> {

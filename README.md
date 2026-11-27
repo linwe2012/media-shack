@@ -1,4 +1,4 @@
-# FFmpeg Queue
+# Media Shack
 
 A local desktop batch video encoder and remuxer for **macOS** and **Windows**, built with **Tauri 2**, **Rust**, and a lightweight static **HTML/CSS/JS** interface.
 
@@ -6,7 +6,7 @@ Drop a folder of videos, choose **Archive → Balanced** (`HEVC libx265` or `AV1
 
 ## Prerequisites (External FFmpeg Tools)
 
-FFmpeg Queue uses separately installed `ffmpeg` and `ffprobe` binaries:
+Media Shack uses separately installed `ffmpeg` and `ffprobe` binaries:
 
 - **macOS:**
   ```sh
@@ -24,22 +24,22 @@ FFmpeg Queue uses separately installed `ffmpeg` and `ffprobe` binaries:
 
 ### Installing on macOS (Unsigned Build)
 
-Because the GitHub Actions macOS builds are not signed with an Apple Developer ID or notarized, macOS Gatekeeper marks downloaded `.dmg` / `.app` bundles as quarantined and may display **"FFmpeg Queue is damaged and can't be opened"** or **"Apple could not verify FFmpeg Queue"**.
+Because the GitHub Actions macOS builds are not signed with an Apple Developer ID or notarized, macOS Gatekeeper marks downloaded `.dmg` / `.app` bundles as quarantined and may display **"Media Shack is damaged and can't be opened"** or **"Apple could not verify Media Shack"**.
 
-1. Open the downloaded `.dmg` and drag **FFmpeg Queue.app** into `/Applications`.
+1. Open the downloaded `.dmg` and drag **Media Shack.app** into `/Applications`.
 2. Open **Terminal** and clear the Gatekeeper quarantine attribute:
    ```sh
-   xattr -cr "/Applications/FFmpeg Queue.app"
+   xattr -cr "/Applications/Media Shack.app"
    ```
 3. If your macOS version also requires a local ad-hoc signature, run:
    ```sh
-   codesign --force --deep --sign - "/Applications/FFmpeg Queue.app"
+   codesign --force --deep --sign - "/Applications/Media Shack.app"
    ```
-4. Launch **FFmpeg Queue** from `/Applications` (or, if prompted in **System Settings → Privacy & Security**, click **Open Anyway**).
+4. Launch **Media Shack** from `/Applications` (or, if prompted in **System Settings → Privacy & Security**, click **Open Anyway**).
 
 ### Installing on Windows
 
-1. Download and run the NSIS installer (`FFmpeg Queue_*_x64-setup.exe`).
+1. Download and run the NSIS installer (`Media Shack_*_x64-setup.exe`).
 2. Because the installer is unsigned, Windows Defender SmartScreen may show *"Windows protected your PC"*. Click **More info → Run anyway** if you trust the release source.
 
 ---

@@ -418,7 +418,7 @@ impl Scheduler {
         }
         if let Ok(mut pa) = self.power_assertion.lock() {
             if pa.is_none() {
-                if let Ok(a) = PowerAssertion::acquire("FFmpeg Queue overnight encoding") {
+                if let Ok(a) = PowerAssertion::acquire("Media Shack overnight encoding") {
                     *pa = Some(a);
                 }
             }

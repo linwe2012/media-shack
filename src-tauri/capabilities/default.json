@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal capabilities for FFmpeg Queue single-window desktop app",
+  "description": "Minimal capabilities for Media Shack single-window desktop app",
   "windows": ["main"],
   "permissions": [
     "core:default",

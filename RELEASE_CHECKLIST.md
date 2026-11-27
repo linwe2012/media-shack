@@ -1,12 +1,12 @@
-# FFmpeg Queue — Release Checklist & Platform Test Results
+# Media Shack — Release Checklist & Platform Test Results
 
 ## Measured Build & Footprint Metrics (macOS 15.6 arm64)
 
 - **Toolchain:** Rust `1.93.0`, `cargo-tauri 2.12.6`, `Cargo.lock` committed
 - **Clean release build (`cargo tauri build`):** `54.09s` Rust compile, `74.24s` total including `.app` and `.dmg` bundling
 - **Incremental release build:** `26.25s`–`29.78s` Rust compile
-- **macOS `.app` bundle:** `11.88 MiB` (`src-tauri/target/release/bundle/macos/FFmpeg Queue.app`)
-- **macOS `.dmg` installer:** `4.43 MiB` (`src-tauri/target/release/bundle/dmg/FFmpeg Queue_0.1.0_aarch64.dmg`)
+- **macOS `.app` bundle:** `11.88 MiB` (`src-tauri/target/release/bundle/macos/Media Shack.app`)
+- **macOS `.dmg` installer:** `4.43 MiB` (`src-tauri/target/release/bundle/dmg/Media Shack_0.1.0_aarch64.dmg`)
 - **External media tools tested:** `ffmpeg 9.1` / `ffprobe 9.1` (`x265 4.3`, `svt-av1 4.3.0`; `56.5 MiB` Homebrew Cellar directory), previously also verified on `ffmpeg 8.0.1` (`481 KiB` + `281 KiB` binaries; `53 MiB` Cellar)
 - **Windows NSIS installer / idle GUI memory:** Pending native Windows 11 x64 build & interactive GUI measurement
 

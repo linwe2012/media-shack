@@ -67,7 +67,7 @@ jobs:
       - name: Run Rust unit & integration tests
         working-directory: src-tauri
         run: |
-          cargo build --bin ffmpeg-queue
+          cargo build --bin media-shack
           cargo test
 
       - name: Build native Tauri bundle
@@ -76,7 +76,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-queue-${{ matrix.name }}
+          name: media-shack-${{ matrix.name }}
           path: ${{ matrix.bundle_glob }}
           if-no-files-found: error
 

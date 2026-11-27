@@ -15,7 +15,7 @@ impl Database {
     pub fn open(app_data_dir: &Path) -> Result<Self, String> {
         std::fs::create_dir_all(app_data_dir)
             .map_err(|e| format!("Failed to create app data dir: {e}"))?;
-        let db_path = app_data_dir.join("ffmpeg_queue.db");
+        let db_path = app_data_dir.join("media_shack.db");
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open SQLite database {}: {e}", db_path.display()))?;
         conn.execute_batch(
@@ -41,7 +41,7 @@ impl Database {
             .map_err(|e| format!("Pragma error: {e}"))?;
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
-            app_data_dir: std::env::temp_dir().join("ffmpeg-queue-test"),
+            app_data_dir: std::env::temp_dir().join("media-shack-test"),
         };
         db.migrate()?;
         db.seed_defaults()?;

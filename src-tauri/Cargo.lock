@@ -837,24 +837,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ffmpeg-queue"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "libc",
- "rusqlite",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tempfile",
- "tokio",
- "uuid",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "field-offset"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1966,6 +1948,24 @@ dependencies = [
  "log",
  "tendril",
  "web_atoms 0.3.0",
+]
+
+[[package]]
+name = "media-shack"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
