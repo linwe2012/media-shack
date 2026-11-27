@@ -17,7 +17,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub const PERCEPTUAL_ALGO_VERSION: &str = "phash_dhash_v1";
-pub const STREAM_HASH_ALGO_VERSION: &str = "streamhash_md5_v1";
+pub const STREAM_HASH_ALGO_VERSION: &str = "normalized_stream_md5_v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimedPerceptualHash {
@@ -246,14 +246,15 @@ fn ordered_pair<'a>(x: &'a str, y: &'a str) -> (&'a str, &'a str) {
     if x <= y { (x, y) } else { (y, x) }
 }
 
-/// Compute normalized encoded-stream hashes using FFmpeg `-f streamhash -hash md5 -`.
-/// Container-agnostic: MP4 remuxed to MKV yields identical stream hashes.
-pub fn compute_encoded_stream_hashes(
+/// Compute normalized encoded-stream hashes using FFmpeg `-f md5 -` with Annex-B normalization
+/// for H.264/HEVC so container extradata, timebases, and side-data do not break remux matching.
+pub fn compute_encoded_stream_hashes_with_codec(
     ffmpeg_path: &Path,
     path: &Path,
+    video_codec: Option<&str>,
 ) -> Result<(String, Option<String>, Option<String>), String> {
     let src = to_long_fs_path(path);
-    let run_map = |map_spec: &str| -> Option<String> {
+    let run_map = |map_spec: &str, bsf: Option<&str>| -> Option<String> {
         let mut cmd = Command::new(ffmpeg_path);
         cmd.args([
             "-hide_banner",
@@ -264,7 +265,11 @@ pub fn compute_encoded_stream_hashes(
             "-i",
         ])
         .arg(&src)
-        .args(["-map", map_spec, "-c", "copy", "-f", "streamhash", "-hash", "md5", "-"]);
+        .args(["-map", map_spec, "-c", "copy"]);
+        if let Some(filter) = bsf {
+            cmd.args(["-bsf:v", filter]);
+        }
+        cmd.args(["-f", "md5", "-"]);
         apply_no_window(&mut cmd);
         let out = cmd.output().ok()?;
         if !out.status.success() {
@@ -274,10 +279,30 @@ pub fn compute_encoded_stream_hashes(
         if txt.is_empty() { None } else { Some(txt) }
     };
 
-    let video_hash = run_map("0:v:0").ok_or_else(|| "No moving video stream hash available".to_string())?;
-    let audio_hash = run_map("0:a");
-    let sub_hash = run_map("0:s");
+    let bsf = video_codec.and_then(|c| {
+        let lower = c.to_ascii_lowercase();
+        if lower.contains("h264") || lower.contains("avc") {
+            Some("h264_mp4toannexb")
+        } else if lower.contains("hevc") || lower.contains("h265") || lower.contains("hev") || lower.contains("hvc") {
+            Some("hevc_mp4toannexb")
+        } else {
+            None
+        }
+    });
+
+    let video_hash = run_map("0:v:0", bsf)
+        .or_else(|| if bsf.is_some() { run_map("0:v:0", None) } else { None })
+        .ok_or_else(|| "No moving video stream hash available".to_string())?;
+    let audio_hash = run_map("0:a", None);
+    let sub_hash = run_map("0:s", None);
     Ok((video_hash, audio_hash, sub_hash))
+}
+
+pub fn compute_encoded_stream_hashes(
+    ffmpeg_path: &Path,
+    path: &Path,
+) -> Result<(String, Option<String>, Option<String>), String> {
+    compute_encoded_stream_hashes_with_codec(ffmpeg_path, path, None)
 }
 
 /// Detect equivalent encoded media (remuxed containers, same video + different audio/subtitles/metadata).
@@ -323,7 +348,11 @@ pub fn detect_equivalent_encoded_media(
                 v.get("a").and_then(|x| x.as_str()).map(str::to_string),
                 v.get("s").and_then(|x| x.as_str()).map(str::to_string),
             )
-        } else if let Ok((vh, ah, sh)) = compute_encoded_stream_hashes(ffmpeg_path, Path::new(&e.path)) {
+        } else if let Ok((vh, ah, sh)) = compute_encoded_stream_hashes_with_codec(
+            ffmpeg_path,
+            Path::new(&e.path),
+            e.video_codec.as_deref(),
+        ) {
             let payload = serde_json::json!({ "v": vh, "a": ah, "s": sh }).to_string();
             let conn = db.lock_conn()?;
             conn.execute(
