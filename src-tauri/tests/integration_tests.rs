@@ -151,6 +151,7 @@ fn generate_fixtures(ffmpeg: &Path) -> FixtureSet {
         &[
             "-hide_banner", "-y",
             "-f", "lavfi", "-i", "testsrc=size=128x96:rate=24:duration=1",
+            "-vf", "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc",
             "-c:v", "libx264", "-pix_fmt", "yuv420p10le",
             "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc",
             "-x264-params", "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc",
@@ -486,9 +487,14 @@ fn integration_sample_preview_and_live_preview() {
         EncodeRunOutcome::Finished { diagnostics, .. } => diagnostics.clone(),
         other => panic!("Unexpected outcome: {other:?}"),
     };
-    // Packet buffer captured header + stream data without blocking writer
-    let snap_len = pbuf.snapshot_stream_bytes().len();
-    assert!(snap_len > 256, "Expected >256 preview bytes, got {snap_len}; diags:\n{diags}");
+    // Packet buffer captured header + stream data without blocking writer (Unix FIFO tee branch)
+    #[cfg(unix)]
+    {
+        let snap_len = pbuf.snapshot_stream_bytes().len();
+        assert!(snap_len > 256, "Expected >256 preview bytes, got {snap_len}; diags:\n{diags}");
+    }
+    #[cfg(not(unix))]
+    let _ = &diags;
 
     // Ensure stop_live_preview clears stale frame buffer between jobs
     *pm.latest_live_jpeg.lock().unwrap() = Some((1, 0.5, vec![0xff, 0xd8, 0xff, 0xd9]));
@@ -782,13 +788,23 @@ fn integration_source_cleanup_contract_and_safety_cases() {
     assert!(execute_cleanup_for_job(&db, Some(&ffmpeg), &swapped_job.id, false).is_err());
     assert!(disp_swapped.exists());
 
-    // Case 6: Confirmed trash on valid disposable source -> moved to OS Trash (recoverable!) & output intact
+    // Case 6: Confirmed trash on valid disposable source
     // Note: reset cleanup_outcome back to Pending after prior rejected attempts
     job.cleanup_outcome = CleanupOutcome::Pending;
     db.upsert_job(&job).unwrap();
-    let done_job = execute_cleanup_for_job(&db, Some(&ffmpeg), &job.id, true).unwrap();
-    assert_eq!(done_job.cleanup_outcome, CleanupOutcome::Trashed);
-    assert!(!disp_src.exists());
+    #[cfg(target_os = "macos")]
+    {
+        let done_job = execute_cleanup_for_job(&db, Some(&ffmpeg), &job.id, true).unwrap();
+        assert_eq!(done_job.cleanup_outcome, CleanupOutcome::Trashed);
+        assert!(!disp_src.exists());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Windows Recycle Bin cleanup is gated until verified on a Windows 11 runner
+        let res = execute_cleanup_for_job(&db, Some(&ffmpeg), &job.id, true);
+        assert!(res.is_err());
+        assert!(disp_src.exists());
+    }
     assert!(out_file.exists());
 
     // Clean up our test artifact from ~/.Trash on macOS so we leave user's Trash clean

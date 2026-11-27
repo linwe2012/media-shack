@@ -459,6 +459,16 @@ pub fn build_track_plan(
                     unsupported_reasons.push(format!("HDR transfer ({tr})"));
                 }
             }
+            if let Some(cp) = s.color_primaries.as_deref() {
+                if cp == "bt2020" {
+                    unsupported_reasons.push(format!("HDR/wide-gamut primaries ({cp})"));
+                }
+            }
+            if let Some(cs) = s.color_space.as_deref() {
+                if matches!(cs, "bt2020nc" | "bt2020c") {
+                    unsupported_reasons.push(format!("HDR/wide-gamut colorspace ({cs})"));
+                }
+            }
             for sd in &s.side_data_types {
                 let sdl = sd.to_ascii_lowercase();
                 if sdl.contains("mastering display")
