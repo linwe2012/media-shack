@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 pub struct AppState {
     pub scheduler: Arc<Scheduler>,
+    pub task_manager: Arc<crate::tasks::TaskManager>,
     pub active_scans: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     pub _instance_lock: Arc<Mutex<Option<crate::platform::InstanceLock>>>,
 }

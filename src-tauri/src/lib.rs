@@ -1,13 +1,23 @@
+pub mod analysis;
+pub mod catalog;
+pub mod catalog_commands;
 pub mod cleanup;
 pub mod commands;
 pub mod db;
+pub mod duplicates;
+pub mod integrity;
+pub mod intelligence;
+pub mod metadata_interop;
 pub mod models;
+pub mod organize;
 pub mod planner;
 pub mod platform;
 pub mod preview;
+pub mod repair;
 pub mod runner;
 pub mod scanner;
 pub mod scheduler;
+pub mod tasks;
 pub mod tools;
 pub mod verify;
 
@@ -18,6 +28,7 @@ use scheduler::Scheduler;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tasks::TaskManager;
 use tauri::{Emitter, Manager};
 
 pub fn run() {
@@ -67,6 +78,35 @@ pub fn run() {
                 .body(Vec::new())
                 .unwrap()
         })
+        .register_uri_scheme_protocol("thumb", |ctx, req| {
+            // Serve cached thumbnails and face crops strictly from analysis_cache directory
+            let state = ctx.app_handle().state::<AppState>();
+            let cache_root = crate::analysis::analysis_cache_dir(&state.scheduler.db);
+            let raw_path = req.uri().path().trim_start_matches('/');
+            let decoded = percent_decode(raw_path);
+            let candidate = cache_root.join(decoded);
+            if let (Ok(root_c), Ok(cand_c)) = (cache_root.canonicalize(), candidate.canonicalize()) {
+                if cand_c.starts_with(&root_c) && cand_c.is_file() {
+                    if let Ok(bytes) = std::fs::read(&cand_c) {
+                        let mime = match cand_c.extension().and_then(|e| e.to_str()) {
+                            Some("png") => "image/png",
+                            Some("webp") => "image/webp",
+                            _ => "image/jpeg",
+                        };
+                        return tauri::http::Response::builder()
+                            .status(200)
+                            .header("Content-Type", mime)
+                            .header("Content-Length", bytes.len().to_string())
+                            .body(bytes)
+                            .unwrap();
+                    }
+                }
+            }
+            tauri::http::Response::builder()
+                .status(404)
+                .body(Vec::new())
+                .unwrap()
+        })
         .setup(|app| {
             let app_data_dir: PathBuf = app
                 .path()
@@ -76,7 +116,22 @@ pub fn run() {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::AlreadyExists, e))?;
             let database = Database::open(&app_data_dir)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-            let scheduler = Arc::new(Scheduler::new(database));
+            let _ = crate::organize::seed_builtin_collections(&database);
+            let task_manager = Arc::new(TaskManager::new(database.clone()));
+            let _ = task_manager.reconcile_interrupted_tasks_on_launch();
+            let scheduler = Arc::new(Scheduler::new(database.clone()));
+
+            let sched_for_reconcile = scheduler.clone();
+            crate::catalog::start_catalog_reconciler(
+                database,
+                Arc::new(move || {
+                    sched_for_reconcile
+                        .tool_status
+                        .lock()
+                        .ok()
+                        .and_then(|t| t.capabilities.as_ref().map(|c| PathBuf::from(&c.ffprobe_path)))
+                }),
+            );
 
             let app_handle = app.handle().clone();
             scheduler.set_event_sink(move |name, payload| {
@@ -86,6 +141,7 @@ pub fn run() {
 
             app.manage(AppState {
                 scheduler,
+                task_manager,
                 active_scans: Arc::new(Mutex::new(HashMap::new())),
                 _instance_lock: Arc::new(Mutex::new(Some(instance_lock))),
             });
@@ -132,6 +188,80 @@ pub fn run() {
             commands::get_live_preview_frame,
             commands::check_close_status,
             commands::stop_and_quit,
+            catalog_commands::catalog_add_root,
+            catalog_commands::catalog_list_roots,
+            catalog_commands::catalog_remove_root,
+            catalog_commands::catalog_scan_root,
+            catalog_commands::catalog_refresh_volumes,
+            catalog_commands::catalog_query,
+            catalog_commands::catalog_get_asset_detail,
+            catalog_commands::catalog_get_stats,
+            catalog_commands::catalog_update_asset_metadata,
+            catalog_commands::catalog_backup_database,
+            catalog_commands::tags_list,
+            catalog_commands::tags_suggest,
+            catalog_commands::tags_create,
+            catalog_commands::tags_add_alias,
+            catalog_commands::tags_merge,
+            catalog_commands::tags_assign_bulk,
+            catalog_commands::tags_remove_bulk,
+            catalog_commands::collections_list,
+            catalog_commands::collections_save,
+            catalog_commands::collections_delete,
+            catalog_commands::collections_evaluate,
+            catalog_commands::organize_preview_rename,
+            catalog_commands::organize_preview_move_copy,
+            catalog_commands::organize_execute_batch,
+            catalog_commands::organize_list_history,
+            catalog_commands::organize_undo,
+            catalog_commands::duplicates_run_scan,
+            catalog_commands::duplicates_list_groups,
+            catalog_commands::duplicates_dismiss_edge,
+            catalog_commands::duplicates_merge_tags,
+            catalog_commands::duplicates_trash_copies,
+            catalog_commands::metadata_sync_os_tags,
+            catalog_commands::metadata_write_embedded,
+            catalog_commands::metadata_export_sidecars,
+            catalog_commands::metadata_import_sidecar,
+            catalog_commands::metadata_check_tools,
+            catalog_commands::integrity_verify_files,
+            catalog_commands::integrity_export_manifest,
+            catalog_commands::integrity_list_history,
+            catalog_commands::integrity_create_par2,
+            catalog_commands::repair_diagnose,
+            catalog_commands::repair_execute,
+            catalog_commands::transcode_enqueue_from_catalog,
+            catalog_commands::tasks_list,
+            catalog_commands::tasks_pause,
+            catalog_commands::tasks_resume,
+            catalog_commands::tasks_cancel,
+            catalog_commands::tasks_set_priority,
+            catalog_commands::tasks_get_budgets,
+            catalog_commands::tasks_save_budgets,
+            catalog_commands::cache_get_stats,
+            catalog_commands::cache_evict,
+            catalog_commands::cache_clear,
+            catalog_commands::ocr_analyze_files,
+            catalog_commands::ocr_list_detections,
+            catalog_commands::ocr_review_batch,
+            catalog_commands::ocr_list_creator_aliases,
+            catalog_commands::ocr_save_creator_alias,
+            catalog_commands::semantic_index_files,
+            catalog_commands::semantic_search,
+            catalog_commands::faces_get_enabled,
+            catalog_commands::faces_set_enabled,
+            catalog_commands::faces_run_grouping,
+            catalog_commands::faces_list_groups,
+            catalog_commands::faces_list_observations,
+            catalog_commands::faces_label_group,
+            catalog_commands::faces_merge_groups,
+            catalog_commands::faces_split_observation,
+            catalog_commands::faces_exclude_observation,
+            catalog_commands::faces_purge_all_biometrics,
+            catalog_commands::llm_get_config,
+            catalog_commands::llm_save_config,
+            catalog_commands::llm_propose_organization,
+            catalog_commands::analyze_black_frozen,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Media Shack");

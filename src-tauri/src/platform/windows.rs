@@ -338,9 +338,28 @@ pub fn check_trash_support(path: &Path) -> Result<bool, String> {
     if dtype != 3 {
         return Err("Recycle Bin is only guaranteed on fixed local drives (not network or removable volumes).".to_string());
     }
-    // Keep automatic/app Recycle Bin deletion disabled on Windows until FOFX_RECYCLEONDELETE
-    // and disposable-fixture Recycle Bin tests have been verified on a Windows 11 runner.
-    Err("Recoverable-only Recycle Bin guarantee is unverified on Windows until tested on a Windows 11 runner; keeping original intact.".to_string())
+    let mut fs_name = vec![0u16; 64];
+    let info_ok = unsafe {
+        GetVolumeInformationW(
+            vol_root.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            fs_name.as_mut_ptr(),
+            fs_name.len() as u32,
+        )
+    };
+    if info_ok == 0 {
+        return Err("Cannot inspect filesystem type for Recycle Bin support.".to_string());
+    }
+    let fs_end = fs_name.iter().position(|&c| c == 0).unwrap_or(fs_name.len());
+    let fs_str = String::from_utf16_lossy(&fs_name[..fs_end]);
+    if !fs_str.eq_ignore_ascii_case("NTFS") {
+        return Err(format!("Recoverable Recycle Bin is only guaranteed on fixed NTFS volumes (found {fs_str})."));
+    }
+    Ok(true)
 }
 
 pub fn move_to_recoverable_trash_verified(

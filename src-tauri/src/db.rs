@@ -7,11 +7,32 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct Database {
-    conn: Arc<Mutex<Connection>>,
+    pub(crate) conn: Arc<Mutex<Connection>>,
     pub app_data_dir: PathBuf,
 }
 
 impl Database {
+    pub(crate) fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+        self.conn.lock().map_err(|e| e.to_string())
+    }
+
+    pub fn db_path(&self) -> PathBuf {
+        self.app_data_dir.join("media_shack.db")
+    }
+
+    pub fn backup_database(&self, dest_path: &Path) -> Result<(), String> {
+        if let Some(parent) = dest_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        if dest_path.exists() {
+            std::fs::remove_file(dest_path).map_err(|e| format!("Destination already exists and cannot be replaced: {e}"))?;
+        }
+        let conn = self.lock_conn()?;
+        let escaped = dest_path.to_string_lossy().replace('\'', "''");
+        conn.execute_batch(&format!("VACUUM INTO '{escaped}';"))
+            .map_err(|e| format!("Database backup failed: {e}"))?;
+        Ok(())
+    }
     pub fn open(app_data_dir: &Path) -> Result<Self, String> {
         std::fs::create_dir_all(app_data_dir)
             .map_err(|e| format!("Failed to create app data dir: {e}"))?;
@@ -21,7 +42,7 @@ impl Database {
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA foreign_keys = ON;
-             PRAGMA synchronous = FULL;
+             PRAGMA synchronous = NORMAL;
              PRAGMA busy_timeout = 5000;",
         )
         .map_err(|e| format!("Failed to set SQLite pragmas: {e}"))?;
@@ -223,6 +244,320 @@ impl Database {
                 params![Utc::now().timestamp()],
             )
             .map_err(|e| format!("Migration v2 version insert failed: {e}"))?;
+            tx.commit().map_err(|e| e.to_string())?;
+        }
+
+        if current_ver < 3 {
+            let tx = conn.transaction().map_err(|e| e.to_string())?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS volumes (
+                    volume_id TEXT PRIMARY KEY,
+                    mount_point TEXT NOT NULL,
+                    label TEXT,
+                    fs_type TEXT,
+                    storage_kind TEXT NOT NULL DEFAULT 'unknown',
+                    is_online INTEGER NOT NULL DEFAULT 1,
+                    total_bytes INTEGER NOT NULL DEFAULT 0,
+                    free_bytes INTEGER NOT NULL DEFAULT 0,
+                    last_seen_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS library_roots (
+                    id TEXT PRIMARY KEY,
+                    path TEXT NOT NULL UNIQUE,
+                    root_type TEXT NOT NULL DEFAULT 'directory',
+                    volume_id TEXT,
+                    label TEXT,
+                    recursive INTEGER NOT NULL DEFAULT 1,
+                    exclusions_json TEXT NOT NULL DEFAULT '[]',
+                    include_hidden INTEGER NOT NULL DEFAULT 0,
+                    auto_analysis_level INTEGER NOT NULL DEFAULT 1,
+                    is_enabled INTEGER NOT NULL DEFAULT 1,
+                    last_scan_at INTEGER,
+                    created_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS media_assets (
+                    asset_id TEXT PRIMARY KEY,
+                    title TEXT,
+                    description TEXT,
+                    creator TEXT,
+                    recorded_at TEXT,
+                    media_type TEXT NOT NULL DEFAULT 'video',
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_media_assets_creator ON media_assets(creator);
+                CREATE INDEX IF NOT EXISTS idx_media_assets_type ON media_assets(media_type);
+
+                CREATE TABLE IF NOT EXISTS media_files (
+                    file_key TEXT PRIMARY KEY,
+                    asset_id TEXT NOT NULL REFERENCES media_assets(asset_id) ON DELETE CASCADE,
+                    volume_id TEXT NOT NULL,
+                    os_file_id TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    mtime_ns INTEGER NOT NULL,
+                    head_hash TEXT NOT NULL,
+                    blake3_hash TEXT,
+                    sha256_hash TEXT,
+                    link_count INTEGER NOT NULL DEFAULT 1,
+                    analysis_level INTEGER NOT NULL DEFAULT 0,
+                    duration_secs REAL,
+                    width INTEGER,
+                    height INTEGER,
+                    video_codec TEXT,
+                    audio_codec TEXT,
+                    bitrate INTEGER,
+                    fps REAL,
+                    pix_fmt TEXT,
+                    color_info_json TEXT,
+                    vr_projection TEXT,
+                    probe_json TEXT,
+                    thumbnail_path TEXT,
+                    integrity_status TEXT NOT NULL DEFAULT 'unverified',
+                    is_online INTEGER NOT NULL DEFAULT 1,
+                    last_seen_at INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_media_files_asset ON media_files(asset_id);
+                CREATE INDEX IF NOT EXISTS idx_media_files_vol_fid ON media_files(volume_id, os_file_id);
+                CREATE INDEX IF NOT EXISTS idx_media_files_size ON media_files(size_bytes);
+                CREATE INDEX IF NOT EXISTS idx_media_files_blake3 ON media_files(blake3_hash);
+                CREATE INDEX IF NOT EXISTS idx_media_files_online ON media_files(is_online);
+
+                CREATE TABLE IF NOT EXISTS file_locations (
+                    location_id TEXT PRIMARY KEY,
+                    file_key TEXT NOT NULL REFERENCES media_files(file_key) ON DELETE CASCADE,
+                    root_id TEXT REFERENCES library_roots(id) ON DELETE SET NULL,
+                    path TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    parent_dir TEXT NOT NULL,
+                    extension TEXT NOT NULL DEFAULT '',
+                    is_current INTEGER NOT NULL DEFAULT 1,
+                    is_online INTEGER NOT NULL DEFAULT 1,
+                    first_seen_at INTEGER NOT NULL,
+                    last_seen_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_file_locations_file ON file_locations(file_key);
+                CREATE INDEX IF NOT EXISTS idx_file_locations_path ON file_locations(path);
+                CREATE INDEX IF NOT EXISTS idx_file_locations_current ON file_locations(is_current, is_online);
+
+                CREATE TABLE IF NOT EXISTS media_relationships (
+                    id TEXT PRIMARY KEY,
+                    source_asset_id TEXT NOT NULL REFERENCES media_assets(asset_id) ON DELETE CASCADE,
+                    target_asset_id TEXT NOT NULL REFERENCES media_assets(asset_id) ON DELETE CASCADE,
+                    source_file_key TEXT REFERENCES media_files(file_key) ON DELETE SET NULL,
+                    target_file_key TEXT REFERENCES media_files(file_key) ON DELETE SET NULL,
+                    relationship_type TEXT NOT NULL,
+                    details_json TEXT,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_media_rel_src ON media_relationships(source_asset_id);
+                CREATE INDEX IF NOT EXISTS idx_media_rel_dst ON media_relationships(target_asset_id);
+
+                CREATE TABLE IF NOT EXISTS tags (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    namespace TEXT,
+                    leaf_name TEXT NOT NULL,
+                    color TEXT,
+                    aliases_json TEXT NOT NULL DEFAULT '[]',
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_tags_ns ON tags(namespace);
+
+                CREATE TABLE IF NOT EXISTS media_tags (
+                    asset_id TEXT NOT NULL REFERENCES media_assets(asset_id) ON DELETE CASCADE,
+                    tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                    source TEXT NOT NULL DEFAULT 'manual',
+                    confidence REAL NOT NULL DEFAULT 1.0,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY (asset_id, tag_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_media_tags_tag ON media_tags(tag_id, status);
+
+                CREATE TABLE IF NOT EXISTS collections (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    query_json TEXT NOT NULL,
+                    is_builtin INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS fingerprints (
+                    id TEXT PRIMARY KEY,
+                    file_key TEXT NOT NULL REFERENCES media_files(file_key) ON DELETE CASCADE,
+                    fp_type TEXT NOT NULL,
+                    algo_version TEXT NOT NULL,
+                    value_text TEXT,
+                    value_blob BLOB,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(file_key, fp_type, algo_version)
+                );
+                CREATE INDEX IF NOT EXISTS idx_fingerprints_type_text ON fingerprints(fp_type, value_text);
+
+                CREATE TABLE IF NOT EXISTS similarity_edges (
+                    id TEXT PRIMARY KEY,
+                    file_key_a TEXT NOT NULL REFERENCES media_files(file_key) ON DELETE CASCADE,
+                    file_key_b TEXT NOT NULL REFERENCES media_files(file_key) ON DELETE CASCADE,
+                    match_kind TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    overlap_start_a REAL,
+                    overlap_end_a REAL,
+                    overlap_start_b REAL,
+                    overlap_end_b REAL,
+                    overlap_pct_a REAL,
+                    overlap_pct_b REAL,
+                    details_json TEXT,
+                    review_status TEXT NOT NULL DEFAULT 'pending',
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(file_key_a, file_key_b, match_kind)
+                );
+                CREATE INDEX IF NOT EXISTS idx_similarity_a ON similarity_edges(file_key_a);
+                CREATE INDEX IF NOT EXISTS idx_similarity_b ON similarity_edges(file_key_b);
+
+                CREATE TABLE IF NOT EXISTS analysis_results (
+                    id TEXT PRIMARY KEY,
+                    file_key TEXT NOT NULL REFERENCES media_files(file_key) ON DELETE CASCADE,
+                    analysis_type TEXT NOT NULL,
+                    algo_version TEXT NOT NULL,
+                    model_version TEXT,
+                    sampling_config TEXT,
+                    result_json TEXT NOT NULL,
+                    artifact_path TEXT,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(file_key, analysis_type, algo_version)
+                );
+                CREATE INDEX IF NOT EXISTS idx_analysis_file_type ON analysis_results(file_key, analysis_type);
+
+                CREATE TABLE IF NOT EXISTS media_embeddings (
+                    id TEXT PRIMARY KEY,
+                    file_key TEXT NOT NULL REFERENCES media_files(file_key) ON DELETE CASCADE,
+                    timestamp_secs REAL NOT NULL DEFAULT 0.0,
+                    model_version TEXT NOT NULL,
+                    dimensions INTEGER NOT NULL,
+                    vector_blob BLOB NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_embeddings_file ON media_embeddings(file_key, model_version);
+
+                CREATE TABLE IF NOT EXISTS analysis_jobs (
+                    id TEXT PRIMARY KEY,
+                    task_type TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    target_file_keys_json TEXT NOT NULL DEFAULT '[]',
+                    priority INTEGER NOT NULL DEFAULT 5,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    progress_pct REAL NOT NULL DEFAULT 0.0,
+                    throughput_label TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    max_retries INTEGER NOT NULL DEFAULT 2,
+                    resource_kind TEXT NOT NULL DEFAULT 'cpu',
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    error_message TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    completed_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_analysis_jobs_state ON analysis_jobs(state, priority);
+
+                CREATE TABLE IF NOT EXISTS operation_history (
+                    id TEXT PRIMARY KEY,
+                    op_type TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    entries_json TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'committed',
+                    created_at INTEGER NOT NULL,
+                    undone_at INTEGER
+                );
+
+                CREATE TABLE IF NOT EXISTS integrity_results (
+                    id TEXT PRIMARY KEY,
+                    file_key TEXT NOT NULL REFERENCES media_files(file_key) ON DELETE CASCADE,
+                    check_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    blake3_hash TEXT,
+                    sha256_hash TEXT,
+                    details TEXT,
+                    checked_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_integrity_file ON integrity_results(file_key, checked_at);
+
+                CREATE TABLE IF NOT EXISTS metadata_sync_state (
+                    id TEXT PRIMARY KEY,
+                    file_key TEXT NOT NULL REFERENCES media_files(file_key) ON DELETE CASCADE,
+                    target TEXT NOT NULL,
+                    sync_status TEXT NOT NULL,
+                    last_synced_hash TEXT,
+                    conflict_json TEXT,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(file_key, target)
+                );
+
+                CREATE TABLE IF NOT EXISTS ocr_detections (
+                    id TEXT PRIMARY KEY,
+                    file_key TEXT NOT NULL REFERENCES media_files(file_key) ON DELETE CASCADE,
+                    raw_text TEXT NOT NULL,
+                    normalized_text TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    timestamp_secs REAL NOT NULL,
+                    bbox_json TEXT NOT NULL DEFAULT '{}',
+                    frequency INTEGER NOT NULL DEFAULT 1,
+                    classification TEXT NOT NULL DEFAULT 'unknown',
+                    review_status TEXT NOT NULL DEFAULT 'pending',
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_ocr_file ON ocr_detections(file_key);
+                CREATE INDEX IF NOT EXISTS idx_ocr_norm ON ocr_detections(normalized_text);
+
+                CREATE TABLE IF NOT EXISTS face_groups (
+                    id TEXT PRIMARY KEY,
+                    label TEXT,
+                    is_unassigned INTEGER NOT NULL DEFAULT 0,
+                    is_excluded INTEGER NOT NULL DEFAULT 0,
+                    sample_crop_path TEXT,
+                    centroid_blob BLOB,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS face_observations (
+                    id TEXT PRIMARY KEY,
+                    file_key TEXT NOT NULL REFERENCES media_files(file_key) ON DELETE CASCADE,
+                    group_id TEXT REFERENCES face_groups(id) ON DELETE SET NULL,
+                    timestamp_secs REAL NOT NULL,
+                    bbox_json TEXT NOT NULL,
+                    crop_path TEXT,
+                    embedding_blob BLOB NOT NULL,
+                    confidence REAL NOT NULL,
+                    is_excluded INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_face_obs_file ON face_observations(file_key);
+                CREATE INDEX IF NOT EXISTS idx_face_obs_group ON face_observations(group_id);
+
+                CREATE VIRTUAL TABLE IF NOT EXISTS media_fts USING fts5(
+                    asset_id UNINDEXED,
+                    filename,
+                    path,
+                    title,
+                    creator,
+                    tags_text,
+                    ocr_text,
+                    codec
+                );",
+            )
+            .map_err(|e| format!("Migration v3 failed: {e}"))?;
+            tx.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (3, ?1)",
+                params![Utc::now().timestamp()],
+            )
+            .map_err(|e| format!("Migration v3 version insert failed: {e}"))?;
             tx.commit().map_err(|e| e.to_string())?;
         }
 

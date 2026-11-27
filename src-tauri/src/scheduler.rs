@@ -915,6 +915,28 @@ impl Scheduler {
                 job.updated_at = Utc::now().timestamp();
                 let _ = self.db.upsert_job(job);
 
+                // Register transcoded/remuxed output in unified media catalog & inherit tags
+                let rel_type = if job.recipe.family == PresetFamily::Remux {
+                    "remuxed_from"
+                } else {
+                    "transcoded_from"
+                };
+                let details = serde_json::json!({
+                    "job_id": job.id,
+                    "recipe": job.recipe,
+                    "input_bytes": job.input_bytes,
+                    "output_bytes": report.output_bytes,
+                });
+                let _ = crate::catalog::register_derived_file(
+                    &self.db,
+                    &job.source_path,
+                    &final_dest,
+                    rel_type,
+                    details,
+                    true,
+                    Some(ffprobe_path),
+                );
+
                 // Perform unattended Trash ONLY if authorized and eligible; encode stays Completed either way
                 if job.cleanup_policy == CleanupPolicy::TrashAfterEachFile {
                     let _guard = self.cleanup_lock.lock();

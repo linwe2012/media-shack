@@ -27,7 +27,7 @@ Executed `cargo test` in `src-tauri/` against **FFmpeg 9.1** (`7 passed; 0 faile
 | --- | --- | --- | --- |
 | macOS 15.6 `arm64` | **Passed** (`.app` + `.dmg`) | **Passed** (7/7 tests with FFmpeg 8.0.1 & FFmpeg 9.1) | **Untested** (requires manual hands-on UI run per `TEST_PLAN.md`) |
 | macOS `x86_64` | **Untested** (pending Intel runner) | **Untested** | **Untested** |
-| Windows 11 `x64` | **Untested** (pending Windows runner) | **Untested** | **Untested** |
+| Windows 11 `x64` | **Passed** (`cargo build`, `media-shack.exe`) | **Passed** (12/12 tests: 7/7 `integration_tests` + 5/5 `platform_tests` with FFmpeg 9.0.2 & ExifTool 13.64; `PERF_1000`: 2367ms scan / 15ms search) | **Pending live GUI verification** |
 
 ## Release Sign-Off Gates
 
