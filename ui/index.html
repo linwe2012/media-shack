@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FFmpeg Queue</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <!-- Top Tabs & Tool Status Bar -->
+    <header class="top-bar">
+      <div class="tabs-strip" role="tablist" aria-label="Encoding Queues" id="tabs-strip"></div>
+      <div class="top-actions">
+        <button id="btn-new-queue" class="btn btn-ghost btn-sm" type="button" title="Create new independent queue tab">+ New queue</button>
+        <button id="btn-tools-status" class="tool-pill" type="button" title="Inspect or locate FFmpeg and ffprobe">
+          <span class="dot" id="tool-dot"></span>
+          <span id="tool-label">Checking FFmpeg…</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Primary Queue Toolbar -->
+    <section class="toolbar" aria-label="Queue Actions">
+      <div class="toolbar-left">
+        <button id="btn-add-files" class="btn btn-secondary" type="button">Add files</button>
+        <button id="btn-add-folder" class="btn btn-secondary" type="button">Add folder</button>
+        <label class="toggle-inline" title="Include nested subfolders when adding folders">
+          <input type="checkbox" id="chk-recursive" checked />
+          <span>Subfolders</span>
+        </label>
+        <div class="divider-v"></div>
+        <button id="btn-choose-dest" class="btn btn-ghost btn-sm" type="button" title="Choose destination folder">
+          Dest: <span id="lbl-dest-root">Auto (next to source)</span>
+        </button>
+        <button id="btn-volume-reserve" class="btn btn-ghost btn-sm" type="button" title="Configure destination free-space reserve">
+          <span id="lbl-dest-space">—</span>
+        </button>
+        <span class="policy-pill" id="lbl-cleanup-policy">Keep originals</span>
+      </div>
+
+      <div class="toolbar-right">
+        <button id="btn-counts-filter" class="counts-pill" type="button" title="Click to filter items needing review">
+          <span id="lbl-counts">0 ready</span>
+        </button>
+        <button id="btn-pause-after" class="btn btn-secondary hidden" type="button">Pause after current file</button>
+        <button id="btn-cancel-current" class="btn btn-danger-outline hidden" type="button">Cancel current file</button>
+        <button id="btn-start-queue" class="btn btn-primary" type="button">Start queue</button>
+        <button id="btn-toggle-inspector" class="btn btn-ghost btn-sm inspector-toggle" type="button" aria-expanded="true">Inspector</button>
+      </div>
+    </section>
+
+    <!-- Profile & Preset Configuration Strip -->
+    <section class="config-strip" aria-label="Profile and Preset Settings">
+      <div class="config-row">
+        <div class="control-group">
+          <label for="sel-profile">Profile</label>
+          <select id="sel-profile"></select>
+          <button id="btn-apply-waiting" class="btn btn-ghost btn-sm" type="button" title="Apply active queue settings to waiting jobs">Apply to 0 waiting files</button>
+          <button id="btn-profile-menu" class="btn btn-ghost btn-sm" type="button">Manage profiles…</button>
+        </div>
+
+        <div class="control-group">
+          <label for="sel-family">Family</label>
+          <select id="sel-family">
+            <option value="archive">Archive</option>
+            <option value="remux">Remux (copy streams)</option>
+          </select>
+
+          <span id="wrap-encode-controls" class="encode-controls">
+            <label for="sel-variant">Variant</label>
+            <select id="sel-variant">
+              <option value="balanced">Balanced (default)</option>
+              <option value="best">Best</option>
+            </select>
+
+            <label for="sel-codec">Codec</label>
+            <select id="sel-codec">
+              <option value="hevc">HEVC (libx265)</option>
+              <option value="av1">AV1 (libsvtav1)</option>
+            </select>
+          </span>
+
+          <label for="sel-container">Container</label>
+          <select id="sel-container">
+            <option value="mkv">MKV (default)</option>
+            <option value="mp4">MP4</option>
+          </select>
+
+          <span id="badge-custom" class="badge badge-warn hidden">Custom</span>
+          <button id="btn-reset-preset" class="btn btn-ghost btn-sm hidden" type="button">Reset</button>
+        </div>
+
+        <div class="control-group">
+          <button id="btn-preview-15s" class="btn btn-secondary btn-sm" type="button" title="Encode a 15-second sample for selected job">Preview 15 seconds</button>
+          <button id="btn-toggle-advanced" class="btn btn-ghost btn-sm" type="button" aria-expanded="false">Advanced ▾</button>
+        </div>
+      </div>
+
+      <!-- Expandable Advanced Drawer -->
+      <div id="advanced-drawer" class="advanced-drawer hidden">
+        <div class="adv-grid">
+          <div id="adv-encode-fields" class="adv-section">
+            <div class="field">
+              <label for="inp-crf">CRF (<span id="lbl-crf-range">0–51</span>)</label>
+              <input id="inp-crf" type="number" min="0" max="63" step="1" />
+            </div>
+            <div class="field">
+              <label for="sel-effort">Encoding effort</label>
+              <select id="sel-effort"></select>
+            </div>
+            <div class="field">
+              <label>Named presets</label>
+              <div class="inline-row">
+                <select id="sel-named-preset"></select>
+                <button id="btn-save-named-preset" class="btn btn-ghost btn-sm" type="button">Save preset…</button>
+                <button id="btn-delete-named-preset" class="btn btn-ghost btn-sm hidden" type="button" title="Delete selected named preset">×</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="adv-section">
+            <div class="field">
+              <label for="sel-priority">FFmpeg process priority (applies next file)</label>
+              <select id="sel-priority">
+                <option value="background">Background (default)</option>
+                <option value="below_normal">Below normal</option>
+                <option value="normal">Normal</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="sel-error-policy">Error policy</label>
+              <select id="sel-error-policy">
+                <option value="continue">Continue on individual errors</option>
+                <option value="pause_on_first">Pause on first error</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="sel-cleanup-policy">Source cleanup policy</label>
+              <select id="sel-cleanup-policy">
+                <option value="keep_originals">Keep originals (default)</option>
+                <option value="review_after_completion">Review after completion</option>
+                <option value="trash_after_each_file">Move verified originals to Trash after each file</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="adv-section">
+            <label class="check-row">
+              <input type="checkbox" id="chk-keep-awake" checked />
+              <span>Keep computer awake while working (allows display sleep)</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" id="chk-full-decode" />
+              <span>Full A/V decode verification on all completed files</span>
+            </label>
+            <div class="field">
+              <label class="check-row">
+                <input type="checkbox" id="chk-min-savings" />
+                <span>Minimum size reduction (%)</span>
+                <input id="inp-min-savings-pct" type="number" min="1" max="95" step="1" value="15" style="width:64px" />
+              </label>
+              <small class="hint">Evaluates actual whole-file sizes after verification. Files missing the threshold keep the original and discard the staged encode.</small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Waiting / Power / Morning Summary Banners -->
+    <div id="banner-area" class="banner-area"></div>
+
+    <!-- Main Workspace: Queue Table + Side Inspector -->
+    <main class="workspace">
+      <section class="queue-pane" aria-label="Queue List">
+        <div id="empty-drop-state" class="empty-drop hidden">
+          <div class="empty-card">
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <path d="M12 16V4m0 0l-4 4m4-4l4 4" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round"/>
+            </svg>
+            <h2>Drop videos or a folder here</h2>
+            <p id="empty-defaults-summary">Archive → Balanced · HEVC / MKV · Keep originals</p>
+            <div class="empty-actions">
+              <button id="btn-empty-files" class="btn btn-primary" type="button">Add files</button>
+              <button id="btn-empty-folder" class="btn btn-secondary" type="button">Add folder</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="queue-list-wrap" class="queue-list-wrap">
+          <div class="queue-list-header">
+            <span id="lbl-queue-filter-bar"></span>
+            <div class="queue-bulk-actions">
+              <button id="btn-retry-failed" class="btn btn-ghost btn-sm hidden" type="button">Retry selected/failed</button>
+              <button id="btn-clear-completed" class="btn btn-ghost btn-sm hidden" type="button">Remove finished</button>
+            </div>
+          </div>
+          <div id="queue-rows" class="queue-rows" role="list"></div>
+        </div>
+      </section>
+
+      <aside id="side-panel" class="side-panel" aria-label="Job Inspector">
+        <div id="side-panel-content" class="side-panel-content">
+          <p class="muted">Select a job to inspect its tracks, output path, pending settings, or error details.</p>
+        </div>
+      </aside>
+    </main>
+
+    <!-- Footer Status -->
+    <footer class="status-bar">
+      <span id="lbl-power-status">Idle</span>
+      <span id="lbl-scheduler-status"></span>
+    </footer>
+  </div>
+
+  <!-- Modals Backdrop -->
+  <div id="modal-root" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div id="modal-box" class="modal-box"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
