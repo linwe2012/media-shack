@@ -538,6 +538,7 @@ fn integration_multi_queue_profile_deletion_and_recovery_transitions() {
         id: "q2".to_string(),
         name: "Travel footage".to_string(),
         tab_order: 1,
+        tab_type: TabType::Encode,
         profile_id: Some(profile.id.clone()),
         profile_name: Some(profile.name.clone()),
         recipe: profile.recipe.clone(),

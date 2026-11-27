@@ -257,6 +257,42 @@ pub fn repair_damaged_video(
     let diag = diagnose_media_file(db, ffmpeg_path, ffprobe_path, damaged_path, source_file_key)?;
     logs.push(format!("Diagnosis: {} ({})", diag.container_integrity, diag.summary));
 
+    let ext = damaged_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    if matches!(ext.as_str(), "mp4" | "mov" | "m4v" | "3gp" | "3g2") {
+        let rec_opts = crate::recovery::RecoveryOptions {
+            input_path: damaged_path.to_path_buf(),
+            reference_paths: reference_path.into_iter().map(PathBuf::from).collect(),
+            output_path: out_path.clone(),
+            video_only: false,
+            deep_scan: true,
+            timeout_secs: 240,
+            generate_contact_sheet: false,
+        };
+        if let Ok(report) = crate::recovery::recover_file(&rec_opts, ffmpeg_path, ffprobe_path, None) {
+            logs.push(format!("recovery engine status: {}", report.honest_summary));
+            if report.overall_status != "unrecoverable" && out_path.exists() {
+                let strategy = report
+                    .selected_strategy
+                    .unwrap_or_else(|| "mp4_recovery_engine".to_string());
+                return finalize_repair(
+                    db,
+                    ffprobe_path,
+                    damaged_path,
+                    &out_path,
+                    &strategy,
+                    report.overall_status != "recovered_clean",
+                    source_file_key,
+                    logs,
+                );
+            }
+        }
+        let _ = std::fs::remove_file(to_long_fs_path(&out_path));
+    }
+
     // Strategy 1: If readable by ffprobe, try lossless stream-copy remux first
     if diag.ffprobe_readable {
         logs.push("Attempting lossless stream-copy remux (-c copy -fflags +genpts+igndts)...".to_string());

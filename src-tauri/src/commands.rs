@@ -62,14 +62,23 @@ pub fn recheck_tools(state: State<'_, AppState>) -> Result<ToolStatus, String> {
 pub fn create_queue_tab(
     state: State<'_, AppState>,
     name: Option<String>,
+    tab_type: Option<TabType>,
 ) -> Result<QueueTab, String> {
     let queues = state.scheduler.db.list_queues()?;
     let next_order = queues.iter().map(|q| q.tab_order).max().unwrap_or(-1) + 1;
-    let tab_name = name.unwrap_or_else(|| format!("Queue {}", queues.len() + 1));
+    let resolved_type = tab_type.unwrap_or(TabType::Encode);
+    let tab_name = name.unwrap_or_else(|| {
+        if resolved_type == TabType::Repair {
+            format!("Repair {}", queues.len() + 1)
+        } else {
+            format!("Queue {}", queues.len() + 1)
+        }
+    });
     let q = QueueTab {
         id: Uuid::new_v4().to_string(),
         name: tab_name,
         tab_order: next_order,
+        tab_type: resolved_type,
         profile_id: None,
         profile_name: None,
         recipe: EncodeRecipe::archive_balanced_default(),
@@ -134,6 +143,243 @@ pub fn delete_queue_tab(state: State<'_, AppState>, queue_id: String) -> Result<
 pub fn select_queue_tab(state: State<'_, AppState>, queue_id: String) -> Result<(), String> {
     state.scheduler.db.set_setting("active_queue_id", &queue_id)?;
     state.scheduler.emit_snapshot_changed();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_queue_tab_type(
+    state: State<'_, AppState>,
+    queue_id: String,
+    tab_type: TabType,
+) -> Result<QueueTab, String> {
+    let mut q = state
+        .scheduler
+        .db
+        .get_queue(&queue_id)?
+        .ok_or_else(|| "Queue tab not found".to_string())?;
+    q.tab_type = tab_type;
+    state.scheduler.db.upsert_queue(&q)?;
+    state.scheduler.emit_snapshot_changed();
+    Ok(q)
+}
+
+#[tauri::command]
+pub fn update_repair_session(
+    state: State<'_, AppState>,
+    queue_id: String,
+    input_path: String,
+    reference_paths: Vec<String>,
+    output_path: Option<String>,
+    video_only: bool,
+    deep_scan: bool,
+    timeout_secs: u64,
+) -> Result<RepairJobRecord, String> {
+    let existing = state.scheduler.db.get_repair_session(&queue_id)?;
+    let input_changed = existing
+        .as_ref()
+        .map(|e| e.input_path != input_path)
+        .unwrap_or(true);
+    let rec = RepairJobRecord {
+        queue_id,
+        input_path,
+        reference_paths,
+        output_path,
+        video_only,
+        deep_scan,
+        timeout_secs: timeout_secs.clamp(10, 3600),
+        status: if input_changed {
+            "idle".to_string()
+        } else {
+            existing.as_ref().map(|e| e.status.clone()).unwrap_or_else(|| "idle".to_string())
+        },
+        diagnosis: if input_changed { None } else { existing.as_ref().and_then(|e| e.diagnosis.clone()) },
+        report: if input_changed { None } else { existing.as_ref().and_then(|e| e.report.clone()) },
+        progress: None,
+        error: None,
+        preview_sheet_filename: if input_changed {
+            None
+        } else {
+            existing.and_then(|e| e.preview_sheet_filename)
+        },
+        updated_at: Utc::now().timestamp(),
+    };
+    state.scheduler.db.upsert_repair_session(&rec)?;
+    state.scheduler.emit_snapshot_changed();
+    Ok(rec)
+}
+
+#[tauri::command]
+pub fn run_repair_diagnosis(state: State<'_, AppState>, queue_id: String) -> Result<(), String> {
+    let mut rec = state
+        .scheduler
+        .db
+        .get_repair_session(&queue_id)?
+        .ok_or_else(|| "Select a damaged video file first.".to_string())?;
+    if rec.input_path.trim().is_empty() {
+        return Err("Select a damaged video file first.".to_string());
+    }
+    rec.status = "diagnosing".to_string();
+    rec.error = None;
+    rec.updated_at = Utc::now().timestamp();
+    state.scheduler.db.upsert_repair_session(&rec)?;
+    state.scheduler.emit_snapshot_changed();
+
+    let sched = state.scheduler.clone();
+    std::thread::spawn(move || {
+        let sched_ev = sched.clone();
+        let qid_ev = queue_id.clone();
+        let cb: crate::recovery::ProgressCallback = Arc::new(move |p| {
+            sched_ev.emit_event(
+                "repair_progress",
+                serde_json::json!({ "queue_id": qid_ev, "progress": p }),
+            );
+        });
+        let res = crate::recovery::diagnose_file(Path::new(&rec.input_path), Some(&cb));
+        match res {
+            Ok(diag) => {
+                rec.diagnosis = Some(diag);
+                rec.status = "diagnosed".to_string();
+                rec.error = None;
+            }
+            Err(err) => {
+                rec.status = "failed".to_string();
+                rec.error = Some(err);
+            }
+        }
+        rec.progress = None;
+        rec.updated_at = Utc::now().timestamp();
+        let _ = sched.db.upsert_repair_session(&rec);
+        sched.emit_snapshot_changed();
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn start_video_repair(state: State<'_, AppState>, queue_id: String) -> Result<(), String> {
+    let mut rec = state
+        .scheduler
+        .db
+        .get_repair_session(&queue_id)?
+        .ok_or_else(|| "Select a damaged video file first.".to_string())?;
+    if rec.input_path.trim().is_empty() {
+        return Err("Select a damaged video file first.".to_string());
+    }
+    let ts = state.scheduler.refresh_tools(false);
+    let caps = ts
+        .capabilities
+        .ok_or_else(|| "FFmpeg and ffprobe are required before running recovery.".to_string())?;
+    let ffmpeg = PathBuf::from(&caps.ffmpeg_path);
+    let ffprobe = PathBuf::from(&caps.ffprobe_path);
+
+    let in_p = PathBuf::from(&rec.input_path);
+    let out_p = rec
+        .output_path
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let stem = in_p.file_stem().and_then(|s| s.to_str()).unwrap_or("recovered");
+            let parent = in_p.parent().unwrap_or_else(|| Path::new("."));
+            parent.join(format!("{stem}_recovered.mp4"))
+        });
+    rec.output_path = Some(out_p.to_string_lossy().to_string());
+    rec.status = "recovering".to_string();
+    rec.error = None;
+    rec.updated_at = Utc::now().timestamp();
+    state.scheduler.db.upsert_repair_session(&rec)?;
+    state.scheduler.emit_snapshot_changed();
+
+    let opts = crate::recovery::RecoveryOptions {
+        input_path: in_p,
+        reference_paths: rec.reference_paths.iter().map(PathBuf::from).collect(),
+        output_path: out_p,
+        video_only: rec.video_only,
+        deep_scan: rec.deep_scan,
+        timeout_secs: rec.timeout_secs.max(30),
+        generate_contact_sheet: true,
+    };
+
+    let sched = state.scheduler.clone();
+    std::thread::spawn(move || {
+        let sched_ev = sched.clone();
+        let qid_ev = queue_id.clone();
+        let cb: crate::recovery::ProgressCallback = Arc::new(move |p| {
+            sched_ev.emit_event(
+                "repair_progress",
+                serde_json::json!({ "queue_id": qid_ev, "progress": p }),
+            );
+        });
+        match crate::recovery::recover_file(&opts, &ffmpeg, &ffprobe, Some(&cb)) {
+            Ok(report) => {
+                rec.diagnosis = Some(report.diagnosis.clone());
+                rec.status = if report.overall_status == "unrecoverable" {
+                    "failed".to_string()
+                } else {
+                    report.overall_status.clone()
+                };
+                if let Some(ref sheet) = report.contact_sheet_path {
+                    let preview_fname = format!("repair_{queue_id}.jpg");
+                    let _ = std::fs::create_dir_all(&sched.previews.preview_dir);
+                    let dst = sched.previews.preview_dir.join(&preview_fname);
+                    if std::fs::copy(sheet, &dst).is_ok() {
+                        rec.preview_sheet_filename = Some(preview_fname);
+                    }
+                }
+                if report.overall_status != "unrecoverable" {
+                    if let Some(ref recovered_out) = report.output_path {
+                        let details = serde_json::json!({
+                            "strategy": report.selected_strategy,
+                            "overall_status": report.overall_status,
+                            "segments": report.segments.len(),
+                        });
+                        let _ = crate::catalog::register_derived_file(
+                            &sched.db,
+                            &report.input_path,
+                            Path::new(recovered_out),
+                            "recovered_from",
+                            details,
+                            true,
+                            Some(&ffprobe),
+                        );
+                    }
+                }
+                rec.report = Some(report);
+                rec.error = None;
+            }
+            Err(err) => {
+                rec.status = "failed".to_string();
+                rec.error = Some(err);
+            }
+        }
+        rec.progress = None;
+        rec.updated_at = Utc::now().timestamp();
+        let _ = sched.db.upsert_repair_session(&rec);
+        sched.emit_snapshot_changed();
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn export_repair_report(
+    state: State<'_, AppState>,
+    queue_id: String,
+    dest_path: String,
+    format: String,
+) -> Result<(), String> {
+    let rec = state
+        .scheduler
+        .db
+        .get_repair_session(&queue_id)?
+        .ok_or_else(|| "No repair session found for tab.".to_string())?;
+    let report = rec
+        .report
+        .ok_or_else(|| "Run repair before exporting a full recovery report.".to_string())?;
+    let content = if format == "json" {
+        serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+    } else {
+        crate::recovery::format_recovery_human(&report)
+    };
+    std::fs::write(&dest_path, content).map_err(|e| format!("Failed writing report: {e}"))?;
     Ok(())
 }
 

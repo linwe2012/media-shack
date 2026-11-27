@@ -190,6 +190,16 @@ pub fn find_tool_pair(
         }
     };
 
+    // 1b. Bundled app sidecars (beside executable or inside macOS Contents/Resources)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            push_trusted(dir.to_path_buf());
+            push_trusted(dir.join("binaries"));
+            #[cfg(target_os = "macos")]
+            push_trusted(dir.join("../Resources"));
+        }
+    }
+
     // 2. Installed locations (including both Homebrew prefixes on macOS and standard Windows locations)
     #[cfg(target_os = "macos")]
     {
