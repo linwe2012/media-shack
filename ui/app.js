@@ -67,11 +67,22 @@
     if (!snapshot) return;
     renderTabs();
     renderToolsPill();
-    renderToolbar();
-    renderConfigStrip();
-    renderBanners();
-    renderQueueList();
-    renderSidePanel();
+    const q = activeQueue();
+    const isRepair = q && q.tab_type === "repair";
+    $("encode-toolbar").classList.toggle("hidden", !!isRepair);
+    $("encode-config-strip").classList.toggle("hidden", !!isRepair);
+    $("encode-workspace").classList.toggle("hidden", !!isRepair);
+    $("repair-workspace").classList.toggle("hidden", !isRepair);
+    if (isRepair) {
+      $("banner-area").innerHTML = "";
+      renderRepairWorkspace();
+    } else {
+      renderToolbar();
+      renderConfigStrip();
+      renderBanners();
+      renderQueueList();
+      renderSidePanel();
+    }
     renderFooter();
   }
 
@@ -79,14 +90,20 @@
     const strip = $("tabs-strip");
     strip.innerHTML = "";
     for (const q of snapshot.queues) {
+      const isActive = q.id === snapshot.active_queue_id;
+      const item = document.createElement("div");
+      item.className = "tab-item" + (isActive ? " active" : "");
+
       const btn = document.createElement("button");
       btn.type = "button";
       btn.role = "tab";
-      btn.className = "tab-btn" + (q.id === snapshot.active_queue_id ? " active" : "");
-      btn.setAttribute("aria-selected", String(q.id === snapshot.active_queue_id));
+      btn.className = "tab-select-btn";
+      btn.setAttribute("aria-selected", String(isActive));
 
       const dot = document.createElement("span");
-      dot.className = "dot " + (q.is_running && !q.is_paused ? "pulse" : q.is_paused ? "" : "ok");
+      const sess = (snapshot.repair_sessions || []).find((s) => s.queue_id === q.id);
+      const repairBusy = q.tab_type === "repair" && sess && (sess.status === "diagnosing" || sess.status === "recovering");
+      dot.className = "dot " + ((q.is_running && !q.is_paused) || repairBusy ? "pulse" : q.is_paused ? "" : "ok");
       btn.appendChild(dot);
 
       const label = document.createElement("span");
@@ -95,16 +112,45 @@
 
       btn.addEventListener("click", () => invoke("select_queue_tab", { queueId: q.id }));
       btn.addEventListener("dblclick", () => {
-        openPromptModal("Rename Queue Tab", "Queue name:", q.name, async (next) => {
+        openPromptModal("Rename Tab", "Tab name:", q.name, async (next) => {
           await invoke("rename_queue_tab", { queueId: q.id, name: next });
         });
       });
+      item.appendChild(btn);
+
+      if (isActive) {
+        const modeSel = document.createElement("select");
+        modeSel.className = "tab-mode-select";
+        modeSel.title = "Switch tab feature mode";
+        modeSel.setAttribute("aria-label", "Tab mode");
+        modeSel.innerHTML = `
+          <option value="encode">Encode</option>
+          <option value="repair">Repair</option>
+        `;
+        modeSel.value = q.tab_type || "encode";
+        modeSel.addEventListener("click", (e) => e.stopPropagation());
+        modeSel.addEventListener("change", async (e) => {
+          e.stopPropagation();
+          try {
+            await invoke("set_queue_tab_type", { queueId: q.id, tabType: e.target.value });
+          } catch (err) {
+            alert(err);
+          }
+        });
+        item.appendChild(modeSel);
+      } else {
+        const pill = document.createElement("span");
+        pill.className = "tab-type-pill";
+        pill.textContent = q.tab_type === "repair" ? "Repair" : "Encode";
+        item.appendChild(pill);
+      }
 
       if (snapshot.queues.length > 1) {
-        const close = document.createElement("span");
+        const close = document.createElement("button");
+        close.type = "button";
         close.className = "tab-close";
         close.textContent = "×";
-        close.title = "Close queue tab";
+        close.title = "Close tab";
         close.addEventListener("click", async (e) => {
           e.stopPropagation();
           try {
@@ -113,9 +159,9 @@
             alert(err);
           }
         });
-        btn.appendChild(close);
+        item.appendChild(close);
       }
-      strip.appendChild(btn);
+      strip.appendChild(item);
     }
   }
 
@@ -1751,7 +1797,13 @@
       $("empty-drop-state").classList.remove("drag-over");
     } else if (ev.payload.type === "drop") {
       $("empty-drop-state").classList.remove("drag-over");
-      startImportFlow(ev.payload.paths);
+      const q = activeQueue();
+      if (q && q.tab_type === "repair" && ev.payload.paths && ev.payload.paths.length > 0) {
+        const s = activeRepairSession();
+        saveRepairConfig({ input_path: ev.payload.paths[0], reference_paths: s.reference_paths, output_path: s.output_path });
+      } else {
+        startImportFlow(ev.payload.paths);
+      }
     }
   });
 
@@ -1793,6 +1845,11 @@
 
   // Listen to backend compact events
   event.listen("snapshot_changed", () => refreshSnapshot());
+  event.listen("repair_progress", (ev) => {
+    const q = activeQueue();
+    if (!q || !ev.payload || ev.payload.queue_id !== q.id) return;
+    renderRepairProgress(ev.payload.progress);
+  });
   event.listen("job_progress", (ev) => {
     if (!snapshot) return;
     snapshot.active_progress = ev.payload;
@@ -1803,6 +1860,258 @@
     snapshot.sample_preview = ev.payload;
     if (openSampleRefresh) openSampleRefresh();
   });
+
+  function activeRepairSession() {
+    const q = activeQueue();
+    const empty = {
+      queue_id: q ? q.id : "",
+      input_path: "",
+      reference_paths: [],
+      output_path: null,
+      video_only: false,
+      deep_scan: true,
+      timeout_secs: 300,
+      status: "idle",
+      diagnosis: null,
+      report: null,
+      error: null,
+      preview_sheet_filename: null,
+    };
+    if (!q || !snapshot || !snapshot.repair_sessions) return empty;
+    return snapshot.repair_sessions.find((s) => s.queue_id === q.id) || empty;
+  }
+
+  async function saveRepairConfig(overrides) {
+    const q = activeQueue();
+    if (!q) return;
+    const cur = activeRepairSession();
+    const merged = {
+      queueId: q.id,
+      inputPath: overrides.input_path !== undefined ? overrides.input_path : cur.input_path,
+      referencePaths: overrides.reference_paths !== undefined ? overrides.reference_paths : cur.reference_paths,
+      outputPath: overrides.output_path !== undefined ? overrides.output_path : cur.output_path,
+      videoOnly: $("chk-repair-video-only").checked,
+      deepScan: $("chk-repair-deep").checked,
+      timeoutSecs: Math.max(15, Number($("inp-repair-timeout").value) || 300),
+    };
+    await invoke("update_repair_session", merged);
+  }
+
+  function renderRepairProgress(p) {
+    const box = $("repair-progress-box");
+    if (!p) {
+      box.classList.add("hidden");
+      return;
+    }
+    box.classList.remove("hidden");
+    const pct = p.total_bytes > 0 ? Math.min(100, (p.bytes_scanned / p.total_bytes) * 100) : 0;
+    $("lbl-repair-stage").textContent = `${p.current_strategy}`;
+    $("lbl-repair-metrics").textContent = `${pct.toFixed(1)}% · ${fmtBytes(p.bytes_scanned)}/${fmtBytes(p.total_bytes)} · ${p.recovered_frames} frames · ${p.elapsed_secs.toFixed(1)}s`;
+    $("bar-repair-progress").style.width = `${pct.toFixed(1)}%`;
+  }
+
+  function esc(s) {
+    return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function renderRepairWorkspace() {
+    const s = activeRepairSession();
+    const busy = s.status === "diagnosing" || s.status === "recovering";
+    $("inp-repair-input").value = s.input_path || "";
+    $("inp-repair-output").value = s.output_path || "";
+    $("inp-repair-timeout").value = s.timeout_secs || 300;
+    $("chk-repair-deep").checked = !!s.deep_scan;
+    $("chk-repair-video-only").checked = !!s.video_only;
+    $("btn-repair-diagnose").disabled = busy || !s.input_path;
+    $("btn-repair-start").disabled = busy || !s.input_path;
+
+    const chips = $("repair-refs-chips");
+    chips.innerHTML = "";
+    if (!s.reference_paths || s.reference_paths.length === 0) {
+      const hint = document.createElement("span");
+      hint.className = "muted";
+      hint.textContent = "No reference files attached (add healthy files from same camera/series if moov is missing).";
+      chips.appendChild(hint);
+    } else {
+      for (const rp of s.reference_paths) {
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        const name = rp.split(/[/\\]/).pop();
+        chip.innerHTML = `<span title="${esc(rp)}">${esc(name)}</span>`;
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.textContent = "×";
+        rm.title = "Remove reference";
+        rm.onclick = () => saveRepairConfig({ reference_paths: s.reference_paths.filter((x) => x !== rp) });
+        chip.appendChild(rm);
+        chips.appendChild(chip);
+      }
+    }
+
+    if (!busy) {
+      $("repair-progress-box").classList.add("hidden");
+    } else {
+      $("repair-progress-box").classList.remove("hidden");
+    }
+
+    const resEl = $("repair-results");
+    if (!s.diagnosis && !s.report && !s.error) {
+      resEl.classList.add("hidden");
+      resEl.innerHTML = "";
+      return;
+    }
+    resEl.classList.remove("hidden");
+
+    let html = "";
+    if (s.error) {
+      html += `<div class="repair-card"><strong style="color:var(--err)">Error:</strong> ${esc(s.error)}</div>`;
+    }
+
+    const rep = s.report;
+    const diag = rep ? rep.diagnosis : s.diagnosis;
+
+    if (rep) {
+      const badgeCls = rep.overall_status === "recovered" ? "ok" : rep.overall_status === "partial" ? "warn" : "err";
+      html += `
+        <div class="repair-card">
+          <div class="inline-row" style="justify-content:space-between; flex-wrap:wrap; gap:8px;">
+            <div>
+              <span class="dot ${badgeCls}" style="display:inline-block;margin-right:6px;"></span>
+              <strong>Status: ${esc(rep.overall_status.toUpperCase())}</strong>
+              <span class="muted"> · Original input SHA-256 ${rep.input_untouched_verified ? "Verified Unchanged ✓" : "CHECK FAILED"} · Elapsed ${rep.elapsed_secs.toFixed(1)}s</span>
+              <p style="margin:6px 0 0;">${esc(rep.honest_summary)}</p>
+            </div>
+            <div class="inline-row">
+              ${rep.output_path ? `<button class="btn btn-secondary btn-sm" id="btn-repair-reveal" type="button">Reveal output</button>` : ""}
+              ${rep.output_path ? `<button class="btn btn-primary btn-sm" id="btn-repair-open" type="button">Open in player</button>` : ""}
+              <button class="btn btn-ghost btn-sm" id="btn-repair-export-txt" type="button">Export TXT</button>
+              <button class="btn btn-ghost btn-sm" id="btn-repair-export-json" type="button">Export JSON</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (diag) {
+      const atomsRows = (diag.atoms || []).map((a) => `
+        <tr>
+          <td class="mono">${esc(a.tag)}</td>
+          <td class="mono">${a.offset}</td>
+          <td class="mono">${fmtBytes(a.declared_size)}</td>
+          <td class="mono">${a.physical_end}</td>
+          <td>${a.truncated ? `<span style="color:var(--warn)">Truncated</span>` : "Intact"}</td>
+        </tr>
+      `).join("");
+      html += `
+        <div class="repair-card">
+          <h3 style="margin:0 0 8px;">Structure Diagnosis (${esc(diag.container_kind)})</h3>
+          <div class="mono muted" style="margin-bottom:8px;">SHA-256: ${esc(diag.sha256)} · ${fmtBytes(diag.file_size)}</div>
+          <ul class="provenance-list">
+            ${(diag.summary_lines || []).map((l) => `<li>${esc(l)}</li>`).join("")}
+            ${(diag.anomalies || []).map((a) => `<li style="color:var(--warn)">${esc(a)}</li>`).join("")}
+          </ul>
+          ${atomsRows ? `<table class="table-simple"><thead><tr><th>Atom</th><th>Offset</th><th>Declared</th><th>Physical End</th><th>State</th></tr></thead><tbody>${atomsRows}</tbody></table>` : ""}
+        </div>
+      `;
+    }
+
+    if (rep) {
+      const candRows = (rep.candidates || []).map((c) => `
+        <tr>
+          <td><strong>${esc(c.strategy_name)}</strong>${c.rejection_reason ? `<div class="muted" style="font-size:11px">${esc(c.rejection_reason)}</div>` : ""}</td>
+          <td>${c.succeeded ? `<span style="color:var(--ok);font-weight:600">PASS</span>` : `<span style="color:var(--err)">FAIL</span>`}</td>
+          <td class="mono">${c.score.toFixed(1)}</td>
+          <td class="mono">${c.decoded_video_frames}</td>
+          <td class="mono">${c.idr_frames}</td>
+          <td class="mono">${c.decode_error_count}</td>
+          <td class="mono">${c.recovered_duration_secs != null ? c.recovered_duration_secs.toFixed(2) + "s" : "—"}</td>
+          <td class="mono">${c.audio_duration_secs != null ? c.audio_duration_secs.toFixed(2) + "s" : "Video-only"}</td>
+        </tr>
+      `).join("");
+
+      html += `
+        <div class="repair-card">
+          <h3 style="margin:0 0 8px;">Recovery Candidates Evaluated (${(rep.candidates || []).length})</h3>
+          <table class="table-simple">
+            <thead><tr><th>Strategy</th><th>Valid</th><th>Score</th><th>Frames</th><th>IDRs</th><th>Decode Errs</th><th>Video Dur</th><th>Audio</th></tr></thead>
+            <tbody>${candRows}</tbody>
+          </table>
+        </div>
+        <div class="repair-two-col">
+          <div class="repair-card">
+            <h3 style="margin:0 0 8px;">Data Provenance &amp; VR Notes</h3>
+            <strong>Recovered Data</strong>
+            <ul class="provenance-list">${(rep.provenance.recovered_data || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+            <strong>Inferred Metadata</strong>
+            <ul class="provenance-list">${(rep.provenance.inferred_metadata || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+            <strong>Irrecoverable / Omitted</strong>
+            <ul class="provenance-list">${(rep.provenance.irrecoverable_or_omitted || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+            ${rep.vr_status && rep.vr_status.limitation_note ? `<p style="color:var(--warn);font-size:12px;"><strong>VR Note:</strong> ${esc(rep.vr_status.limitation_note)}</p>` : ""}
+          </div>
+          <div class="repair-card">
+            <h3 style="margin:0 0 8px;">Contact Sheet Thumbnail Verification</h3>
+            ${s.preview_sheet_filename ? `<img class="contact-sheet-img" src="preview://${encodeURIComponent(s.preview_sheet_filename)}?t=${s.updated_at}" alt="Recovered frames contact sheet" />` : `<p class="muted">No contact sheet generated.</p>`}
+          </div>
+        </div>
+      `;
+    }
+
+    resEl.innerHTML = html;
+
+    if (rep && rep.output_path) {
+      const btnRev = $("btn-repair-reveal");
+      const btnOpen = $("btn-repair-open");
+      if (btnRev) btnRev.onclick = () => invoke("reveal_output", { path: rep.output_path });
+      if (btnOpen) btnOpen.onclick = () => invoke("open_output_player", { path: rep.output_path });
+    }
+    const btnTxt = $("btn-repair-export-txt");
+    const btnJson = $("btn-repair-export-json");
+    if (btnTxt) btnTxt.onclick = async () => {
+      const dst = await dialog.save({ defaultPath: "recovery_report.txt" });
+      if (dst) await invoke("export_repair_report", { queueId: activeQueue().id, destPath: dst, format: "txt" });
+    };
+    if (btnJson) btnJson.onclick = async () => {
+      const dst = await dialog.save({ defaultPath: "recovery_report.json" });
+      if (dst) await invoke("export_repair_report", { queueId: activeQueue().id, destPath: dst, format: "json" });
+    };
+  }
+
+  // Repair Tab Actions
+  $("btn-repair-pick-input").onclick = async () => {
+    const picked = await dialog.open({ multiple: false, filters: [{ name: "Video", extensions: ["mp4", "mov", "m4v"] }] });
+    if (picked) await saveRepairConfig({ input_path: picked });
+  };
+  $("btn-repair-add-refs").onclick = async () => {
+    const picked = await dialog.open({ multiple: true, filters: [{ name: "Video", extensions: ["mp4", "mov", "m4v", "mkv"] }] });
+    if (picked) {
+      const list = Array.isArray(picked) ? picked : [picked];
+      const cur = activeRepairSession().reference_paths || [];
+      const merged = Array.from(new Set([...cur, ...list]));
+      await saveRepairConfig({ reference_paths: merged });
+    }
+  };
+  $("btn-repair-pick-output").onclick = async () => {
+    const cur = activeRepairSession();
+    const picked = await dialog.save({ defaultPath: cur.output_path || "recovered.mp4" });
+    if (picked) await saveRepairConfig({ output_path: picked });
+  };
+  $("chk-repair-deep").onchange = () => saveRepairConfig({});
+  $("chk-repair-video-only").onchange = () => saveRepairConfig({});
+  $("inp-repair-timeout").onchange = () => saveRepairConfig({});
+  $("btn-repair-diagnose").onclick = async () => {
+    try {
+      await invoke("run_repair_diagnosis", { queueId: activeQueue().id });
+    } catch (err) {
+      alert(err);
+    }
+  };
+  $("btn-repair-start").onclick = async () => {
+    try {
+      await invoke("start_video_repair", { queueId: activeQueue().id });
+    } catch (err) {
+      alert(err);
+    }
+  };
 
   refreshSnapshot();
 })();

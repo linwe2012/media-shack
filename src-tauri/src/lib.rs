@@ -5,6 +5,7 @@ pub mod models;
 pub mod planner;
 pub mod platform;
 pub mod preview;
+pub mod recovery;
 pub mod runner;
 pub mod scanner;
 pub mod scheduler;
@@ -34,10 +35,10 @@ pub fn run() {
                 if cand_c.starts_with(&root_c) && cand_c.is_file() {
                     if let Ok(bytes) = std::fs::read(&cand_c) {
                         let total_len = bytes.len();
-                        let mime = if cand_c.extension().and_then(|e| e.to_str()) == Some("mkv") {
-                            "video/x-matroska"
-                        } else {
-                            "video/mp4"
+                        let mime = match cand_c.extension().and_then(|e| e.to_str()) {
+                            Some("mkv") => "video/x-matroska",
+                            Some("jpg") | Some("jpeg") => "image/jpeg",
+                            _ => "video/mp4",
                         };
                         if let Some(range_hdr) = req.headers().get("range").and_then(|v| v.to_str().ok()) {
                             if let Some((start, end)) = parse_byte_range(range_hdr, total_len) {
@@ -99,6 +100,11 @@ pub fn run() {
             commands::rename_queue_tab,
             commands::delete_queue_tab,
             commands::select_queue_tab,
+            commands::set_queue_tab_type,
+            commands::update_repair_session,
+            commands::run_repair_diagnosis,
+            commands::start_video_repair,
+            commands::export_repair_report,
             commands::update_queue_settings,
             commands::apply_queue_settings_to_waiting,
             commands::save_named_preset,

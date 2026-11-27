@@ -226,6 +226,25 @@ impl Database {
             tx.commit().map_err(|e| e.to_string())?;
         }
 
+        if current_ver < 3 {
+            let tx = conn.transaction().map_err(|e| e.to_string())?;
+            tx.execute_batch(
+                "ALTER TABLE queues ADD COLUMN tab_type TEXT NOT NULL DEFAULT 'encode';
+                 CREATE TABLE IF NOT EXISTS repair_sessions (
+                     queue_id TEXT PRIMARY KEY REFERENCES queues(id) ON DELETE CASCADE,
+                     session_json TEXT NOT NULL,
+                     updated_at INTEGER NOT NULL
+                 );",
+            )
+            .map_err(|e| format!("Migration v3 failed: {e}"))?;
+            tx.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (3, ?1)",
+                params![Utc::now().timestamp()],
+            )
+            .map_err(|e| format!("Migration v3 version insert failed: {e}"))?;
+            tx.commit().map_err(|e| e.to_string())?;
+        }
+
         Ok(())
     }
 
@@ -420,7 +439,7 @@ impl Database {
                         priority, recursive_import, destination_root, keep_awake,
                         error_policy, min_savings_enabled, min_savings_pct,
                         cleanup_policy, full_decode_verify, is_running, is_paused,
-                        pause_after_current, waiting_reason
+                        pause_after_current, waiting_reason, tab_type
                  FROM queues ORDER BY tab_order ASC",
             )
             .map_err(|e| e.to_string())?;
@@ -430,10 +449,13 @@ impl Database {
                 let prio_s: String = r.get(6)?;
                 let err_s: String = r.get(10)?;
                 let clean_s: String = r.get(13)?;
+                let tt_s: String = r.get(19)?;
                 Ok(QueueTab {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     tab_order: r.get(2)?,
+                    tab_type: serde_json::from_str(&format!("\"{tt_s}\""))
+                        .unwrap_or(TabType::Encode),
                     profile_id: r.get(3)?,
                     profile_name: r.get(4)?,
                     recipe: serde_json::from_str(&rjson)
@@ -479,17 +501,22 @@ impl Database {
             .map_err(|e| e.to_string())?
             .trim_matches('"')
             .to_string();
+        let tt_s = serde_json::to_string(&q.tab_type)
+            .map_err(|e| e.to_string())?
+            .trim_matches('"')
+            .to_string();
         conn.execute(
             "INSERT INTO queues (
-                id, name, tab_order, profile_id, profile_name, recipe_json,
+                id, name, tab_order, tab_type, profile_id, profile_name, recipe_json,
                 priority, recursive_import, destination_root, keep_awake,
                 error_policy, min_savings_enabled, min_savings_pct,
                 cleanup_policy, full_decode_verify, is_running, is_paused,
                 pause_after_current, waiting_reason
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 tab_order = excluded.tab_order,
+                tab_type = excluded.tab_type,
                 profile_id = excluded.profile_id,
                 profile_name = excluded.profile_name,
                 recipe_json = excluded.recipe_json,
@@ -510,6 +537,7 @@ impl Database {
                 q.id,
                 q.name,
                 q.tab_order,
+                tt_s,
                 q.profile_id,
                 q.profile_name,
                 rjson,
@@ -527,6 +555,53 @@ impl Database {
                 q.pause_after_current as i64,
                 q.waiting_reason,
             ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn list_repair_sessions(&self) -> Result<Vec<RepairJobRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT session_json FROM repair_sessions ORDER BY updated_at DESC")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            if let Ok(raw) = row {
+                if let Ok(rec) = serde_json::from_str::<RepairJobRecord>(&raw) {
+                    out.push(rec);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn get_repair_session(&self, queue_id: &str) -> Result<Option<RepairJobRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT session_json FROM repair_sessions WHERE queue_id = ?1",
+                params![queue_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        Ok(raw.and_then(|s| serde_json::from_str(&s).ok()))
+    }
+
+    pub fn upsert_repair_session(&self, rec: &RepairJobRecord) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let json = serde_json::to_string(rec).map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO repair_sessions (queue_id, session_json, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(queue_id) DO UPDATE SET
+                 session_json = excluded.session_json,
+                 updated_at = excluded.updated_at",
+            params![rec.queue_id, json, rec.updated_at],
         )
         .map_err(|e| e.to_string())?;
         Ok(())

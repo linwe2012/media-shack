@@ -227,11 +227,26 @@ pub struct Profile {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabType {
+    Encode,
+    Repair,
+}
+
+impl Default for TabType {
+    fn default() -> Self {
+        TabType::Encode
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueTab {
     pub id: String,
     pub name: String,
     pub tab_order: i32,
+    #[serde(default)]
+    pub tab_type: TabType,
     pub profile_id: Option<String>,
     pub profile_name: Option<String>,
     pub recipe: EncodeRecipe,
@@ -705,10 +720,30 @@ pub struct LivePreviewInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepairJobRecord {
+    pub queue_id: String,
+    pub input_path: String,
+    pub reference_paths: Vec<String>,
+    pub output_path: Option<String>,
+    pub video_only: bool,
+    pub deep_scan: bool,
+    pub timeout_secs: u64,
+    pub status: String,
+    pub diagnosis: Option<crate::recovery::DiagnosisReport>,
+    pub report: Option<crate::recovery::RecoveryReport>,
+    pub progress: Option<crate::recovery::RecoveryProgress>,
+    pub error: Option<String>,
+    pub preview_sheet_filename: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSnapshot {
     pub queues: Vec<QueueTab>,
     pub active_queue_id: String,
     pub jobs: Vec<JobRecord>,
+    #[serde(default)]
+    pub repair_sessions: Vec<RepairJobRecord>,
     pub profiles: Vec<Profile>,
     pub named_presets: Vec<NamedPreset>,
     pub tools: ToolStatus,

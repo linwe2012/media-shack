@@ -74,7 +74,7 @@ impl Scheduler {
         }
     }
 
-    fn emit_event(&self, name: &str, payload: serde_json::Value) {
+    pub fn emit_event(&self, name: &str, payload: serde_json::Value) {
         if let Ok(sink) = self.event_sink.lock() {
             if let Some(ref f) = *sink {
                 f(name, payload);
@@ -328,7 +328,7 @@ impl Scheduler {
         for offset in 0..n {
             let idx = (*rr_cursor + offset) % n;
             let mut q = queues[idx].clone();
-            if !q.is_running || q.is_paused {
+            if q.tab_type != TabType::Encode || !q.is_running || q.is_paused {
                 continue;
             }
             let jobs = self.db.list_jobs_for_queue(&q.id).ok()?;
@@ -1229,10 +1229,13 @@ impl Scheduler {
             .unwrap_or(false);
         let scheduler_busy_reason = self.busy_reason.lock().ok().and_then(|b| b.clone());
 
+        let repair_sessions = self.db.list_repair_sessions()?;
+
         Ok(AppSnapshot {
             queues,
             active_queue_id,
             jobs,
+            repair_sessions,
             profiles,
             named_presets,
             tools,

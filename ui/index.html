@@ -12,7 +12,7 @@
     <header class="top-bar">
       <div class="tabs-strip" role="tablist" aria-label="Encoding Queues" id="tabs-strip"></div>
       <div class="top-actions">
-        <button id="btn-new-queue" class="btn btn-ghost btn-sm" type="button" title="Create new independent queue tab">+ New queue</button>
+        <button id="btn-new-queue" class="btn btn-ghost btn-sm" type="button" title="Create new independent tab">+ New tab</button>
         <button id="btn-tools-status" class="tool-pill" type="button" title="Inspect or locate FFmpeg and ffprobe">
           <span class="dot" id="tool-dot"></span>
           <span id="tool-label">Checking FFmpeg…</span>
@@ -21,7 +21,7 @@
     </header>
 
     <!-- Primary Queue Toolbar -->
-    <section class="toolbar" aria-label="Queue Actions">
+    <section id="encode-toolbar" class="toolbar" aria-label="Queue Actions">
       <div class="toolbar-left">
         <button id="btn-add-files" class="btn btn-secondary" type="button">Add files</button>
         <button id="btn-add-folder" class="btn btn-secondary" type="button">Add folder</button>
@@ -51,7 +51,7 @@
     </section>
 
     <!-- Profile & Preset Configuration Strip -->
-    <section class="config-strip" aria-label="Profile and Preset Settings">
+    <section id="encode-config-strip" class="config-strip" aria-label="Profile and Preset Settings">
       <div class="config-row">
         <div class="control-group">
           <label for="sel-profile">Profile</label>
@@ -171,7 +171,7 @@
     <div id="banner-area" class="banner-area"></div>
 
     <!-- Main Workspace: Queue Table + Side Inspector -->
-    <main class="workspace">
+    <main id="encode-workspace" class="workspace">
       <section class="queue-pane" aria-label="Queue List">
         <div id="empty-drop-state" class="empty-drop hidden">
           <div class="empty-card">
@@ -206,6 +206,70 @@
         </div>
       </aside>
     </main>
+
+    <!-- Video Repair Workspace -->
+    <section id="repair-workspace" class="repair-workspace hidden" aria-label="MP4 Video Repair">
+      <div class="repair-grid">
+        <div class="repair-card">
+          <div class="repair-header">
+            <div>
+              <h2>MP4 / MOV Video Diagnosis &amp; Bitstream Recovery</h2>
+              <p class="muted">Inspects container atoms, matches reference codec/VR parameters, and reconstructs playable streams without modifying or overwriting the damaged input.</p>
+            </div>
+            <div class="repair-actions">
+              <button id="btn-repair-diagnose" class="btn btn-secondary" type="button">Diagnose</button>
+              <button id="btn-repair-start" class="btn btn-primary" type="button">Start repair</button>
+            </div>
+          </div>
+
+          <div class="repair-form">
+            <div class="repair-field">
+              <label>Damaged video file (read-only · SHA-256 verified)</label>
+              <div class="inline-row">
+                <input id="inp-repair-input" type="text" placeholder="Drop or choose a damaged .mp4 / .mov file…" readonly />
+                <button id="btn-repair-pick-input" class="btn btn-secondary btn-sm" type="button">Choose file…</button>
+              </div>
+            </div>
+
+            <div class="repair-field">
+              <label>Healthy reference video(s) (optional, recommended when `moov` is missing)</label>
+              <div class="inline-row">
+                <div id="repair-refs-chips" class="chips-wrap"></div>
+                <button id="btn-repair-add-refs" class="btn btn-ghost btn-sm" type="button">+ Add reference…</button>
+              </div>
+            </div>
+
+            <div class="repair-row-3">
+              <div class="repair-field">
+                <label>Output MP4 path</label>
+                <div class="inline-row">
+                  <input id="inp-repair-output" type="text" placeholder="Auto (<name>_recovered.mp4)" readonly />
+                  <button id="btn-repair-pick-output" class="btn btn-ghost btn-sm" type="button">Browse…</button>
+                </div>
+              </div>
+              <div class="repair-field">
+                <label for="inp-repair-timeout">Time budget (seconds)</label>
+                <input id="inp-repair-timeout" type="number" min="15" max="3600" value="300" />
+              </div>
+              <div class="repair-checks">
+                <label class="check-row"><input id="chk-repair-deep" type="checkbox" checked /> <span>Deep bitstream &amp; candidate checks</span></label>
+                <label class="check-row"><input id="chk-repair-video-only" type="checkbox" /> <span>Prioritize video-only (omit audio)</span></label>
+              </div>
+            </div>
+          </div>
+
+          <div id="repair-progress-box" class="repair-progress hidden">
+            <div class="inline-row" style="justify-content:space-between;">
+              <strong id="lbl-repair-stage">Scanning…</strong>
+              <span id="lbl-repair-metrics" class="mono muted">0%</span>
+            </div>
+            <div class="progress-track"><div id="bar-repair-progress" class="progress-fill" style="width:0%"></div></div>
+          </div>
+        </div>
+
+        <div id="repair-results" class="repair-results hidden"></div>
+      </div>
+    </section>
 
     <!-- Footer Status -->
     <footer class="status-bar">

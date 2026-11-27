@@ -50,7 +50,18 @@ jobs:
 
       - name: Install FFmpeg (macOS)
         if: runner.os == 'macOS'
-        run: brew install ffmpeg
+        run: |
+          brew install ffmpeg
+          mkdir -p src-tauri/binaries
+          if [ "${{ matrix.rust_target }}" = "aarch64-apple-darwin" ]; then MR_ARCH="arm64"; else MR_ARCH="amd64"; fi
+          curl -fsSL -o /tmp/ffmpeg.zip "https://ffmpeg.martin-riedl.de/redirect/latest/macos/${MR_ARCH}/snapshot/ffmpeg.zip"
+          curl -fsSL -o /tmp/ffprobe.zip "https://ffmpeg.martin-riedl.de/redirect/latest/macos/${MR_ARCH}/snapshot/ffprobe.zip"
+          mkdir -p /tmp/ffbin
+          unzip -j -o /tmp/ffmpeg.zip -d /tmp/ffbin
+          unzip -j -o /tmp/ffprobe.zip -d /tmp/ffbin
+          cp /tmp/ffbin/ffmpeg "src-tauri/binaries/ffmpeg-${{ matrix.rust_target }}"
+          cp /tmp/ffbin/ffprobe "src-tauri/binaries/ffprobe-${{ matrix.rust_target }}"
+          chmod +x "src-tauri/binaries/ffmpeg-${{ matrix.rust_target }}" "src-tauri/binaries/ffprobe-${{ matrix.rust_target }}"
 
       - name: Install FFmpeg (Windows)
         if: runner.os == 'Windows'
@@ -62,6 +73,9 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath "$env:RUNNER_TEMP\ffmpeg-ext" -Force
           $binDir = (Get-ChildItem -Path "$env:RUNNER_TEMP\ffmpeg-ext" -Directory | Select-Object -First 1).FullName + "\bin"
           echo $binDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          New-Item -ItemType Directory -Force -Path "src-tauri/binaries" | Out-Null
+          Copy-Item "$binDir\ffmpeg.exe" "src-tauri\binaries\ffmpeg-${{ matrix.rust_target }}.exe" -Force
+          Copy-Item "$binDir\ffprobe.exe" "src-tauri\binaries\ffprobe-${{ matrix.rust_target }}.exe" -Force
 
       - name: Verify FFmpeg tools
         run: |
@@ -71,11 +85,11 @@ jobs:
       - name: Run Rust unit & integration tests
         working-directory: src-tauri
         run: |
-          cargo build --bin media-shack
+          cargo build --bin media-shack --bin video-recover
           cargo test
 
       - name: Build native Tauri bundle
-        run: cargo tauri build --target ${{ matrix.rust_target }}
+        run: cargo tauri build --target ${{ matrix.rust_target }} --config src-tauri/tauri.bundle.json --ci
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
