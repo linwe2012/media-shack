@@ -69,6 +69,7 @@
   let encodeSort = { col: null, dir: "desc" }; // Transcode table column sort
   let liveSpeedJobId = null;
   let liveSpeedHistory = [];
+  let telemetryChartMetric = "speed"; // "speed" | "ratio" | "compare"
   const encodeFilters = {
     search: "",
     searchMode: "name", // "name" | "path" | "regex"
@@ -2393,63 +2394,76 @@
     return `<span class="muted">—</span>`;
   }
 
-  function renderSpeedChartSvg(history) {
-    const pts = (history || []).filter((p) => p && typeof p.speed === "number" && p.speed > 0);
-    if (pts.length < 2) {
-      return `<div class="muted" style="font-size:11px;padding:18px 0;text-align:center;">Collecting live speed samples… diagram renders once 2+ progress ticks arrive.</div>`;
+  function renderSingleMetricChartSvg(pts, opts) {
+    const {
+      getVal,
+      emptyText,
+      fmtTick,
+      fmtDotTitle,
+      refValue = 1.0,
+      refLabel = "",
+      gradId = "qpMetricGrad",
+      strokeColor = "var(--accent-text, var(--accent, #3b82f6))",
+      stopColor = "var(--accent, #3b82f6)",
+      minScaleFloor = 0.25,
+    } = opts;
+    const valid = (pts || [])
+      .map((p) => ({ t: p.elapsed_secs || 0, v: getVal(p) }))
+      .filter((p) => typeof p.v === "number" && Number.isFinite(p.v) && p.v > 0);
+    if (valid.length < 2) {
+      return `<div class="muted" style="font-size:11px;padding:18px 0;text-align:center;">${escapeHtml(emptyText)}</div>`;
     }
-    const minT = pts[0].elapsed_secs;
-    const maxT = Math.max(minT + 1, pts[pts.length - 1].elapsed_secs);
-    const rawMaxSp = Math.max(...pts.map((p) => p.speed));
-    const maxSp = Math.max(0.25, rawMaxSp * 1.15);
+    const minT = valid[0].t;
+    const maxT = Math.max(minT + 1, valid[valid.length - 1].t);
+    const rawMax = Math.max(...valid.map((p) => p.v));
+    const maxV = Math.max(minScaleFloor, rawMax * 1.15);
 
     const xPct = (t) => ((t - minT) / (maxT - minT)) * 100;
-    const yPct = (sp) => 100 - (Math.min(sp, maxSp) / maxSp) * 100;
+    const yPct = (v) => 100 - (Math.min(v, maxV) / maxV) * 100;
 
-    const polyCoords = pts.map((p) => `${xPct(p.elapsed_secs).toFixed(2)},${yPct(p.speed).toFixed(2)}`);
+    const polyCoords = valid.map((p) => `${xPct(p.t).toFixed(2)},${yPct(p.v).toFixed(2)}`);
     const linePath = `M ${polyCoords.join(" L ")}`;
-    const areaPath = `${linePath} L ${xPct(pts[pts.length - 1].elapsed_secs).toFixed(2)},100 L ${xPct(pts[0].elapsed_secs).toFixed(2)},100 Z`;
+    const areaPath = `${linePath} L ${xPct(valid[valid.length - 1].t).toFixed(2)},100 L ${xPct(valid[0].t).toFixed(2)},100 Z`;
 
-    const last = pts[pts.length - 1];
-    const peak = pts.reduce((a, b) => (b.speed > a.speed ? b : a), pts[0]);
+    const last = valid[valid.length - 1];
+    const peak = valid.reduce((a, b) => (b.v > a.v ? b : a), valid[0]);
 
-    const ref1y = yPct(1.0);
-    const ref1Line = maxSp >= 1.0
-      ? `<line x1="0" y1="${ref1y.toFixed(2)}" x2="100" y2="${ref1y.toFixed(2)}" stroke="currentColor" stroke-opacity="0.32" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke" />`
+    const refY = yPct(refValue);
+    const showRef = Boolean(refLabel) && maxV >= refValue;
+    const refLine = showRef
+      ? `<line x1="0" y1="${refY.toFixed(2)}" x2="100" y2="${refY.toFixed(2)}" stroke="currentColor" stroke-opacity="0.32" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke" />`
       : "";
-    const ref1Tag = maxSp >= 1.0
-      ? `<span class="qp-ref-tag" style="top:${ref1y.toFixed(2)}%;">1.0x realtime</span>`
+    const refTag = showRef
+      ? `<span class="qp-ref-tag" style="top:${refY.toFixed(2)}%;">${escapeHtml(refLabel)}</span>`
       : "";
 
     const midT = (minT + maxT) * 0.5;
-    const fmtTick = (v) => `${v.toFixed(v >= 2 ? 1 : 2)}x`;
-
     return `
       <div class="qp-chart-layout">
         <div class="qp-y-axis">
-          <span>${fmtTick(maxSp)}</span>
-          <span>${fmtTick(maxSp * 0.5)}</span>
-          <span>0.00x</span>
+          <span>${escapeHtml(fmtTick(maxV))}</span>
+          <span>${escapeHtml(fmtTick(maxV * 0.5))}</span>
+          <span>${escapeHtml(fmtTick(0))}</span>
         </div>
         <div class="qp-plot-col">
           <div class="qp-plot-area">
             <svg class="qp-speed-svg" viewBox="0 0 100 100" preserveAspectRatio="none" style="color:var(--text);">
               <defs>
-                <linearGradient id="qpSpeedGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="var(--accent, #3b82f6)" stop-opacity="0.30" />
-                  <stop offset="100%" stop-color="var(--accent, #3b82f6)" stop-opacity="0.02" />
+                <linearGradient id="${escapeHtml(gradId)}" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="${stopColor}" stop-opacity="0.30" />
+                  <stop offset="100%" stop-color="${stopColor}" stop-opacity="0.02" />
                 </linearGradient>
               </defs>
               <line x1="0" y1="0.5" x2="100" y2="0.5" stroke="currentColor" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
               <line x1="0" y1="50" x2="100" y2="50" stroke="currentColor" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
               <line x1="0" y1="99.5" x2="100" y2="99.5" stroke="currentColor" stroke-opacity="0.14" stroke-width="1" vector-effect="non-scaling-stroke" />
-              ${ref1Line}
-              <path d="${areaPath}" fill="url(#qpSpeedGrad)" />
-              <path d="${linePath}" fill="none" stroke="var(--accent-text, var(--accent, #3b82f6))" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
+              ${refLine}
+              <path d="${areaPath}" fill="url(#${escapeHtml(gradId)})" />
+              <path d="${linePath}" fill="none" stroke="${strokeColor}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
             </svg>
-            ${ref1Tag}
-            <span class="qp-dot-marker qp-dot-peak" style="left:${xPct(peak.elapsed_secs).toFixed(2)}%;top:${yPct(peak.speed).toFixed(2)}%;" title="Peak ${peak.speed.toFixed(2)}x"></span>
-            <span class="qp-dot-marker qp-dot-cur" style="left:${xPct(last.elapsed_secs).toFixed(2)}%;top:${yPct(last.speed).toFixed(2)}%;" title="Current ${last.speed.toFixed(2)}x"></span>
+            ${refTag}
+            <span class="qp-dot-marker qp-dot-peak" style="left:${xPct(peak.t).toFixed(2)}%;top:${yPct(peak.v).toFixed(2)}%;" title="Peak ${escapeHtml(fmtDotTitle(peak.v))}"></span>
+            <span class="qp-dot-marker qp-dot-cur" style="left:${xPct(last.t).toFixed(2)}%;top:${yPct(last.v).toFixed(2)}%;background:${strokeColor};" title="Current ${escapeHtml(fmtDotTitle(last.v))}"></span>
           </div>
           <div class="qp-x-axis">
             <span>${fmtDuration(minT)}</span>
@@ -2457,6 +2471,166 @@
             <span>${fmtDuration(maxT)}</span>
           </div>
         </div>
+      </div>
+    `;
+  }
+
+  function renderCompareSpeedRatioSvg(pts) {
+    const valid = (pts || []).filter(
+      (p) => p && typeof p.speed === "number" && p.speed > 0 && typeof p.est_final_ratio === "number" && p.est_final_ratio > 0
+    );
+    if (valid.length < 2) {
+      return `<div class="muted" style="font-size:11px;padding:18px 0;text-align:center;">Collecting simultaneous Speed &amp; Ratio samples… comparison renders once 2+ ratio ticks arrive.</div>`;
+    }
+    const minT = valid[0].elapsed_secs || 0;
+    const maxT = Math.max(minT + 1, valid[valid.length - 1].elapsed_secs || 0);
+    const maxSp = Math.max(0.25, Math.max(...valid.map((p) => p.speed)) * 1.15);
+    const maxR = Math.max(1.5, Math.max(...valid.map((p) => p.est_final_ratio)) * 1.15);
+
+    const xPct = (t) => ((t - minT) / (maxT - minT)) * 100;
+    const ySp = (v) => 100 - (Math.min(v, maxSp) / maxSp) * 100;
+    const yRa = (v) => 100 - (Math.min(v, maxR) / maxR) * 100;
+
+    const spPath = `M ${valid.map((p) => `${xPct(p.elapsed_secs).toFixed(2)},${ySp(p.speed).toFixed(2)}`).join(" L ")}`;
+    const raPath = `M ${valid.map((p) => `${xPct(p.elapsed_secs).toFixed(2)},${yRa(p.est_final_ratio).toFixed(2)}`).join(" L ")}`;
+    const last = valid[valid.length - 1];
+    const midT = (minT + maxT) * 0.5;
+    const fmtSp = (v) => `${v.toFixed(v >= 2 ? 1 : 2)}x`;
+    const fmtRa = (v) => `${v.toFixed(2)}:1`;
+
+    return `
+      <div class="qp-chart-layout">
+        <div class="qp-y-axis qp-y-speed">
+          <span>${fmtSp(maxSp)}</span>
+          <span>${fmtSp(maxSp * 0.5)}</span>
+          <span>0x</span>
+        </div>
+        <div class="qp-plot-col">
+          <div class="qp-plot-area">
+            <svg class="qp-speed-svg" viewBox="0 0 100 100" preserveAspectRatio="none" style="color:var(--text);">
+              <line x1="0" y1="0.5" x2="100" y2="0.5" stroke="currentColor" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
+              <line x1="0" y1="50" x2="100" y2="50" stroke="currentColor" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
+              <line x1="0" y1="99.5" x2="100" y2="99.5" stroke="currentColor" stroke-opacity="0.14" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
+              <path d="${spPath}" fill="none" stroke="var(--accent-text, #3b82f6)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
+              <path d="${raPath}" fill="none" stroke="var(--ok, #10b981)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5 2.5" vector-effect="non-scaling-stroke" />
+            </svg>
+            <span class="qp-dot-marker qp-dot-cur" style="left:${xPct(last.elapsed_secs).toFixed(2)}%;top:${ySp(last.speed).toFixed(2)}%;background:var(--accent-text, #3b82f6);" title="Speed ${last.speed.toFixed(2)}x"></span>
+            <span class="qp-dot-marker qp-dot-cur" style="left:${xPct(last.elapsed_secs).toFixed(2)}%;top:${yRa(last.est_final_ratio).toFixed(2)}%;background:var(--ok, #10b981);" title="Ratio ${last.est_final_ratio.toFixed(2)}:1"></span>
+          </div>
+          <div class="qp-x-axis">
+            <span>${fmtDuration(minT)}</span>
+            <span>${fmtDuration(midT)}</span>
+            <span>${fmtDuration(maxT)}</span>
+          </div>
+        </div>
+        <div class="qp-y-axis qp-y-ratio">
+          <span>${fmtRa(maxR)}</span>
+          <span>${fmtRa(maxR * 0.5)}</span>
+          <span>0:1</span>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderCompressionDistributionHtml(activeJob, liveRatio) {
+    const queueJobs = activeQueueJobs() || [];
+    const buildEntries = (list) => {
+      const items = [];
+      for (const j of list) {
+        if (activeJob && j.id === activeJob.id && liveRatio && liveRatio > 0) {
+          items.push({
+            id: j.id,
+            name: jobFileName(j),
+            codec: (j.recipe?.codec || "").toUpperCase(),
+            bytesIn: j.input_bytes || 0,
+            bytesOut: j.input_bytes ? Math.round(j.input_bytes / liveRatio) : 0,
+            ratio: liveRatio,
+            isLive: true,
+          });
+        } else if (j.status === "completed" && j.input_bytes > 0 && j.output_bytes > 0) {
+          items.push({
+            id: j.id,
+            name: jobFileName(j),
+            codec: (j.recipe?.codec || "").toUpperCase(),
+            bytesIn: j.input_bytes,
+            bytesOut: j.output_bytes,
+            ratio: j.input_bytes / j.output_bytes,
+            isLive: false,
+          });
+        }
+      }
+      return items;
+    };
+
+    let scopeLabel = "This Tab";
+    let entries = buildEntries(queueJobs);
+    if (entries.length < 2) {
+      const wsEntries = buildEntries(snapshot?.jobs || []);
+      if (wsEntries.length > entries.length) {
+        entries = wsEntries;
+        scopeLabel = "Workspace Files";
+      }
+    }
+    entries.sort((a, b) => b.ratio - a.ratio);
+
+    if (entries.length === 0) {
+      return `
+        <div class="qp-dist-section">
+          <div class="qp-dist-head">
+            <strong>Compression Ratio Distribution Across Files</strong>
+            <span class="muted">No completed or estimated file ratios yet</span>
+          </div>
+        </div>`;
+    }
+
+    const avgRatio = entries.reduce((s, e) => s + e.ratio, 0) / entries.length;
+    const minRatio = entries[entries.length - 1].ratio;
+    const maxRatio = entries[0].ratio;
+    const scaleMax = Math.max(1.5, maxRatio * 1.08);
+
+    const buckets = [
+      { label: "< 1.5:1", count: entries.filter((e) => e.ratio < 1.5).length },
+      { label: "1.5 – 2.5:1", count: entries.filter((e) => e.ratio >= 1.5 && e.ratio < 2.5).length },
+      { label: "2.5 – 4.0:1", count: entries.filter((e) => e.ratio >= 2.5 && e.ratio < 4.0).length },
+      { label: "4.0:1+", count: entries.filter((e) => e.ratio >= 4.0).length },
+    ];
+
+    const bucketsHtml = buckets.map((b) => {
+      const pct = (b.count / entries.length) * 100;
+      return `
+        <div class="qp-dist-bucket">
+          <div class="qp-dist-bucket-top">
+            <span>${b.label}</span>
+            <strong class="tabular-nums">${b.count}</strong>
+          </div>
+          <div class="qp-dist-bucket-bar"><div class="qp-dist-bucket-fill" style="width:${pct.toFixed(1)}%"></div></div>
+        </div>`;
+    }).join("");
+
+    const barsHtml = entries.map((e) => {
+      const savedPct = Math.round((1 - 1 / e.ratio) * 100);
+      const wPct = Math.min(100, (e.ratio / scaleMax) * 100);
+      return `
+        <div class="qp-dist-row ${e.isLive ? "is-live" : ""}" title="${escapeHtml(e.name)} · ${fmtBytes(e.bytesIn)} → ${fmtBytes(e.bytesOut)}">
+          <div class="qp-dist-name truncate">
+            ${e.isLive ? `<span class="qp-live-tag">LIVE</span>` : ""}
+            <span>${escapeHtml(e.name)}</span>
+          </div>
+          <div class="qp-dist-bar-track">
+            <div class="qp-dist-bar-fill ${e.isLive ? "is-live" : ""}" style="width:${wPct.toFixed(1)}%"></div>
+          </div>
+          <div class="qp-dist-val tabular-nums">${e.ratio.toFixed(2)}:1 <span class="muted">(${savedPct >= 0 ? `-${savedPct}%` : `+${Math.abs(savedPct)}%`})</span></div>
+        </div>`;
+    }).join("");
+
+    return `
+      <div class="qp-dist-section">
+        <div class="qp-dist-head">
+          <strong>Compression Ratio Distribution · ${escapeHtml(scopeLabel)}</strong>
+          <span class="muted tabular-nums">${entries.length} file${entries.length === 1 ? "" : "s"} · Avg ${avgRatio.toFixed(2)}:1 · Range ${minRatio.toFixed(2)}–${maxRatio.toFixed(2)}:1</span>
+        </div>
+        <div class="qp-dist-buckets">${bucketsHtml}</div>
+        <div class="qp-dist-list">${barsHtml}</div>
       </div>
     `;
   }
@@ -2478,6 +2652,11 @@
     const avgSpeed = pts.length ? pts.reduce((s, x) => s + x.speed, 0) / pts.length : curSpeed;
     const peakSpeed = pts.length ? Math.max(...pts.map((x) => x.speed)) : curSpeed;
 
+    const ratioPts = pts.filter((x) => typeof x.est_final_ratio === "number" && x.est_final_ratio > 0);
+    const curRatio = ratio ?? (ratioPts.length ? ratioPts[ratioPts.length - 1].est_final_ratio : null);
+    const avgRatio = ratioPts.length ? ratioPts.reduce((s, x) => s + x.est_final_ratio, 0) / ratioPts.length : curRatio;
+    const peakRatio = ratioPts.length ? Math.max(...ratioPts.map((x) => x.est_final_ratio)) : curRatio;
+
     const ratioMain = ratio ? `${ratio.toFixed(2)}:1` : "Estimating…";
     const ratioSub = ratio
       ? `${savedPct}% smaller · Est. ${fmtBytes(estFinalBytes)}${dur > 0 && outTime / dur < 0.10 ? " (early)" : ""}`
@@ -2495,6 +2674,44 @@
     const progMain = `${pct.toFixed(1)}%`;
     const progSub = `${fmtDuration(outTime)} / ${dur > 0 ? fmtDuration(dur) : "—"} · ETA ${p?.eta_secs ? fmtDuration(p.eta_secs) : "—"}`;
 
+    let chartTitle = "Encode Speed Over Time (realtime multiplier)";
+    let chartLegend = `● Current ${curSpeed ? curSpeed.toFixed(2) + "x" : "—"} · Peak ${peakSpeed ? peakSpeed.toFixed(2) + "x" : "—"} · Avg ${avgSpeed ? avgSpeed.toFixed(2) + "x" : "—"}`;
+    let chartBody = "";
+
+    if (telemetryChartMetric === "ratio") {
+      chartTitle = "Compression Ratio Over Time & File Distribution";
+      chartLegend = `● Current ${curRatio ? curRatio.toFixed(2) + ":1" : "—"} · Peak ${peakRatio ? peakRatio.toFixed(2) + ":1" : "—"} · Avg ${avgRatio ? avgRatio.toFixed(2) + ":1" : "—"}`;
+      chartBody = renderSingleMetricChartSvg(pts, {
+        getVal: (x) => x.est_final_ratio,
+        emptyText: "Collecting compression ratio samples… curve renders once 2+ progress ticks arrive.",
+        fmtTick: (v) => `${v.toFixed(2)}:1`,
+        fmtDotTitle: (v) => `${v.toFixed(2)}:1`,
+        refValue: 1.0,
+        refLabel: "1.00:1 same size",
+        gradId: "qpRatioGrad",
+        strokeColor: "var(--ok, #10b981)",
+        stopColor: "var(--ok, #10b981)",
+        minScaleFloor: 1.5,
+      }) + renderCompressionDistributionHtml(job, curRatio);
+    } else if (telemetryChartMetric === "compare") {
+      chartTitle = "Encode Speed vs. Compression Ratio Over Time";
+      chartLegend = `<span style="color:var(--accent-text, #3b82f6);">━ Speed ${curSpeed ? curSpeed.toFixed(2) + "x" : "—"}</span> · <span style="color:var(--ok, #10b981);">┅ Ratio ${curRatio ? curRatio.toFixed(2) + ":1" : "—"}</span>`;
+      chartBody = renderCompareSpeedRatioSvg(pts);
+    } else {
+      chartBody = renderSingleMetricChartSvg(pts, {
+        getVal: (x) => x.speed,
+        emptyText: "Collecting live speed samples… diagram renders once 2+ progress ticks arrive.",
+        fmtTick: (v) => `${v.toFixed(v >= 2 ? 1 : 2)}x`,
+        fmtDotTitle: (v) => `${v.toFixed(2)}x`,
+        refValue: 1.0,
+        refLabel: "1.0x realtime",
+        gradId: "qpSpeedGrad",
+        strokeColor: "var(--accent-text, var(--accent, #3b82f6))",
+        stopColor: "var(--accent, #3b82f6)",
+        minScaleFloor: 0.25,
+      });
+    }
+
     return `
       <div class="qp-telemetry-card">
         <div class="qp-tel-head">
@@ -2509,21 +2726,21 @@
         </div>
 
         <div class="qp-tel-grid">
-          <div class="qp-tel-kpi">
-            <div class="qp-tel-label">Est. Compression Ratio</div>
+          <button type="button" class="qp-tel-kpi qp-tel-kpi-btn ${telemetryChartMetric === "ratio" ? "is-active" : ""}" data-tel-metric="ratio" title="Click to view Compression Ratio Over Time & File Distribution">
+            <div class="qp-tel-label">Est. Compression Ratio <span class="qp-tel-click-hint">Chart</span></div>
             <div class="qp-tel-value">${ratioMain}</div>
             <div class="qp-tel-sub" title="${escapeHtml(ratioSub)}">${escapeHtml(ratioSub)}</div>
-          </div>
+          </button>
           <div class="qp-tel-kpi">
             <div class="qp-tel-label">Current Output Size</div>
             <div class="qp-tel-value">${outMain}</div>
             <div class="qp-tel-sub" title="${escapeHtml(outSub)}">${escapeHtml(outSub)}</div>
           </div>
-          <div class="qp-tel-kpi">
-            <div class="qp-tel-label">Encode Speed</div>
+          <button type="button" class="qp-tel-kpi qp-tel-kpi-btn ${telemetryChartMetric === "speed" ? "is-active" : ""}" data-tel-metric="speed" title="Click to view Encode Speed Over Time">
+            <div class="qp-tel-label">Encode Speed <span class="qp-tel-click-hint">Chart</span></div>
             <div class="qp-tel-value">${speedMain}</div>
             <div class="qp-tel-sub">${speedSubParts.length ? speedSubParts.join(" · ") : "Measuring speed…"}</div>
-          </div>
+          </button>
           <div class="qp-tel-kpi">
             <div class="qp-tel-label">Progress &amp; ETA</div>
             <div class="qp-tel-value">${progMain}</div>
@@ -2533,10 +2750,17 @@
 
         <div class="qp-chart-box">
           <div class="qp-chart-head">
-            <strong>Encode Speed Over Time (realtime multiplier)</strong>
-            <span class="muted tabular-nums">● Current ${curSpeed ? curSpeed.toFixed(2) + "x" : "—"} · Peak ${peakSpeed ? peakSpeed.toFixed(2) + "x" : "—"} · Avg ${avgSpeed ? avgSpeed.toFixed(2) + "x" : "—"}</span>
+            <div class="inline-row" style="gap:8px;flex-wrap:wrap;">
+              <strong>${escapeHtml(chartTitle)}</strong>
+              <div class="qp-metric-seg" role="group" aria-label="Telemetry chart metric">
+                <button type="button" class="qp-metric-btn ${telemetryChartMetric === "speed" ? "active" : ""}" data-tel-metric="speed">Speed</button>
+                <button type="button" class="qp-metric-btn ${telemetryChartMetric === "ratio" ? "active" : ""}" data-tel-metric="ratio">Ratio + Files</button>
+                <button type="button" class="qp-metric-btn ${telemetryChartMetric === "compare" ? "active" : ""}" data-tel-metric="compare">Speed vs Ratio</button>
+              </div>
+            </div>
+            <span class="muted tabular-nums">${chartLegend}</span>
           </div>
-          ${renderSpeedChartSvg(pts)}
+          ${chartBody}
         </div>
       </div>
     `;
@@ -2717,6 +2941,28 @@
         </div>
       ` : `<div id="qp-table-wrap" class="transcode-table-wrap"></div>`}
     `;
+
+    if (!el.dataset.telBound) {
+      el.dataset.telBound = "1";
+      el.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-tel-metric]");
+        if (!btn) return;
+        const nextMetric = btn.getAttribute("data-tel-metric");
+        if (!nextMetric || !["speed", "ratio", "compare"].includes(nextMetric)) return;
+        telemetryChartMetric = nextMetric;
+        const aq = activeQueue();
+        const aProg = snapshot?.active_progress && aq && snapshot.active_progress.queue_id === aq.id
+          ? snapshot.active_progress
+          : null;
+        const aJob = aProg
+          ? (queueJobsById.get(aProg.job_id) || (snapshot?.jobs || []).find((x) => x.id === aProg.job_id))
+          : (snapshot?.jobs || []).find((x) => aq && x.queue_id === aq.id && ["encoding", "verifying", "publishing"].includes(x.status));
+        if (aJob) {
+          const wrap = $("qp-telemetry-wrap");
+          if (wrap) wrap.innerHTML = buildQueueTelemetryHtml(aJob, aProg, liveSpeedHistory);
+        }
+      });
+    }
 
     el.querySelector("#qp-back-videos")?.addEventListener("click", () => {
       setActiveEncodeSubView(q, "list");
@@ -4957,6 +5203,16 @@
     let showDelta = false;
     let deltaGain = 4;
     let soloPane = null;
+    const jobRec = (snapshot?.jobs || []).find((x) => x.id === jobId) || null;
+    let totalDur = Number(
+      (snapshot?.active_progress?.job_id === jobId ? snapshot.active_progress.duration_secs : 0) ||
+      jobRec?.probe?.format?.duration_secs ||
+      0
+    );
+    let encodedSecs = Number(snapshot?.active_progress?.job_id === jobId ? snapshot.active_progress.out_time_secs : 0) || 0;
+    let pinnedSeekSecs = null;
+    let isScrubbing = false;
+    let seekInFlight = false;
 
     const wrap = document.createElement("div");
     wrap.innerHTML = `
@@ -4967,6 +5223,17 @@
           <label class="inline-row" style="gap:4px;font-size:12px;cursor:pointer;"><input type="checkbox" id="lp-delta-chk" /> Show Delta</label>
           <select id="lp-delta-gain" class="hidden" style="width:74px;font-size:11px;"><option value="4" selected>4× diff</option><option value="8">8× diff</option><option value="16">16× diff</option></select>
         </div>
+      </div>
+      <div id="lp-player-bar" class="lp-player-bar">
+        <button type="button" id="lp-follow-btn" class="btn btn-sm lp-follow-btn is-live" title="Follow latest encoded frame">● Live</button>
+        <span id="lp-time-cur" class="mono tabular-nums lp-time-lbl">${fmtDuration(encodedSecs)}</span>
+        <div class="lp-track-wrap" title="Drag to inspect any already-encoded timestamp">
+          <div class="lp-track-bg"></div>
+          <div id="lp-track-encoded" class="lp-track-encoded" style="width:0%"></div>
+          <div id="lp-track-playhead" class="lp-track-playhead" style="width:0%"></div>
+          <input id="lp-scrub" class="lp-scrub-input" type="range" min="0" max="${totalDur > 0 ? totalDur.toFixed(2) : Math.max(10, encodedSecs).toFixed(2)}" step="0.2" value="${encodedSecs.toFixed(2)}" />
+        </div>
+        <span id="lp-time-end" class="mono tabular-nums lp-time-lbl muted">${fmtDuration(encodedSecs)} encoded${totalDur > 0 ? ` / ${fmtDuration(totalDur)} (0%)` : ""}</span>
       </div>
       <div id="lp-grid" class="compare-grid">
         <div id="lp-pane-orig" class="compare-pane">
@@ -5021,6 +5288,121 @@
     const sbsChk = $("lp-sbs-chk");
     const deltaChk = $("lp-delta-chk");
     const gainSel = $("lp-delta-gain");
+    const scrubEl = $("lp-scrub");
+    const followBtn = $("lp-follow-btn");
+    const trackEnc = $("lp-track-encoded");
+    const trackPlay = $("lp-track-playhead");
+    const timeCurEl = $("lp-time-cur");
+    const timeEndEl = $("lp-time-end");
+
+    const syncPlayerBar = (li, ap, matchedTs) => {
+      if (ap?.duration_secs > 0) totalDur = Number(ap.duration_secs);
+      encodedSecs = Math.max(
+        encodedSecs,
+        Number(li?.encoded_secs || 0),
+        Number(ap?.out_time_secs || 0),
+        Number(li?.media_time_secs || 0)
+      );
+      const sliderMax = totalDur > 0 ? totalDur : Math.max(10, encodedSecs, 1);
+      if (scrubEl) {
+        scrubEl.max = sliderMax.toFixed(2);
+        scrubEl.disabled = Boolean(li?.limitation);
+      }
+      const curPos = isScrubbing
+        ? Number(scrubEl?.value || 0)
+        : (pinnedSeekSecs != null
+            ? (matchedTs != null ? matchedTs : pinnedSeekSecs)
+            : (matchedTs != null ? matchedTs : encodedSecs));
+      const encPct = sliderMax > 0 ? Math.min(100, (encodedSecs / sliderMax) * 100) : 0;
+      const playPct = sliderMax > 0 ? Math.min(100, (curPos / sliderMax) * 100) : 0;
+      if (trackEnc) trackEnc.style.width = `${encPct.toFixed(2)}%`;
+      if (trackPlay) trackPlay.style.width = `${playPct.toFixed(2)}%`;
+      if (scrubEl && !isScrubbing) {
+        scrubEl.value = Math.min(sliderMax, Math.max(0, curPos)).toFixed(2);
+      }
+      if (timeCurEl) timeCurEl.textContent = fmtDuration(curPos);
+      if (timeEndEl) {
+        const pctTotal = totalDur > 0 ? ` / ${fmtDuration(totalDur)} (${Math.min(100, (encodedSecs / totalDur) * 100).toFixed(0)}%)` : "";
+        timeEndEl.textContent = `${fmtDuration(encodedSecs)} encoded${pctTotal}`;
+      }
+      if (followBtn) {
+        const isLive = pinnedSeekSecs == null && !isScrubbing;
+        followBtn.classList.toggle("is-live", isLive);
+        followBtn.textContent = isLive ? "● Live" : "↺ Resume Live";
+      }
+    };
+
+    const applyBundle = (bundle) => {
+      const li = bundle?.info;
+      const ap = snapshot?.active_progress && snapshot.active_progress.job_id === jobId ? snapshot.active_progress : null;
+      const ts = bundle?.matched_ts_secs != null ? bundle.matched_ts_secs : li?.media_time_secs;
+      syncPlayerBar(li, ap, ts);
+      if ($("lp-meta")) {
+        const lpParts = [];
+        if (li && !li.waiting_first_frame) {
+          lpParts.push(`${pinnedSeekSecs != null ? "Scrubbed" : "Live"} ${fmtDuration(ts ?? 0)} · Frame #${li.frame_seq} · ${li.mode}`);
+        } else if (li?.limitation) {
+          lpParts.push(li.limitation);
+        } else {
+          lpParts.push("Waiting for first decodable frame…");
+        }
+        if (ap) {
+          if (ap.bytes_written > 0) lpParts.push(`Output ${fmtBytes(ap.bytes_written)}`);
+          if (ap.est_final_ratio) lpParts.push(`Est. Ratio ${ap.est_final_ratio.toFixed(2)}:1`);
+          if (ap.speed) lpParts.push(`${ap.speed.toFixed(2)}x${ap.fps ? ` (${ap.fps.toFixed(1)} fps)` : ""}`);
+        }
+        if (showDelta && bundle?.mae_pct != null) {
+          lpParts.push(`MAE ${bundle.mae_pct.toFixed(2)}% · PSNR ${bundle.psnr_db?.toFixed(1) ?? "—"} dB`);
+        }
+        $("lp-meta").textContent = lpParts.join(" · ");
+      }
+      if (bundle?.enc_data_url && $("lp-img-enc")) $("lp-img-enc").src = bundle.enc_data_url;
+      if (bundle?.orig_data_url && $("lp-img-orig")) $("lp-img-orig").src = bundle.orig_data_url;
+      if (showDelta && bundle?.delta_data_url && $("lp-img-delta")) $("lp-img-delta").src = bundle.delta_data_url;
+    };
+
+    scrubEl?.addEventListener("input", () => {
+      isScrubbing = true;
+      const raw = Number(scrubEl.value);
+      const clamped = Math.min(raw, Math.max(0, encodedSecs));
+      if (raw > clamped) scrubEl.value = clamped.toFixed(2);
+      pinnedSeekSecs = clamped;
+      syncPlayerBar(null, null, clamped);
+    });
+    scrubEl?.addEventListener("change", async () => {
+      const target = Math.min(Number(scrubEl.value), Math.max(0, encodedSecs));
+      pinnedSeekSecs = target;
+      isScrubbing = false;
+      syncPlayerBar(null, null, target);
+      if (seekInFlight) return;
+      seekInFlight = true;
+      try {
+        const b = await invoke("seek_live_preview", {
+          jobId,
+          timestampSecs: target,
+          includeDelta: showDelta,
+          deltaGain,
+        });
+        applyBundle(b);
+      } catch (_) {} finally {
+        seekInFlight = false;
+      }
+    });
+    followBtn?.addEventListener("click", async () => {
+      pinnedSeekSecs = null;
+      isScrubbing = false;
+      syncPlayerBar(null, null, encodedSecs);
+      try {
+        const b = await invoke("seek_live_preview", {
+          jobId,
+          timestampSecs: null,
+          includeDelta: showDelta,
+          deltaGain,
+        });
+        applyBundle(b);
+      } catch (_) {}
+    });
+
     sbsChk?.addEventListener("change", () => { showSideBySide = sbsChk.checked; syncGridLayout(); });
     deltaChk?.addEventListener("change", () => {
       showDelta = deltaChk.checked;
@@ -5036,31 +5418,7 @@
           includeDelta: showDelta,
           deltaGain,
         });
-        const li = bundle?.info;
-        const ap = snapshot?.active_progress && snapshot.active_progress.job_id === jobId ? snapshot.active_progress : null;
-        if ($("lp-meta")) {
-          const lpParts = [];
-          if (li && !li.waiting_first_frame) {
-            const ts = bundle.matched_ts_secs != null ? bundle.matched_ts_secs : li.media_time_secs;
-            lpParts.push(`${fmtDuration(ts)} · Frame #${li.frame_seq} · ${li.mode}`);
-          } else if (li?.limitation) {
-            lpParts.push(li.limitation);
-          } else {
-            lpParts.push("Waiting for first decodable frame…");
-          }
-          if (ap) {
-            if (ap.bytes_written > 0) lpParts.push(`Output ${fmtBytes(ap.bytes_written)}`);
-            if (ap.est_final_ratio) lpParts.push(`Est. Ratio ${ap.est_final_ratio.toFixed(2)}:1`);
-            if (ap.speed) lpParts.push(`${ap.speed.toFixed(2)}x${ap.fps ? ` (${ap.fps.toFixed(1)} fps)` : ""}`);
-          }
-          if (showDelta && bundle?.mae_pct != null) {
-            lpParts.push(`MAE ${bundle.mae_pct.toFixed(2)}% · PSNR ${bundle.psnr_db?.toFixed(1) ?? "—"} dB`);
-          }
-          $("lp-meta").textContent = lpParts.join(" · ");
-        }
-        if (bundle?.enc_data_url && $("lp-img-enc")) $("lp-img-enc").src = bundle.enc_data_url;
-        if (bundle?.orig_data_url && $("lp-img-orig")) $("lp-img-orig").src = bundle.orig_data_url;
-        if (showDelta && bundle?.delta_data_url && $("lp-img-delta")) $("lp-img-delta").src = bundle.delta_data_url;
+        applyBundle(bundle);
       } catch (_) {}
     };
 

@@ -202,6 +202,7 @@ pub fn run() {
             commands::stop_live_preview,
             commands::get_live_preview_frame,
             commands::get_live_comparison_bundle,
+            commands::seek_live_preview,
             commands::get_sample_comparison_pair,
             commands::check_close_status,
             commands::stop_and_quit,

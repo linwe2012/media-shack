@@ -17,6 +17,7 @@ pub struct PreviewManager {
     pub latest_live_orig_jpeg: Arc<Mutex<Option<(u64, f64, Vec<u8>)>>>,
     pub live_stop_flag: Arc<Mutex<Option<Arc<AtomicBool>>>>,
     pub live_media_time: Arc<Mutex<f64>>,
+    pub live_seek_target: Arc<Mutex<Option<f64>>>,
     pub active_packet_buffer: Arc<Mutex<Option<(String, PreviewPacketBuffer)>>>,
     pub active_partial_path: Arc<Mutex<Option<(String, PathBuf, ContainerFormat)>>>,
     pub active_source_path: Arc<Mutex<Option<(String, PathBuf)>>>,
@@ -34,6 +35,7 @@ impl PreviewManager {
             latest_live_orig_jpeg: Arc::new(Mutex::new(None)),
             live_stop_flag: Arc::new(Mutex::new(None)),
             live_media_time: Arc::new(Mutex::new(0.0)),
+            live_seek_target: Arc::new(Mutex::new(None)),
             active_packet_buffer: Arc::new(Mutex::new(None)),
             active_partial_path: Arc::new(Mutex::new(None)),
             active_source_path: Arc::new(Mutex::new(None)),
@@ -59,6 +61,9 @@ impl PreviewManager {
     ) {
         if let Ok(mut mt) = self.live_media_time.lock() {
             *mt = 0.0;
+        }
+        if let Ok(mut st) = self.live_seek_target.lock() {
+            *st = None;
         }
         if let Ok(mut lj) = self.latest_live_jpeg.lock() {
             *lj = None;
@@ -447,12 +452,17 @@ impl PreviewManager {
             _ => "direct_read".to_string(),
         };
 
+        if let Ok(mut st) = self.live_seek_target.lock() {
+            *st = None;
+        }
         if let Ok(mut li) = self.live_info.lock() {
             *li = Some(LivePreviewInfo {
                 job_id: job_id.clone(),
                 active: true,
                 mode: mode.clone(),
                 media_time_secs: current_media_time,
+                encoded_secs: current_media_time,
+                seek_target_secs: None,
                 waiting_first_frame: true,
                 frame_seq: 0,
                 worker_pid: None,
@@ -460,112 +470,23 @@ impl PreviewManager {
             });
         }
 
-        let live_info_arc = self.live_info.clone();
-        let latest_jpeg_arc = self.latest_live_jpeg.clone();
-        let latest_orig_arc = self.latest_live_orig_jpeg.clone();
-        let active_partial_arc = self.active_partial_path.clone();
-        let active_src_arc = self.active_source_path.clone();
-        let active_pkt_arc = self.active_packet_buffer.clone();
-        let live_mt_arc = self.live_media_time.clone();
-
+        let pm = self.clone();
         std::thread::spawn(move || {
-            let mut seq = 0u64;
-            let mut last_ts = current_media_time;
-
             while !stop.load(Ordering::Relaxed) {
                 let tick_start = Instant::now();
-                let current_enc_ts = live_mt_arc.lock().map(|g| *g).unwrap_or(last_ts).max(last_ts);
-                let orig_src_opt = active_src_arc
-                    .lock()
-                    .ok()
-                    .and_then(|g| g.clone())
-                    .filter(|(jid, _)| jid == &job_id)
-                    .map(|(_, p)| p);
-
-                // Branch 1: MP4 bounded packet-copy buffer
-                let pkt_buf = active_pkt_arc
-                    .lock()
-                    .ok()
-                    .and_then(|g| g.clone())
-                    .filter(|(jid, _)| jid == &job_id)
-                    .map(|(_, b)| b);
-
-                if let Some(buf) = pkt_buf {
-                    let stream_bytes = buf.snapshot_tail_stream_bytes();
-                    if stream_bytes.len() > 1024 {
-                        if let Ok((jpeg, decoded_ts, wpid)) = decode_latest_frame_from_stream_bytes(&ffmpeg_path, &stream_bytes) {
-                            seq += 1;
-                            let matched_ts = if decoded_ts > 0.0 { decoded_ts } else { current_enc_ts };
-                            last_ts = matched_ts;
-                            let orig_jpeg = orig_src_opt.as_ref().and_then(|sp| {
-                                decode_live_reference_frame(&ffmpeg_path, sp, matched_ts).ok()
-                            });
-                            if let Ok(mut lj) = latest_jpeg_arc.lock() {
-                                *lj = Some((seq, matched_ts, jpeg));
-                            }
-                            if let Ok(mut loj) = latest_orig_arc.lock() {
-                                *loj = orig_jpeg.map(|b| (seq, matched_ts, b));
-                            }
-                            if let Ok(mut li) = live_info_arc.lock() {
-                                if let Some(ref mut info) = *li {
-                                    info.waiting_first_frame = false;
-                                    info.frame_seq = seq;
-                                    info.media_time_secs = matched_ts.max(info.media_time_secs);
-                                    info.worker_pid = wpid;
-                                }
-                            }
-                        }
+                let current_enc_ts = pm.live_media_time.lock().map(|g| *g).unwrap_or(0.0);
+                let pinned_seek = pm.live_seek_target.lock().ok().and_then(|g| *g);
+                if let Ok(mut li) = pm.live_info.lock() {
+                    if let Some(ref mut info) = *li {
+                        info.encoded_secs = info.encoded_secs.max(current_enc_ts);
+                        info.seek_target_secs = pinned_seek;
                     }
-                } else if let Some((_, partial, container)) = active_partial_arc
-                    .lock()
-                    .ok()
-                    .and_then(|g| g.clone())
-                    .filter(|(jid, _, _)| jid == &job_id)
-                {
-                    if container == ContainerFormat::Mkv && partial.exists() {
-                        // Direct read-only incremental decode near current active encode media time
-                        let seek_ts = (current_enc_ts - 1.0).max(0.0);
-                        let res = decode_latest_frame_direct_mkv(&ffmpeg_path, &partial, seek_ts)
-                            .or_else(|_| {
-                                if seq == 0 && seek_ts > 0.5 {
-                                    decode_latest_frame_direct_mkv(&ffmpeg_path, &partial, 0.0)
-                                } else {
-                                    Err("Waiting for first decodable frame".to_string())
-                                }
-                            });
-                        if let Ok((jpeg, decoded_ts, wpid)) = res {
-                            seq += 1;
-                            let matched_ts = decoded_ts.max(0.0);
-                            last_ts = current_enc_ts.max(matched_ts);
-                            let orig_jpeg = orig_src_opt.as_ref().and_then(|sp| {
-                                decode_live_reference_frame(&ffmpeg_path, sp, matched_ts).ok()
-                            });
-                            if let Ok(mut lj) = latest_jpeg_arc.lock() {
-                                *lj = Some((seq, matched_ts, jpeg));
-                            }
-                            if let Ok(mut loj) = latest_orig_arc.lock() {
-                                *loj = orig_jpeg.map(|b| (seq, matched_ts, b));
-                            }
-                            if let Ok(mut li) = live_info_arc.lock() {
-                                if let Some(ref mut info) = *li {
-                                    info.waiting_first_frame = false;
-                                    info.frame_seq = seq;
-                                    info.media_time_secs = matched_ts.max(info.media_time_secs);
-                                    info.worker_pid = wpid;
-                                }
-                            }
-                        }
-                    } else if container == ContainerFormat::Mp4 {
-                        if let Ok(mut li) = live_info_arc.lock() {
-                            if let Some(ref mut info) = *li {
-                                info.limitation = Some(
-                                    "Standard MP4 live preview requires packet-copy branch (available on macOS/Unix); finalized MP4 becomes readable at completion.".to_string(),
-                                );
-                            }
-                        }
+                }
+                if pinned_seek.is_none() {
+                    match pm.capture_live_frame_once(&ffmpeg_path, &job_id, None) {
+                        Ok(true) => {}
+                        _ => break,
                     }
-                } else {
-                    break;
                 }
 
                 // Cap wall-clock refresh rate (~2 Hz)
@@ -577,11 +498,149 @@ impl PreviewManager {
         });
     }
 
+    fn capture_live_frame_once(
+        &self,
+        ffmpeg_path: &Path,
+        job_id: &str,
+        target_seek: Option<f64>,
+    ) -> Result<bool, String> {
+        let current_enc_ts = self.live_media_time.lock().map(|g| *g).unwrap_or(0.0);
+        let seq = self
+            .live_info
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|i| i.frame_seq))
+            .unwrap_or(0);
+        let orig_src_opt = self
+            .active_source_path
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .filter(|(jid, _)| jid == job_id)
+            .map(|(_, p)| p);
+        let pkt_buf = self
+            .active_packet_buffer
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .filter(|(jid, _)| jid == job_id)
+            .map(|(_, b)| b);
+
+        let decoded: Option<(Vec<u8>, f64, Option<u32>)> = if let Some(buf) = pkt_buf {
+            let stream_bytes = if target_seek.is_some() {
+                buf.snapshot_stream_bytes()
+            } else {
+                buf.snapshot_tail_stream_bytes()
+            };
+            if stream_bytes.len() > 1024 {
+                decode_frame_from_stream_bytes(ffmpeg_path, &stream_bytes, target_seek)
+                    .ok()
+                    .map(|(jpeg, decoded_ts, wpid)| {
+                        let ts = if decoded_ts > 0.0 {
+                            decoded_ts
+                        } else {
+                            target_seek.unwrap_or(current_enc_ts)
+                        };
+                        (jpeg, ts, wpid)
+                    })
+            } else {
+                None
+            }
+        } else if let Some((_, partial, container)) = self
+            .active_partial_path
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .filter(|(jid, _, _)| jid == job_id)
+        {
+            if container == ContainerFormat::Mkv && partial.exists() {
+                let seek_ts = target_seek
+                    .map(|t| t.clamp(0.0, current_enc_ts.max(0.0)))
+                    .unwrap_or_else(|| (current_enc_ts - 1.0).max(0.0));
+                decode_latest_frame_direct_mkv(ffmpeg_path, &partial, seek_ts)
+                    .or_else(|_| {
+                        if target_seek.is_none() && seq == 0 && seek_ts > 0.5 {
+                            decode_latest_frame_direct_mkv(ffmpeg_path, &partial, 0.0)
+                        } else {
+                            Err("Waiting for first decodable frame".to_string())
+                        }
+                    })
+                    .ok()
+                    .map(|(jpeg, decoded_ts, wpid)| (jpeg, decoded_ts.max(0.0), wpid))
+            } else {
+                if container == ContainerFormat::Mp4 {
+                    if let Ok(mut li) = self.live_info.lock() {
+                        if let Some(ref mut info) = *li {
+                            info.limitation = Some(
+                                "Standard MP4 live preview requires packet-copy branch (available on macOS/Unix); finalized MP4 becomes readable at completion.".to_string(),
+                            );
+                        }
+                    }
+                }
+                None
+            }
+        } else {
+            return Ok(false);
+        };
+
+        if let Some((jpeg, matched_ts, wpid)) = decoded {
+            let next_seq = seq + 1;
+            let orig_jpeg = orig_src_opt
+                .as_ref()
+                .and_then(|sp| decode_live_reference_frame(ffmpeg_path, sp, matched_ts).ok());
+            if let Ok(mut lj) = self.latest_live_jpeg.lock() {
+                *lj = Some((next_seq, matched_ts, jpeg));
+            }
+            if let Ok(mut loj) = self.latest_live_orig_jpeg.lock() {
+                *loj = orig_jpeg.map(|b| (next_seq, matched_ts, b));
+            }
+            if let Ok(mut li) = self.live_info.lock() {
+                if let Some(ref mut info) = *li {
+                    info.waiting_first_frame = false;
+                    info.frame_seq = next_seq;
+                    info.media_time_secs = if target_seek.is_some() {
+                        matched_ts
+                    } else {
+                        matched_ts.max(info.media_time_secs)
+                    };
+                    info.encoded_secs = info.encoded_secs.max(current_enc_ts).max(matched_ts);
+                    info.seek_target_secs = target_seek;
+                    info.worker_pid = wpid;
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    pub fn seek_live_preview(
+        &self,
+        ffmpeg_path: PathBuf,
+        job_id: String,
+        target_secs: Option<f64>,
+        include_delta: bool,
+        delta_gain: f64,
+    ) -> Result<LiveComparisonBundle, String> {
+        let clamped = target_secs.map(|t| t.max(0.0));
+        if let Ok(mut st) = self.live_seek_target.lock() {
+            *st = clamped;
+        }
+        if let Ok(mut li) = self.live_info.lock() {
+            if let Some(ref mut info) = *li {
+                info.seek_target_secs = clamped;
+            }
+        }
+        let _ = self.capture_live_frame_once(&ffmpeg_path, &job_id, clamped);
+        Ok(self.get_live_comparison_bundle(include_delta, delta_gain))
+    }
+
     pub fn stop_live_preview(&self) {
         if let Ok(mut sf) = self.live_stop_flag.lock() {
             if let Some(flag) = sf.take() {
                 flag.store(true, Ordering::Relaxed);
             }
+        }
+        if let Ok(mut st) = self.live_seek_target.lock() {
+            *st = None;
         }
         if let Ok(mut lj) = self.latest_live_jpeg.lock() {
             *lj = None;
@@ -632,9 +691,13 @@ impl PreviewManager {
                 *mt = media_time;
             }
         }
+        let is_pinned = self.live_seek_target.lock().ok().and_then(|g| *g).is_some();
         if let Ok(mut li) = self.live_info.lock() {
             if let Some(ref mut info) = *li {
-                if media_time > info.media_time_secs {
+                if media_time > info.encoded_secs {
+                    info.encoded_secs = media_time;
+                }
+                if !is_pinned && media_time > info.media_time_secs {
                     info.media_time_secs = media_time;
                 }
             }
@@ -762,34 +825,52 @@ fn decode_latest_frame_direct_mkv(
     Ok((jpeg, pts, Some(pid)))
 }
 
-fn decode_latest_frame_from_stream_bytes(
+fn decode_frame_from_stream_bytes(
     ffmpeg_path: &Path,
     stream_bytes: &[u8],
+    seek_ts: Option<f64>,
 ) -> Result<(Vec<u8>, f64, Option<u32>), String> {
+    let mut args = vec![
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "info".to_string(),
+    ];
+    if seek_ts.is_some() {
+        args.push("-copyts".to_string());
+    }
+    args.extend([
+        "-f".to_string(),
+        "matroska".to_string(),
+        "-i".to_string(),
+        "pipe:0".to_string(),
+    ]);
+    if let Some(ts) = seek_ts {
+        args.extend(["-ss".to_string(), format!("{ts:.3}")]);
+    }
+    args.extend([
+        "-vf".to_string(),
+        "scale=640:-2,format=yuvj420p,showinfo".to_string(),
+    ]);
+    if seek_ts.is_some() {
+        args.extend(["-frames:v".to_string(), "1".to_string()]);
+    } else {
+        args.extend(["-update".to_string(), "1".to_string()]);
+    }
+    args.extend([
+        "-f".to_string(),
+        "image2pipe".to_string(),
+        "-vcodec".to_string(),
+        "mjpeg".to_string(),
+        "-q:v".to_string(),
+        "4".to_string(),
+        "pipe:1".to_string(),
+    ]);
+
     let mut cmd = Command::new(ffmpeg_path);
-    cmd.args([
-        "-hide_banner",
-        "-loglevel",
-        "info",
-        "-f",
-        "matroska",
-        "-i",
-        "pipe:0",
-        "-vf",
-        "scale=640:-2,format=yuvj420p,showinfo",
-        "-update",
-        "1",
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "mjpeg",
-        "-q:v",
-        "4",
-        "pipe:1",
-    ])
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
+    cmd.args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;

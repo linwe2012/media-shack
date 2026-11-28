@@ -62,7 +62,7 @@ impl PreviewPacketBuffer {
 
     pub fn push_bytes(&self, data: &[u8]) {
         const MAX_HEADER: usize = 32 * 1024;
-        const MAX_RING_BYTES: usize = 6 * 1024 * 1024;
+        const MAX_RING_BYTES: usize = 16 * 1024 * 1024;
         let Ok(mut st) = self.inner.lock() else {
             return;
         };

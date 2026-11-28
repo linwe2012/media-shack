@@ -770,6 +770,10 @@ pub struct LivePreviewInfo {
     pub active: bool,
     pub mode: String,
     pub media_time_secs: f64,
+    #[serde(default)]
+    pub encoded_secs: f64,
+    #[serde(default)]
+    pub seek_target_secs: Option<f64>,
     pub waiting_first_frame: bool,
     pub frame_seq: u64,
     pub worker_pid: Option<u32>,

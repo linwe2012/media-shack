@@ -2012,6 +2012,30 @@ pub fn get_live_comparison_bundle(
 }
 
 #[tauri::command]
+pub fn seek_live_preview(
+    state: State<'_, AppState>,
+    job_id: String,
+    timestamp_secs: Option<f64>,
+    include_delta: Option<bool>,
+    delta_gain: Option<f64>,
+) -> Result<LiveComparisonBundle, String> {
+    let ffmpeg_path = state
+        .scheduler
+        .tool_status
+        .lock()
+        .ok()
+        .and_then(|t| t.capabilities.as_ref().map(|c| PathBuf::from(&c.ffmpeg_path)))
+        .ok_or_else(|| "ffmpeg is not configured".to_string())?;
+    state.scheduler.previews.seek_live_preview(
+        ffmpeg_path,
+        job_id,
+        timestamp_secs,
+        include_delta.unwrap_or(false),
+        delta_gain.unwrap_or(4.0),
+    )
+}
+
+#[tauri::command]
 pub fn get_sample_comparison_pair(
     state: State<'_, AppState>,
     source_path: String,
