@@ -326,96 +326,20 @@ pub fn atomic_publish_no_replace(staged_path: &Path, final_path: &Path) -> Publi
     PublishOutcome::Error(format!("MoveFileExW failed: {err}"))
 }
 
-pub fn check_trash_support(path: &Path) -> Result<bool, String> {
-    let existing = nearest_existing_ancestor(path)
-        .ok_or_else(|| format!("Path does not exist: {}", path.display()))?;
-    let wide = to_wide_null(existing.as_os_str());
-    let mut vol_root = vec![0u16; 260];
-    if unsafe { GetVolumePathNameW(wide.as_ptr(), vol_root.as_mut_ptr(), vol_root.len() as u32) } == 0 {
-        return Err("Cannot resolve volume root".to_string());
-    }
-    let dtype = unsafe { GetDriveTypeW(vol_root.as_ptr()) };
-    if dtype != 3 {
-        return Err("Recycle Bin is only guaranteed on fixed local drives (not network or removable volumes).".to_string());
-    }
-    let mut fs_name = vec![0u16; 64];
-    let info_ok = unsafe {
-        GetVolumeInformationW(
-            vol_root.as_ptr(),
-            std::ptr::null_mut(),
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            fs_name.as_mut_ptr(),
-            fs_name.len() as u32,
-        )
-    };
-    if info_ok == 0 {
-        return Err("Cannot inspect filesystem type for Recycle Bin support.".to_string());
-    }
-    let fs_end = fs_name.iter().position(|&c| c == 0).unwrap_or(fs_name.len());
-    let fs_str = String::from_utf16_lossy(&fs_name[..fs_end]);
-    if !fs_str.eq_ignore_ascii_case("NTFS") {
-        return Err(format!("Recoverable Recycle Bin is only guaranteed on fixed NTFS volumes (found {fs_str})."));
-    }
-    Ok(true)
+/// Platform guarantee on Windows:
+/// Legacy `SHFileOperationW(FOF_ALLOWUNDO)` requests Recycle Bin only on a best-effort basis and can
+/// silently permanently delete when Recycle Bin is disabled or the file exceeds bin capacity, and cannot
+/// bind directly to a verified open handle against concurrent ancestor renames.
+/// Until handle-verified recoverable-only `IFileOperation` (`FOFX_RECYCLEONDELETE`) + Recycle Bin
+/// policy verification is enabled on Windows, fail closed and keep original files intact.
+pub fn check_trash_support(_path: &Path) -> Result<bool, String> {
+    Err("Recoverable-only OS Trash is disabled on Windows until strict Recycle Bin policy and FOFX_RECYCLEONDELETE enforcement are enabled; keeping original files intact.".to_string())
 }
 
 pub fn move_to_recoverable_trash_verified(
     source_path: &Path,
     expected: &SourceFingerprint,
 ) -> Result<(), String> {
-    if !check_trash_support(source_path)? {
-        return Err("Recoverable Recycle Bin is unavailable on this volume.".to_string());
-    }
-    if expected.link_count > 1 {
-        return Err("Ambiguous hard-linked file excluded from automatic cleanup.".to_string());
-    }
-    verify_no_symlink_ancestors_impl(source_path)?;
-
-    let sym = std::fs::symlink_metadata(source_path)
-        .map_err(|e| format!("Cannot inspect {}: {e}", source_path.display()))?;
-    if sym.file_type().is_symlink() || (sym.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
-        return Err("Symlink/reparse point excluded.".to_string());
-    }
-
-    let mut file = File::open(source_path).map_err(|e| format!("Open failed: {e}"))?;
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
-        return Err("GetFileInformationByHandle failed".to_string());
-    }
-    if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
-        return Err("Reparse point detected.".to_string());
-    }
-    if info.nNumberOfLinks > 1 {
-        return Err("Hard-linked file excluded.".to_string());
-    }
-    let size_bytes = ((info.nFileSizeHigh as u64) << 32) | (info.nFileSizeLow as u64);
-    let file_index = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
-    let actual_vol = format!("vol:{:08x}", info.dwVolumeSerialNumber);
-    let actual_id = format!("vol:{:08x}:idx:{file_index}", info.dwVolumeSerialNumber);
-    if actual_vol != expected.volume_id || actual_id != expected.file_id || size_bytes != expected.size_bytes {
-        return Err("Source file identity changed before Recycle Bin move.".to_string());
-    }
-    let hash = compute_head_tail_hash(&mut file, size_bytes)?;
-    if hash != expected.head_hash {
-        return Err("Source content changed before Recycle Bin move.".to_string());
-    }
-    drop(file);
-
-    // Double-null-terminated UTF-16 path for SHFileOperationW
-    let mut p_from: Vec<u16> = source_path.as_os_str().encode_wide().collect();
-    p_from.push(0);
-    p_from.push(0);
-
-    let mut op: SHFILEOPSTRUCTW = unsafe { std::mem::zeroed() };
-    op.wFunc = FO_DELETE;
-    op.pFrom = p_from.as_ptr();
-    op.fFlags = (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT) as u16;
-    let rc = unsafe { SHFileOperationW(&mut op) };
-    if rc != 0 || op.fAnyOperationsAborted != 0 {
-        return Err(format!("SHFileOperationW Recycle Bin move failed (code {rc})"));
-    }
-    Ok(())
+    let _ = (source_path, expected);
+    Err("Recoverable-only OS Trash is disabled on Windows until strict Recycle Bin policy and FOFX_RECYCLEONDELETE enforcement are enabled; original file preserved.".to_string())
 }

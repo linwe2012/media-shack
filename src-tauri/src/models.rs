@@ -84,6 +84,10 @@ impl ContainerFormat {
     }
 }
 
+fn default_ten_bit() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncodeRecipe {
     pub schema_version: u32,
@@ -93,6 +97,12 @@ pub struct EncodeRecipe {
     pub container: ContainerFormat,
     pub crf: u32,
     pub effort: String,
+    #[serde(default)]
+    pub tune: Option<String>,
+    #[serde(default = "default_ten_bit")]
+    pub ten_bit: bool,
+    #[serde(default)]
+    pub aq_mode: Option<u8>,
     pub is_custom: bool,
     pub preset_name: Option<String>,
 }
@@ -127,6 +137,9 @@ impl EncodeRecipe {
             container,
             crf,
             effort,
+            tune: None,
+            ten_bit: family == PresetFamily::Archive,
+            aq_mode: None,
             is_custom: false,
             preset_name: None,
         }
@@ -143,7 +156,11 @@ impl EncodeRecipe {
 
     pub fn matches_builtin_defaults(&self) -> bool {
         let base = Self::default_for(self.family, self.variant, self.codec, self.container);
-        self.crf == base.crf && self.effort == base.effort
+        self.crf == base.crf
+            && self.effort == base.effort
+            && self.tune.as_deref().unwrap_or("").is_empty()
+            && self.ten_bit == base.ten_bit
+            && self.aq_mode.is_none()
     }
 
     pub fn filename_tag(&self) -> String {
@@ -230,7 +247,11 @@ pub struct Profile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TabType {
+    Explore,
+    #[serde(alias = "transcode")]
     Encode,
+    #[serde(alias = "dedupe")]
+    Organize,
     Repair,
 }
 
@@ -393,6 +414,8 @@ pub struct SourceFingerprint {
     pub mtime_ns: i64,
     pub head_hash: String,
     pub link_count: u64,
+    #[serde(default)]
+    pub full_blake3: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -737,6 +760,205 @@ pub struct RepairJobRecord {
     pub updated_at: i64,
 }
 
+fn default_repair_deep_scan() -> bool {
+    true
+}
+
+fn default_repair_timeout_secs() -> u64 {
+    300
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabWorkspaceMeta {
+    pub resource_source: Option<String>,
+    pub forwarded_from: Option<String>,
+    #[serde(default)]
+    pub repair_refs: Vec<String>,
+    #[serde(default)]
+    pub repair_video_only: bool,
+    #[serde(default = "default_repair_deep_scan")]
+    pub repair_deep_scan: bool,
+    #[serde(default = "default_repair_timeout_secs")]
+    pub repair_timeout_secs: u64,
+}
+
+impl Default for TabWorkspaceMeta {
+    fn default() -> Self {
+        Self {
+            resource_source: None,
+            forwarded_from: None,
+            repair_refs: Vec::new(),
+            repair_video_only: false,
+            repair_deep_scan: true,
+            repair_timeout_secs: 300,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabDedupeItem {
+    pub job_id: String,
+    pub path: String,
+    pub name: String,
+    pub rel_path: String,
+    pub input_bytes: u64,
+    pub resolution: String,
+    pub bitrate_mbps: f64,
+    pub codec: String,
+    pub duration_secs: f64,
+    pub role: String, // "keep" | "trash"
+    pub trashed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabDedupeGroup {
+    pub id: String,
+    pub match_type: String,
+    pub similarity: f64,
+    pub items: Vec<TabDedupeItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabRepairItemState {
+    pub job_id: String,
+    pub queue_id: String,
+    pub status: String,
+    pub diagnosis: Option<crate::recovery::DiagnosisReport>,
+    pub report: Option<crate::recovery::RecoveryReport>,
+    pub error: Option<String>,
+    pub output_path: Option<String>,
+    pub output_bytes: Option<u64>,
+    pub preview_sheet_filename: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HashCacheStats {
+    pub entry_count: usize,
+    pub total_hashed_bytes: u64,
+    pub cache_bytes_estimate: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabFaceGroupView {
+    pub group_id: String,
+    pub label: Option<String>,
+    pub sample_crop_path: Option<String>,
+    pub observation_count: usize,
+    pub matched_job_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabOrganizeOverview {
+    pub job_tags: HashMap<String, Vec<String>>,
+    pub available_tags: Vec<String>,
+    pub ocr_detections: Vec<crate::intelligence::OcrDetectionRecord>,
+    pub face_groups: Vec<TabFaceGroupView>,
+    pub hash_cache: HashCacheStats,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtectedSourceRecord {
+    pub volume_id: String,
+    pub file_id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemovalReason {
+    UnattendedPostEncode,
+    ManualPostEncode,
+    QueueSpecificItems,
+    QueueDuplicateGroup,
+    LibraryDuplicateCopy,
+    UndoCopy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrashPreviewItem {
+    pub item_id: String,
+    pub queue_id: Option<String>,
+    pub filename: String,
+    pub parent_dir: String,
+    pub path: String,
+    pub size_bytes: u64,
+    pub volume_id: String,
+    pub file_id: String,
+    pub head_hash: String,
+    pub group_id: Option<String>,
+    pub eligible: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrashPreviewPlan {
+    pub plan_id: String,
+    pub queue_id: Option<String>,
+    pub queue_name: Option<String>,
+    pub removal_reason: RemovalReason,
+    pub items: Vec<TrashPreviewItem>,
+    pub eligible_count: usize,
+    pub total_bytes: u64,
+    pub blocked_count: usize,
+    pub trash_supported: bool,
+    pub trash_support_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrashItemOutcome {
+    pub item_id: String,
+    pub filename: String,
+    pub path: String,
+    pub moved: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrashBatchResult {
+    pub moved_count: usize,
+    pub failed_count: usize,
+    pub outcomes: Vec<TrashItemOutcome>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoveByTagItem {
+    pub job_id: String,
+    pub filename: String,
+    pub old_path: String,
+    pub new_path: String,
+    pub size_bytes: u64,
+    pub valid: bool,
+    #[serde(default)]
+    pub collision: bool,
+    #[serde(default)]
+    pub cross_volume: bool,
+    #[serde(default)]
+    pub copied_original_retained: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoveByTagResult {
+    #[serde(default)]
+    pub plan_id: Option<String>,
+    pub tag: String,
+    pub dest_dir: String,
+    pub copy_only: bool,
+    #[serde(default)]
+    pub preserve_subfolders: bool,
+    #[serde(default)]
+    pub collision_policy: String,
+    pub dry_run: bool,
+    pub items: Vec<MoveByTagItem>,
+    pub moved_count: usize,
+    #[serde(default)]
+    pub retained_count: usize,
+    #[serde(default)]
+    pub operation_id: Option<String>,
+    pub errors: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSnapshot {
     pub queues: Vec<QueueTab>,
@@ -744,6 +966,18 @@ pub struct AppSnapshot {
     pub jobs: Vec<JobRecord>,
     #[serde(default)]
     pub repair_sessions: Vec<RepairJobRecord>,
+    #[serde(default)]
+    pub tab_meta: HashMap<String, TabWorkspaceMeta>,
+    #[serde(default)]
+    pub job_decisions: HashMap<String, String>,
+    #[serde(default)]
+    pub protected_sources: Vec<String>,
+    #[serde(default)]
+    pub tab_dedupe_groups: HashMap<String, Vec<TabDedupeGroup>>,
+    #[serde(default)]
+    pub tab_repair_items: HashMap<String, TabRepairItemState>,
+    #[serde(default)]
+    pub hash_cache_stats: HashCacheStats,
     pub profiles: Vec<Profile>,
     pub named_presets: Vec<NamedPreset>,
     pub tools: ToolStatus,

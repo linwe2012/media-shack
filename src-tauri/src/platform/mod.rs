@@ -42,6 +42,10 @@ pub fn capture_file_identity(path: &Path) -> Result<SourceFingerprint, String> {
     common::capture_file_identity_impl(path)
 }
 
+pub fn capture_file_identity_with_blake3(path: &Path) -> Result<SourceFingerprint, String> {
+    common::capture_file_identity_with_blake3_impl(path)
+}
+
 pub fn verify_no_symlink_ancestors(path: &Path) -> Result<(), String> {
     common::verify_no_symlink_ancestors_impl(path)
 }

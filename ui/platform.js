@@ -3,9 +3,9 @@
   const invoke = core.invoke;
   const $ = (id) => document.getElementById(id);
 
-  // Shared platform state & selection across Library, Organize, Duplicates, Repair, Transcode
+  // Shared platform state & selection across Resource Tabs, Library, Organize, Duplicates, Repair
   const state = {
-    currentView: "library",
+    currentView: "transcode",
     theme: localStorage.getItem("ms_theme") || "auto",
     viewMode: "table", // "table" | "grid"
     roots: [],
@@ -90,6 +90,109 @@
     return `thumb://localhost/${rel.split("/").map(encodeURIComponent).join("/")}`;
   }
 
+  // Accent tone management (neutral / amber / sage / custom hex)
+  const PRESET_ACCENT_HEX = {
+    neutral: "#71717A",
+    amber: "#F59E0B",
+    sage: "#5FA78E",
+  };
+  let currentAccent = localStorage.getItem("ms_accent") || "neutral";
+  let currentCustomHex = localStorage.getItem("ms_custom_accent") || "#3B82F6";
+  if (!["neutral", "amber", "sage", "custom"].includes(currentAccent)) currentAccent = "neutral";
+
+  function normalizeHex(hex) {
+    if (!hex) return "#3B82F6";
+    const m = String(hex).trim().match(/^#?([0-9a-fA-F]{6})$/);
+    return m ? `#${m[1].toUpperCase()}` : "#3B82F6";
+  }
+
+  function hexToRgb(hex) {
+    const clean = normalizeHex(hex).slice(1);
+    return {
+      r: parseInt(clean.slice(0, 2), 16),
+      g: parseInt(clean.slice(2, 4), 16),
+      b: parseInt(clean.slice(4, 6), 16),
+    };
+  }
+
+  function rgbToHex(r, g, b) {
+    const clamp = (n) => Math.max(0, Math.min(255, Math.round(n)));
+    return `#${[clamp(r), clamp(g), clamp(b)].map((v) => v.toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+  }
+
+  function mixRgb(a, b, t) {
+    return {
+      r: a.r + (b.r - a.r) * t,
+      g: a.g + (b.g - a.g) * t,
+      b: a.b + (b.b - a.b) * t,
+    };
+  }
+
+  function isEffectiveDark() {
+    if (state.theme === "dark") return true;
+    if (state.theme === "light") return false;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+
+  function clearCustomAccentVars() {
+    const st = document.documentElement.style;
+    ["--accent", "--accent-hover", "--accent-solid", "--accent-solid-text", "--accent-soft", "--accent-border", "--accent-text", "--accent-progress"].forEach((k) => st.removeProperty(k));
+  }
+
+  function applyCustomAccentVars(hex) {
+    const norm = normalizeHex(hex);
+    const rgb = hexToRgb(norm);
+    const lum = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+    const dark = isEffectiveDark();
+    const st = document.documentElement.style;
+    const white = { r: 255, g: 255, b: 255 };
+    const black = { r: 15, g: 15, b: 18 };
+    const hoverRgb = dark ? mixRgb(rgb, white, 0.2) : mixRgb(rgb, black, 0.16);
+    const textRgb = dark ? (lum < 0.45 ? mixRgb(rgb, white, 0.42) : rgb) : (lum > 0.62 ? mixRgb(rgb, black, 0.45) : rgb);
+    const hoverHex = rgbToHex(hoverRgb.r, hoverRgb.g, hoverRgb.b);
+    const textHex = rgbToHex(textRgb.r, textRgb.g, textRgb.b);
+
+    st.setProperty("--accent", norm);
+    st.setProperty("--accent-hover", hoverHex);
+    st.setProperty("--accent-solid", norm);
+    st.setProperty("--accent-solid-text", lum > 0.60 ? "#141414" : "#FFFFFF");
+    document.documentElement.setAttribute("data-accent-bright", lum > 0.60 ? "true" : "false");
+    st.setProperty("--accent-soft", `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${dark ? 0.16 : 0.12})`);
+    st.setProperty("--accent-border", `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${dark ? 0.42 : 0.36})`);
+    st.setProperty("--accent-text", textHex);
+    st.setProperty("--accent-progress", `linear-gradient(90deg, ${norm} 0%, ${hoverHex} 100%)`);
+  }
+
+  function applyAccent(accent, customHex = null) {
+    if (customHex) currentCustomHex = normalizeHex(customHex);
+    currentAccent = ["neutral", "amber", "sage", "custom"].includes(accent) ? accent : "neutral";
+    localStorage.setItem("ms_accent", currentAccent);
+    localStorage.setItem("ms_custom_accent", currentCustomHex);
+    document.documentElement.setAttribute("data-accent", currentAccent);
+    if (currentAccent === "custom") {
+      applyCustomAccentVars(currentCustomHex);
+    } else {
+      clearCustomAccentVars();
+      document.documentElement.removeAttribute("data-accent-bright");
+    }
+    document.querySelectorAll("[data-accent-pick]").forEach((btn) => {
+      const val = btn.getAttribute("data-accent-pick");
+      const isSelected = val === currentAccent;
+      btn.classList.toggle("active", isSelected);
+      btn.setAttribute("aria-pressed", isSelected ? "true" : "false");
+    });
+    const customHexLbl = $("lbl-custom-accent-hex");
+    if (customHexLbl) {
+      const displayHex = currentAccent === "custom" ? currentCustomHex : (PRESET_ACCENT_HEX[currentAccent] || currentCustomHex);
+      customHexLbl.textContent = displayHex;
+    }
+    const pickerInp = $("inp-custom-accent");
+    if (pickerInp && pickerInp.value.toUpperCase() !== currentCustomHex) {
+      pickerInp.value = currentCustomHex;
+    }
+  }
+  applyAccent(currentAccent);
+
   // Theme management (auto / dark / light)
   function applyTheme() {
     if (state.theme === "dark" || state.theme === "light") {
@@ -97,25 +200,58 @@
     } else {
       document.documentElement.removeAttribute("data-theme");
     }
-    $("btn-theme-toggle").textContent = `Theme: ${state.theme}`;
+    document.querySelectorAll("[data-theme-pick]").forEach((btn) => {
+      const isSelected = btn.getAttribute("data-theme-pick") === state.theme;
+      btn.classList.toggle("active", isSelected);
+      btn.setAttribute("aria-pressed", isSelected ? "true" : "false");
+    });
+    if (currentAccent === "custom") applyCustomAccentVars(currentCustomHex);
   }
   applyTheme();
-  $("btn-theme-toggle").onclick = () => {
-    const order = ["auto", "dark", "light"];
-    state.theme = order[(order.indexOf(state.theme) + 1) % order.length];
-    localStorage.setItem("ms_theme", state.theme);
-    applyTheme();
-  };
+  if (window.matchMedia) {
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+      if (currentAccent === "custom") applyCustomAccentVars(currentCustomHex);
+    });
+  }
 
-  // Primary navigation
+  // Primary navigation & Utility Dropdown
+  const utilMenu = $("primary-nav-tabs");
+  const utilBtn = $("btn-utility-menu");
+  const backToTabsBtn = $("btn-back-to-tabs");
+  const openSettingsTabBtn = $("btn-open-settings-tab");
+  if (utilBtn && utilMenu) {
+    utilBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      utilMenu.classList.toggle("hidden");
+    });
+    document.addEventListener("click", (e) => {
+      if (!utilMenu.classList.contains("hidden") && !utilMenu.contains(e.target) && e.target !== utilBtn) {
+        utilMenu.classList.add("hidden");
+      }
+    });
+  }
+  if (backToTabsBtn) {
+    backToTabsBtn.addEventListener("click", () => switchView("transcode"));
+  }
+  if (openSettingsTabBtn) {
+    openSettingsTabBtn.addEventListener("click", () => {
+      window.dispatchEvent(new CustomEvent("ms-open-settings-tab"));
+      switchView("settings");
+    });
+  }
+
   function switchView(view) {
     state.currentView = view;
+    if (utilMenu) utilMenu.classList.add("hidden");
+    if (backToTabsBtn) backToTabsBtn.classList.toggle("hidden", view === "transcode" || view === "settings");
+    if (openSettingsTabBtn) openSettingsTabBtn.classList.toggle("active", view === "settings");
     document.querySelectorAll(".nav-tab").forEach((b) => {
       b.classList.toggle("active", b.dataset.view === view);
     });
     document.querySelectorAll(".nav-view").forEach((el) => {
       el.classList.toggle("hidden", el.id !== `view-${view}`);
     });
+    window.dispatchEvent(new CustomEvent("ms-view-changed", { detail: { view } }));
     if (view === "library") refreshLibrary();
     if (view === "duplicates") refreshDuplicates();
     if (view === "organize") renderOrganizeView();
@@ -124,6 +260,10 @@
     if (view === "tasks") refreshTasksView();
     if (view === "settings") refreshSettingsView();
   }
+
+  window.addEventListener("ms-request-switch-view", (e) => {
+    if (e.detail?.view) switchView(e.detail.view);
+  });
 
   document.querySelectorAll(".nav-tab").forEach((btn) => {
     btn.addEventListener("click", () => switchView(btn.dataset.view));
@@ -892,7 +1032,11 @@
           </div>
         </div>
         <div class="muted" style="margin-top:6px">${edgeInfo}</div>
-      </div>
+      <div class="muted" style="margin-top:4px;font-size:12px;">${
+        grp.match_kind === "exact"
+          ? "Exact byte-for-byte duplicate (BLAKE3 verified). At least one copy is always protected from deletion."
+          : "Visual / stream similarity match — audio tracks and endings may differ. Nothing is pre-checked; compare side-by-side before selecting."
+      }</div>
       <div class="compare-grid" id="dup-compare-frames" style="margin:10px 0"></div>
       <table class="table-simple">
         <thead><tr><th>Trash?</th><th>Path</th><th>Size</th><th>Res / Codec</th><th>Duration / Bitrate</th><th>Integrity</th><th>Recommendation</th></tr></thead>
@@ -900,7 +1044,7 @@
           ${grp.members
             .map(
               (m) => `<tr>
-                <td><input type="checkbox" class="dup-copy-chk" value="${esc(m.entry.file_key)}" ${!m.suggested_keep ? "checked" : ""} /></td>
+                <td><input type="checkbox" class="dup-copy-chk" value="${esc(m.entry.file_key)}" ${grp.match_kind === "exact" && !m.suggested_keep ? "checked" : ""} /></td>
                 <td class="mono" style="max-width:260px;word-break:break-all">${esc(m.entry.path)}</td>
                 <td>${fmtBytes(m.entry.size_bytes)}</td>
                 <td>${m.entry.width ? `${m.entry.width}×${m.entry.height}` : "—"} · ${esc(m.entry.video_codec || "—")}</td>
@@ -972,11 +1116,35 @@
     $("dup-trash-checked").onclick = async () => {
       const keys = Array.from(pane.querySelectorAll(".dup-copy-chk:checked")).map((c) => c.value);
       if (!keys.length) return;
-      if (!confirm(`Move ${keys.length} checked redundant file(s) to the OS Trash / Recycle Bin?`)) return;
-      const res = await invoke("duplicates_trash_copies", { fileKeys: keys });
-      const errs = res.filter(([, r]) => r.Err).map(([k, r]) => `${k}: ${r.Err}`);
-      if (errs.length) alert(`Completed with warnings:\n${errs.join("\n")}`);
-      refreshDuplicates();
+      try {
+        const plan = await invoke("preview_tab_trash", {
+          queueId: null,
+          itemIds: keys,
+          removalReason: "library_duplicate_copy",
+        });
+        const listLines = (plan.items || [])
+          .map((it) => `• ${it.filename} (${it.parent_dir}) — ${fmtBytes(it.size_bytes)} [${it.eligible ? "Ready" : `BLOCKED: ${it.reason || "Protected"}`}]`)
+          .join("\n");
+        const supportWarn = !plan.trash_supported && plan.trash_support_error
+          ? `\nWARNING — OS Trash unavailable: ${plan.trash_support_error}\n`
+          : "";
+        if (plan.eligible_count === 0) {
+          alert(`No checked files can be moved to OS Trash.${supportWarn}\n${listLines}`);
+          return;
+        }
+        const ok = confirm(
+          `Scope: Library Duplicate Group (${grp.match_kind})\nMove ${plan.eligible_count} file(s) (${fmtBytes(plan.total_bytes)}) to recoverable OS Trash?${plan.blocked_count ? ` (${plan.blocked_count} blocked/protected will be kept)` : ""}${supportWarn}\n\n${listLines}`
+        );
+        if (!ok) return;
+        const res = await invoke("execute_tab_trash_plan", { planId: plan.plan_id });
+        const errs = (res.outcomes || []).filter((o) => !o.moved).map((o) => `${o.filename}: ${o.error || "Kept"}`);
+        if (errs.length) {
+          alert(`Moved ${res.moved_count} to OS Trash; ${res.failed_count} kept:\n${errs.join("\n")}`);
+        }
+        refreshDuplicates();
+      } catch (err) {
+        alert(String(err));
+      }
     };
   }
 
@@ -984,10 +1152,17 @@
   // ORGANIZE VIEW (Rename, Move/Copy, Local LLM, History/Undo)
   // =========================================================================
 
-  $("btn-org-mode-rename").onclick = () => { state.orgMode = "rename"; renderOrganizeView(); };
-  $("btn-org-mode-move").onclick = () => { state.orgMode = "move"; renderOrganizeView(); };
-  $("btn-org-mode-llm").onclick = () => { state.orgMode = "llm"; renderOrganizeView(); };
-  $("btn-org-mode-history").onclick = () => { state.orgMode = "history"; renderOrganizeView(); };
+  function invalidateOrgPreview() {
+    state.orgPreview = null;
+    $("btn-org-execute").disabled = true;
+    const w = $("org-preview-wrap");
+    if (w && state.orgMode !== "history") w.innerHTML = "";
+  }
+
+  $("btn-org-mode-rename").onclick = () => { state.orgMode = "rename"; state.orgPreview = null; renderOrganizeView(); };
+  $("btn-org-mode-move").onclick = () => { state.orgMode = "move"; state.orgPreview = null; renderOrganizeView(); };
+  $("btn-org-mode-llm").onclick = () => { state.orgMode = "llm"; state.orgPreview = null; renderOrganizeView(); };
+  $("btn-org-mode-history").onclick = () => { state.orgMode = "history"; state.orgPreview = null; renderOrganizeView(); };
 
   async function renderOrganizeView() {
     updateSelectionPill();
@@ -1010,6 +1185,10 @@
           <label>Case <select id="org-ren-case"><option value="preserve">Preserve</option><option value="lower">lower</option><option value="upper">UPPER</option><option value="title">Title</option></select></label>
           <label class="toggle-inline"><input type="checkbox" id="org-ren-uni" /><span>Unicode norm</span></label>
         </div>`;
+      panel.querySelectorAll("input, select").forEach((inp) => {
+        inp.addEventListener("input", invalidateOrgPreview);
+        inp.addEventListener("change", invalidateOrgPreview);
+      });
     } else if (state.orgMode === "move") {
       panel.innerHTML = `
         <div class="compact-filter-row">
@@ -1019,9 +1198,16 @@
           <label>Op <select id="org-mv-copy"><option value="move">Move (copy+verify across drives)</option><option value="copy">Copy / Export</option></select></label>
           <label>Multi-tag <select id="org-mv-multi"><option value="first">First value (no silent dup)</option><option value="join">Join with _</option></select></label>
         </div>`;
+      panel.querySelectorAll("input, select").forEach((inp) => {
+        inp.addEventListener("input", invalidateOrgPreview);
+        inp.addEventListener("change", invalidateOrgPreview);
+      });
       $("btn-org-pick-dest").onclick = async () => {
         const d = await dialog.open({ directory: true });
-        if (d) $("org-mv-dest").value = d;
+        if (d) {
+          $("org-mv-dest").value = d;
+          invalidateOrgPreview();
+        }
       };
     } else if (state.orgMode === "llm") {
       panel.innerHTML = `
@@ -1140,10 +1326,12 @@
     if (!state.orgPreview) return;
     try {
       const res = await invoke("organize_execute_batch", {
-        items: state.orgPreview.items,
+        items: state.orgPreview.plan_id ? null : state.orgPreview.items,
         summary: `${state.orgMode} (${state.orgPreview.items.length} items)`,
+        planId: state.orgPreview.plan_id || null,
       });
-      alert(`Executed: ${res.succeeded} succeeded, ${res.failed} failed.`);
+      const errNote = res.errors && res.errors.length ? `\n\nNotes:\n${res.errors.join("\n")}` : "";
+      alert(`Executed: ${res.succeeded} succeeded, ${res.failed} failed.${errNote}`);
       state.orgPreview = null;
       refreshLibrary();
       renderOrganizeView();
@@ -1400,24 +1588,80 @@
 
     $("settings-workspace").innerHTML = `
       <div class="card-panel">
-        <h3>External Tools &amp; Catalog Database</h3>
+        <div class="inline-row" style="justify-content:space-between;margin-bottom:8px;">
+          <div>
+            <h3 style="margin:0;">Appearance &amp; Theme</h3>
+            <div class="muted" style="font-size:12px;">Choose light or dark mode and workspace accent palette.</div>
+          </div>
+          <button id="btn-set-done" class="btn btn-sm btn-secondary" type="button">Back to Resource Tabs</button>
+        </div>
+        <div class="settings-appearance-row">
+          <div class="field-block settings-field">
+            <span class="field-label">Theme Mode</span>
+            <div class="mode-switcher settings-seg" role="group" aria-label="Theme Mode">
+              <button type="button" class="tab-mode-btn ${state.theme === "auto" ? "active" : ""}" data-theme-pick="auto">◐ Auto</button>
+              <button type="button" class="tab-mode-btn ${state.theme === "dark" ? "active" : ""}" data-theme-pick="dark">☾ Dark</button>
+              <button type="button" class="tab-mode-btn ${state.theme === "light" ? "active" : ""}" data-theme-pick="light">☀ Light</button>
+            </div>
+          </div>
+          <div class="field-block settings-field">
+            <span class="field-label">Accent Color</span>
+            <div class="inline-row" style="gap:8px;flex-wrap:wrap;align-items:center;">
+              <div class="mode-switcher settings-seg" role="group" aria-label="Accent Palette">
+                <button type="button" class="tab-mode-btn ${currentAccent === "neutral" ? "active" : ""}" data-accent-pick="neutral">
+                  <span class="accent-dot" data-accent-pick="neutral" style="pointer-events:none"></span>
+                  <span>Neutral</span>
+                </button>
+                <button type="button" class="tab-mode-btn ${currentAccent === "amber" ? "active" : ""}" data-accent-pick="amber">
+                  <span class="accent-dot" data-accent-pick="amber" style="pointer-events:none"></span>
+                  <span>Amber</span>
+                </button>
+                <button type="button" class="tab-mode-btn ${currentAccent === "sage" ? "active" : ""}" data-accent-pick="sage">
+                  <span class="accent-dot" data-accent-pick="sage" style="pointer-events:none"></span>
+                  <span>Sage</span>
+                </button>
+              </div>
+              <div class="mode-switcher settings-seg" role="group" aria-label="Custom Accent Swatches">
+                ${["#3B82F6", "#8B5CF6", "#EC4899", "#14B8A6"].map((hex) => `
+                  <button type="button" class="settings-swatch-btn ${currentAccent === "custom" && currentCustomHex === hex ? "active" : ""}" data-swatch-hex="${hex}" title="Use ${hex}">
+                    <span class="settings-swatch-fill" style="background:${hex};"></span>
+                  </button>
+                `).join("")}
+                <label class="settings-color-picker-pill ${currentAccent === "custom" ? "active" : ""}" title="Pick any custom accent color">
+                  <input id="inp-custom-accent" type="color" value="${esc(currentCustomHex)}" aria-label="Custom accent color" />
+                  <span id="lbl-custom-accent-hex" class="mono">${esc(currentAccent === "custom" ? currentCustomHex : (PRESET_ACCENT_HEX[currentAccent] || currentCustomHex))}</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card-panel">
+        <h3>Media Tools &amp; Catalog Database</h3>
+        <div class="inline-row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <button id="btn-set-ffmpeg" class="btn btn-secondary btn-sm" type="button">Configure FFmpeg &amp; ffprobe…</button>
+          <button id="btn-db-backup" class="btn btn-secondary btn-sm" type="button">Backup SQLite Catalog…</button>
+        </div>
         <div>ExifTool: <span class="mono">${esc(tools.exiftool_path || "Not found (optional)")}</span></div>
         <div>PAR2: <span class="mono">${esc(tools.par2_path || "Not found (optional)")}</span></div>
         <div>ML Worker (PaddleOCR/ONNX): <span class="mono">${esc(tools.ml_worker_path || "Built-in Rust engine")}</span></div>
-        <div class="inline-row" style="margin-top:8px">
-          <button id="btn-db-backup" class="btn btn-secondary btn-sm" type="button">Backup SQLite Catalog…</button>
-        </div>
       </div>
       <div class="card-panel">
         <h3>Privacy &amp; Optional Intelligence</h3>
-        <label class="check-row"><input id="chk-set-faces" type="checkbox" ${faceEnabled ? "checked" : ""} /><span>Enable opt-in local anonymous Face Grouping (People tab)</span></label>
-        <div class="compact-filter-row" style="margin-top:8px">
-          <label class="check-row"><input id="chk-llm-en" type="checkbox" ${llmCfg.enabled ? "checked" : ""} /><span>Enable Local LLM</span></label>
+        <div class="sidebar-panel-stack" style="gap:10px;">
+          <label class="check-row-card" style="cursor:pointer;">
+            <span>Enable opt-in local anonymous Face Grouping (People tab)</span>
+            <input id="chk-set-faces" type="checkbox" class="switch-chk" ${faceEnabled ? "checked" : ""} />
+          </label>
+          <div class="compact-filter-row" style="gap:10px;">
+            <label class="check-row" style="gap:8px;"><input id="chk-llm-en" type="checkbox" class="switch-chk" ${llmCfg.enabled ? "checked" : ""} /><span>Enable Local LLM</span></label>
           <select id="sel-llm-prov"><option value="ollama" ${llmCfg.provider === "ollama" ? "selected" : ""}>Ollama</option><option value="lm_studio" ${llmCfg.provider === "lm_studio" ? "selected" : ""}>LM Studio</option><option value="openai_compat" ${llmCfg.provider === "openai_compat" ? "selected" : ""}>OpenAI-Compat</option></select>
           <input id="inp-llm-url" type="text" value="${esc(llmCfg.endpoint_url)}" style="width:190px" />
           <input id="inp-llm-model" type="text" value="${esc(llmCfg.model_name)}" style="width:120px" />
           <input id="inp-llm-key" type="password" value="${esc(llmCfg.api_key || "")}" placeholder="Optional API key" style="width:120px" />
           <button id="btn-save-llm" class="btn btn-primary btn-sm" type="button">Save LLM Config</button>
+        </div>
         </div>
       </div>
       <div class="card-panel">
@@ -1446,6 +1690,38 @@
         </table>
       </div>`;
 
+    $("settings-workspace").querySelectorAll("[data-theme-pick]").forEach((btn) => {
+      btn.onclick = () => {
+        state.theme = btn.getAttribute("data-theme-pick") || "auto";
+        localStorage.setItem("ms_theme", state.theme);
+        applyTheme();
+      };
+    });
+    $("settings-workspace").querySelectorAll("[data-accent-pick]").forEach((btn) => {
+      btn.onclick = () => {
+        applyAccent(btn.getAttribute("data-accent-pick"));
+        $("settings-workspace").querySelectorAll("[data-swatch-hex]").forEach((s) => s.classList.remove("active"));
+        $("settings-workspace").querySelector(".settings-color-picker-pill")?.classList.remove("active");
+      };
+    });
+    $("settings-workspace").querySelectorAll("[data-swatch-hex]").forEach((btn) => {
+      btn.onclick = () => {
+        const hex = btn.getAttribute("data-swatch-hex");
+        applyAccent("custom", hex);
+        $("settings-workspace").querySelectorAll("[data-swatch-hex]").forEach((s) => s.classList.toggle("active", s === btn));
+        $("settings-workspace").querySelector(".settings-color-picker-pill")?.classList.add("active");
+      };
+    });
+    const customAccentInp = $("inp-custom-accent");
+    if (customAccentInp) {
+      customAccentInp.addEventListener("input", (e) => {
+        applyAccent("custom", e.target.value);
+        $("settings-workspace").querySelectorAll("[data-swatch-hex]").forEach((s) => s.classList.toggle("active", s.getAttribute("data-swatch-hex") === currentCustomHex));
+        $("settings-workspace").querySelector(".settings-color-picker-pill")?.classList.add("active");
+      });
+    }
+    $("btn-set-done")?.addEventListener("click", () => switchView("transcode"));
+    $("btn-set-ffmpeg")?.addEventListener("click", () => window.dispatchEvent(new CustomEvent("ms-open-tools-modal")));
     $("btn-db-backup").onclick = async () => {
       const dest = await dialog.save({ defaultPath: "media_shack_backup.db" });
       if (!dest) return;
@@ -1494,6 +1770,12 @@
   event.listen("duplicates_changed", () => { if (state.currentView === "duplicates") refreshDuplicates(); });
   event.listen("tasks_changed", () => { refreshTasksView(); });
 
-  // Boot Library view
-  refreshLibrary();
+  // Boot into Resource Tabs Workspace while hydrating footer catalog stats
+  switchView("transcode");
+  invoke("catalog_get_stats").then((stats) => {
+    if ($("lbl-catalog-footer")) {
+      $("lbl-catalog-footer").textContent =
+        `Catalog: ${stats.total_files} files (${stats.online_files} online) · ${fmtBytes(stats.total_bytes)}`;
+    }
+  }).catch(() => {});
 })();

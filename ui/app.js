@@ -1,55 +1,176 @@
 (() => {
   const { core, event, dialog, window: tauriWindow } = window.__TAURI__;
   const invoke = core.invoke;
+  const $ = (id) => document.getElementById(id);
+
+  // =========================================================================
+  // 1. STATE & CONSTANTS
+  // =========================================================================
+  const APP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+    <defs>
+      <linearGradient id="icBg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#272726"/><stop offset="55%" stop-color="#191918"/><stop offset="100%" stop-color="#0F0F0E"/></linearGradient>
+      <radialGradient id="icGlow" cx="62%" cy="48%" r="52%"><stop offset="0%" stop-color="#F59E0B" stop-opacity="0.22"/><stop offset="55%" stop-color="#D97706" stop-opacity="0.07"/><stop offset="100%" stop-color="#141414" stop-opacity="0"/></radialGradient>
+      <linearGradient id="icBack" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#A3A3A3" stop-opacity="0.34"/><stop offset="100%" stop-color="#525252" stop-opacity="0.14"/></linearGradient>
+      <linearGradient id="icMid" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#D4D4D4" stop-opacity="0.46"/><stop offset="100%" stop-color="#737373" stop-opacity="0.20"/></linearGradient>
+      <linearGradient id="icPlay" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#FAFAFA"/><stop offset="55%" stop-color="#E5E5E5"/><stop offset="100%" stop-color="#C8C4BC"/></linearGradient>
+      <linearGradient id="icMoon" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#FDE68A"/><stop offset="100%" stop-color="#F59E0B"/></linearGradient>
+    </defs>
+    <rect width="512" height="512" fill="url(#icBg)"/>
+    <rect width="512" height="512" fill="url(#icGlow)"/>
+    <path d="M0 0 H512 V180 Q256 240 0 155 Z" fill="#FFFFFF" opacity="0.035"/>
+    <rect x="86" y="138" width="166" height="236" rx="34" fill="url(#icBack)" stroke="#A3A3A3" stroke-opacity="0.28" stroke-width="5"/>
+    <rect x="142" y="156" width="166" height="200" rx="32" fill="url(#icMid)" stroke="#E5E5E5" stroke-opacity="0.38" stroke-width="5"/>
+    <path d="M236 154 C236 135 256 124 272 134 L414 222 C430 232 430 256 414 266 L272 354 C256 364 236 353 236 334 Z" transform="translate(0, 12)" fill="url(#icPlay)"/>
+    <path d="M244 166 C244 152 258 144 270 151 L396 229 C408 236 408 252 396 259 L270 337 C258 344 244 336 244 322 Z" transform="translate(0, 12)" fill="none" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="4"/>
+    <path d="M394 102 A36 36 0 1 1 352 144 A28 28 0 1 0 394 102 Z" fill="url(#icMoon)" opacity="0.95"/>
+  </svg>`;
+
+  const MODE_META = {
+    explore: {
+      label: "Explore",
+      fullLabel: "Explore & Triage",
+      desc: "Sort largest first, preview scenes, protect important videos, and tag the rest.",
+      icon: `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/></svg>`,
+    },
+    encode: {
+      label: "Transcode",
+      fullLabel: "Transcode Queue",
+      desc: "Overnight HEVC / AV1 compression with verification and safe cleanup.",
+      icon: `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>`,
+    },
+    organize: {
+      label: "Organize",
+      fullLabel: "Organize Collection",
+      desc: "Largest files, exact & similar duplicates (SQLite cache), watermark & face tags, sort into folders.",
+      icon: `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 0 0-1.883 2.542l.857 6a2.25 2.25 0 0 0 2.227 1.932H19.05a2.25 2.25 0 0 0 2.227-1.932l.857-6a2.25 2.25 0 0 0-1.883-2.542m-16.5 0V6A2.25 2.25 0 0 1 6 3.75h3.879a1.5 1.5 0 0 1 1.06.44l2.122 2.12a1.5 1.5 0 0 0 1.06.44H18A2.25 2.25 0 0 1 20.25 9v.776"/></svg>`,
+    },
+    repair: {
+      label: "Repair",
+      fullLabel: "Repair Videos",
+      desc: "Diagnose atoms & recover unseekable or truncated MP4/MOV clips non-destructively.",
+      icon: `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17 17.25 21A2.652 2.652 0 0 0 21 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 1 1-3.586-3.586l6.837-5.63"/></svg>`,
+    },
+  };
 
   let snapshot = null;
   let selectedJobId = null;
-  let checkedJobIds = new Set();
-  let expandedJobIds = new Set();
-  let filterNeedsReview = false;
+  let sidebarOpen = true;
+  let sidebarMode = "setup"; // "setup" | "job"
+  let encodeFilterMode = "all"; // "all" | "review"
+  let exploreFilterMode = "all"; // "all" | "unreviewed" | "compress" | "protected" | "repair"
+  let sortMode = "manual"; // "manual" | "largest" | "bitrate"
+  let dedupeAlsoSha256 = true;
+  let dedupePerceptual = true;
+  let dedupeScanning = false;
+  let organizeSideTab = "largest"; // "largest" | "duplicates" | "watermarks" | "faces" | "folder"
+  let organizeOverview = null;
+  let organizeOverviewQueueId = null;
+  let ocrScanning = false;
+  let faceScanning = false;
+  const orgSelectedByQueue = new Map(); // queue_id -> Set<job_id>
+  function getOrgSelectedSet(qid = activeQueueId) {
+    if (!qid) return new Set();
+    let s = orgSelectedByQueue.get(qid);
+    if (!s) {
+      s = new Set();
+      orgSelectedByQueue.set(qid, s);
+    }
+    return s;
+  }
+  let moveFolderTargetDir = "";
+  let moveSelectedTag = "";
+  let moveCopyOnly = false;
+  let movePreserveSubfolders = false;
+  let moveCollisionPolicy = "keep_existing";
+  let movePreviewResult = null;
+  let settingsTabOpen = false;
+  let currentPlatformView = "transcode";
+
+  const expandedJobIds = new Set();
+  const checkedJobIds = new Set();
+  const storyboardCache = new Map(); // job_id -> array of data/blob URLs
+  const storyboardInflight = new Set();
+  const repairLiveProgress = new Map(); // job_id -> progress obj
+
+  let stagingState = null;
   let livePreviewTimer = null;
   let currentLiveJobId = null;
   let openSampleRefresh = null;
-  let stagingState = null;
 
-  const $ = (id) => document.getElementById(id);
+  // =========================================================================
+  // 2. SNAPSHOT & HELPERS
+  // =========================================================================
+  function escapeHtml(s) {
+    if (s === null || s === undefined) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
 
-  function fmtBytes(bytes) {
-    if (bytes === null || bytes === undefined) return "—";
-    if (bytes === 0) return "0 B";
-    const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let val = bytes;
+  function fmtBytes(b) {
+    if (b === null || b === undefined) return "—";
+    if (b === 0) return "0 B";
+    const u = ["B", "KB", "MB", "GB", "TB"];
+    let v = b;
     let i = 0;
-    while (val >= 1024 && i < units.length - 1) {
-      val /= 1024;
+    while (v >= 1000 && i < u.length - 1) {
+      v /= 1000;
       i++;
     }
-    return `${val.toFixed(i === 0 ? 0 : val >= 100 ? 1 : 2)} ${units[i]}`;
+    return `${v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)} ${u[i]}`;
   }
 
-  function fmtDuration(secs) {
-    if (secs === null || secs === undefined || !isFinite(secs) || secs <= 0) return "—";
-    const s = Math.floor(secs);
+  function fmtDuration(s) {
+    if (!s || !isFinite(s)) return "0:00";
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
-    const r = s % 60;
-    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
-    return `${m}:${String(r).padStart(2, "0")}`;
+    const sec = Math.floor(s % 60);
+    const pad = (n) => String(n).padStart(2, "0");
+    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
   }
 
-  function fmtRatio(inputBytes, outputBytes) {
-    if (!inputBytes || !outputBytes || outputBytes === 0) return "—";
-    const ratio = inputBytes / outputBytes;
-    const pct = 100 * (1 - outputBytes / inputBytes);
-    if (pct >= 0) {
-      return `${ratio.toFixed(2)}:1 · ${Math.round(pct)}% smaller`;
-    }
-    return `${ratio.toFixed(2)}:1 · ${Math.round(Math.abs(pct))}% larger`;
+  function fmtRatio(inp, out) {
+    if (!out || out <= 0) return "—";
+    const pct = Math.round((1 - out / inp) * 100);
+    return `${(inp / out).toFixed(2)}:1 · ${pct}% smaller`;
+  }
+
+  function jobFileName(j) {
+    const p = j.source_rel_path || j.source_path || "";
+    const parts = p.split(/[\\/]/);
+    return parts[parts.length - 1] || p;
+  }
+
+  function jobVideoInfo(j) {
+    const isPendingStats = !j.probe && j.status_reason === "Computing media stats…";
+    const v = j.probe?.streams?.find((s) => s.codec_type === "video" && !s.disposition?.attached_pic);
+    const dur = j.probe?.format?.duration_secs || 0;
+    const br = j.probe?.format?.bit_rate || v?.bit_rate || (dur > 0 ? Math.round((j.input_bytes * 8) / dur) : 0);
+    const mbps = br > 0 ? +(br / 1_000_000).toFixed(1) : 0;
+    const codec = v?.codec_name ? v.codec_name.toUpperCase() : (isPendingStats ? "STATS…" : "VIDEO");
+    const res = v?.width && v?.height ? `${v.width}×${v.height}` : (isPendingStats ? "Computing stats…" : "—");
+    return { v, dur, br, mbps, codec, res, isPendingStats };
   }
 
   function activeQueue() {
     if (!snapshot) return null;
     return snapshot.queues.find((q) => q.id === snapshot.active_queue_id) || snapshot.queues[0] || null;
+  }
+
+  function isImagePath(p) {
+    return /\.(jpg|jpeg|png|webp|bmp|gif|tiff?|heic|heif)$/i.test(p || "");
+  }
+
+  function activeMode(q) {
+    const raw = (q?.tab_type || "encode").toLowerCase();
+    return raw === "dedupe" ? "organize" : raw;
+  }
+
+  function activeTabMeta(q) {
+    if (!q || !snapshot?.tab_meta) return { resource_source: null, forwarded_from: null, repair_refs: [], repair_video_only: false, repair_deep_scan: true, repair_timeout_secs: 300 };
+    return snapshot.tab_meta[q.id] || { resource_source: null, forwarded_from: null, repair_refs: [], repair_video_only: false, repair_deep_scan: true, repair_timeout_secs: 300 };
   }
 
   function activeQueueJobs() {
@@ -58,200 +179,1809 @@
     return snapshot.jobs.filter((j) => j.queue_id === q.id);
   }
 
-  async function refreshSnapshot() {
-    snapshot = await invoke("get_snapshot");
-    renderAll();
+  function jobDecision(j) {
+    return snapshot?.job_decisions?.[j.id] || "unreviewed";
   }
 
+  function isProtectedSource(sourcePath) {
+    return (snapshot?.protected_sources || []).includes(sourcePath);
+  }
+
+  function sharedQueueName(j) {
+    if (!snapshot) return null;
+    if (isProtectedSource(j.source_path)) return "Protected ★";
+    const other = snapshot.queues.find((oq) =>
+      oq.id !== j.queue_id && snapshot.jobs.some((oj) => oj.queue_id === oq.id && oj.source_path === j.source_path && oj.status !== "completed")
+    );
+    return other ? other.name : null;
+  }
+
+  function showToast(message, tone = "info", action = null) {
+    const container = $("toast-container");
+    if (!container) return;
+    const el = document.createElement("div");
+    el.className = `toast-item ${tone}`;
+    const span = document.createElement("span");
+    span.textContent = message;
+    el.appendChild(span);
+    if (action && action.label && typeof action.onClick === "function") {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn btn-sm";
+      btn.style.background = "rgba(255,255,255,0.18)";
+      btn.style.color = "#fff";
+      btn.textContent = action.label;
+      btn.onclick = () => {
+        action.onClick();
+        el.remove();
+      };
+      el.appendChild(btn);
+    }
+    container.appendChild(el);
+    setTimeout(() => el.remove(), action ? 4600 : 3000);
+  }
+
+  function findQueueVolumeInfo(q) {
+    if (!snapshot || !q) return null;
+    if (q.destination_root) {
+      const match = snapshot.volumes.find((v) => q.destination_root.startsWith(v.mount_point));
+      if (match) return match;
+    }
+    const jobs = activeQueueJobs();
+    if (jobs.length > 0 && jobs[0].dest_volume_id) {
+      return snapshot.volumes.find((v) => v.volume_id === jobs[0].dest_volume_id) || snapshot.volumes[0];
+    }
+    return snapshot.volumes[0] || null;
+  }
+
+  async function refreshSnapshot() {
+    snapshot = await invoke("get_snapshot");
+    const jobs = activeQueueJobs();
+    if (!selectedJobId || !jobs.some((j) => j.id === selectedJobId)) {
+      selectedJobId = jobs[0]?.id || null;
+    }
+    renderAll();
+    const q = activeQueue();
+    if (q && activeMode(q) === "organize") {
+      loadOrganizeOverview(q.id, true);
+    }
+  }
+
+  let orgOverviewInflight = null;
+  async function loadOrganizeOverview(queueId, force = false) {
+    if (!queueId) return;
+    if (!force && organizeOverviewQueueId === queueId && organizeOverview) return;
+    if (orgOverviewInflight === queueId && !force) return;
+    orgOverviewInflight = queueId;
+    try {
+      const ov = await invoke("tab_get_organize_overview", { queueId });
+      organizeOverview = ov;
+      organizeOverviewQueueId = queueId;
+      const tags = ov?.available_tags || [];
+      if (tags.length > 0 && (!moveSelectedTag || !tags.includes(moveSelectedTag))) {
+        moveSelectedTag = tags[0];
+      }
+      const q = activeQueue();
+      if (q && q.id === queueId && activeMode(q) === "organize") {
+        renderOrganizeView(q, activeQueueJobs());
+        renderActionBar();
+        renderSidebar();
+      }
+    } catch (_) {
+    } finally {
+      if (orgOverviewInflight === queueId) orgOverviewInflight = null;
+    }
+  }
+
+  // =========================================================================
+  // 3. TOP-LEVEL RENDERERS
+  // =========================================================================
   function renderAll() {
     if (!snapshot) return;
     renderTabs();
-    renderToolsPill();
-    const q = activeQueue();
-    const isRepair = q && q.tab_type === "repair";
-    $("encode-toolbar").classList.toggle("hidden", !!isRepair);
-    $("encode-config-strip").classList.toggle("hidden", !!isRepair);
-    $("encode-workspace").classList.toggle("hidden", !!isRepair);
-    $("repair-workspace").classList.toggle("hidden", !isRepair);
-    if (isRepair) {
-      $("banner-area").innerHTML = "";
-      renderRepairWorkspace();
-    } else {
-      renderToolbar();
-      renderConfigStrip();
-      renderBanners();
-      renderQueueList();
-      renderSidePanel();
-    }
+    renderActionBar();
+    renderLineageBar();
+    renderWorkspace();
+    renderSidebar();
     renderFooter();
   }
 
   function renderTabs() {
     const strip = $("tabs-strip");
     strip.innerHTML = "";
-    for (const q of snapshot.queues) {
-      const isActive = q.id === snapshot.active_queue_id;
+    const queues = snapshot.queues || [];
+    const activeIdx = queues.findIndex((q) => q.id === snapshot.active_queue_id);
+
+    queues.forEach((q, idx) => {
+      const isResourceActive = q.id === snapshot.active_queue_id && currentPlatformView === "transcode";
+      const beforeActive = currentPlatformView === "transcode"
+        ? idx === activeIdx - 1
+        : (settingsTabOpen && currentPlatformView === "settings" && idx === queues.length - 1);
+      const mode = activeMode(q);
+      const qJobs = (snapshot.jobs || []).filter((j) => j.queue_id === q.id);
+      const dedupeGroups = snapshot.tab_dedupe_groups?.[q.id] || [];
+      const count = mode === "organize" && organizeSideTab === "duplicates" && dedupeGroups.length > 0
+        ? dedupeGroups.reduce((a, g) => a + g.items.length, 0)
+        : qJobs.length;
+
+      const repairBusy = mode === "repair" && qJobs.some((j) => {
+        const rs = snapshot.tab_repair_items?.[j.id]?.status;
+        return rs === "diagnosing" || rs === "recovering";
+      });
+      const encBusy = mode === "encode" && q.is_running && !q.is_paused && qJobs.some((j) => ["encoding", "verifying", "publishing"].includes(j.status));
+      const meta = MODE_META[mode] || MODE_META.encode;
+
       const item = document.createElement("div");
-      item.className = "tab-item" + (isActive ? " active" : "");
+      item.className = "tab-item chrome-tab " + (isResourceActive ? "active chrome-tab-active" : "chrome-tab-inactive") + (beforeActive ? " hide-divider" : "");
 
       const btn = document.createElement("button");
       btn.type = "button";
       btn.role = "tab";
       btn.className = "tab-select-btn";
-      btn.setAttribute("aria-selected", String(isActive));
+      btn.setAttribute("aria-selected", String(isResourceActive));
 
-      const dot = document.createElement("span");
-      const sess = (snapshot.repair_sessions || []).find((s) => s.queue_id === q.id);
-      const repairBusy = q.tab_type === "repair" && sess && (sess.status === "diagnosing" || sess.status === "recovering");
-      dot.className = "dot " + ((q.is_running && !q.is_paused) || repairBusy ? "pulse" : q.is_paused ? "" : "ok");
-      btn.appendChild(dot);
+      const iconWrap = document.createElement("span");
+      iconWrap.className = "tab-mode-icon";
+      if (mode === "encode" && (encBusy || qJobs.some((j) => j.status === "encoding"))) {
+        iconWrap.style.color = "#F59E0B";
+      }
+      iconWrap.title = meta.fullLabel;
+      iconWrap.innerHTML = encBusy || repairBusy ? `<span class="dot pulse" style="margin-right:2px;"></span>${meta.icon}` : meta.icon;
+      btn.appendChild(iconWrap);
 
       const label = document.createElement("span");
+      label.className = "tab-label";
       label.textContent = q.name;
       btn.appendChild(label);
 
-      btn.addEventListener("click", () => invoke("select_queue_tab", { queueId: q.id }));
+      const pill = document.createElement("span");
+      pill.className = "tab-count-pill";
+      pill.textContent = String(count);
+      btn.appendChild(pill);
+
+      btn.addEventListener("click", async () => {
+        if (currentPlatformView !== "transcode") {
+          window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "transcode" } }));
+        }
+        if (q.id !== snapshot.active_queue_id) {
+          await invoke("select_queue_tab", { queueId: q.id });
+        } else {
+          renderTabs();
+        }
+      });
       btn.addEventListener("dblclick", () => {
-        openPromptModal("Rename Tab", "Tab name:", q.name, async (next) => {
+        openPromptModal("Rename Resource Tab", "Tab name:", q.name, async (next) => {
           await invoke("rename_queue_tab", { queueId: q.id, name: next });
         });
       });
       item.appendChild(btn);
 
-      if (isActive) {
-        const modeSel = document.createElement("select");
-        modeSel.className = "tab-mode-select";
-        modeSel.title = "Switch tab feature mode";
-        modeSel.setAttribute("aria-label", "Tab mode");
-        modeSel.innerHTML = `
-          <option value="encode">Encode</option>
-          <option value="repair">Repair</option>
-        `;
-        modeSel.value = q.tab_type || "encode";
-        modeSel.addEventListener("click", (e) => e.stopPropagation());
-        modeSel.addEventListener("change", async (e) => {
-          e.stopPropagation();
-          try {
-            await invoke("set_queue_tab_type", { queueId: q.id, tabType: e.target.value });
-          } catch (err) {
-            alert(err);
-          }
-        });
-        item.appendChild(modeSel);
-      } else {
-        const pill = document.createElement("span");
-        pill.className = "tab-type-pill";
-        pill.textContent = q.tab_type === "repair" ? "Repair" : "Encode";
-        item.appendChild(pill);
-      }
-
-      if (snapshot.queues.length > 1) {
+      if (queues.length > 1) {
         const close = document.createElement("button");
         close.type = "button";
         close.className = "tab-close";
-        close.textContent = "×";
+        close.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>`;
         close.title = "Close tab";
-        close.addEventListener("click", async (e) => {
+        close.addEventListener("click", (e) => {
           e.stopPropagation();
-          try {
-            await invoke("delete_queue_tab", { queueId: q.id });
-          } catch (err) {
-            alert(err);
-          }
+          requestCloseTab(q, count, encBusy || repairBusy);
         });
         item.appendChild(close);
       }
+
       strip.appendChild(item);
+    });
+
+    // Special System Tab: Settings (pinned cleanly at the end of the strip when open)
+    if (settingsTabOpen) {
+      const isSettingsActive = currentPlatformView === "settings";
+      const sItem = document.createElement("div");
+      sItem.className = "tab-item chrome-tab " + (isSettingsActive ? "active chrome-tab-active" : "chrome-tab-inactive");
+
+      const sBtn = document.createElement("button");
+      sBtn.type = "button";
+      sBtn.role = "tab";
+      sBtn.className = "tab-select-btn";
+      sBtn.setAttribute("aria-selected", String(isSettingsActive));
+      sBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg><span class="tab-label">Settings</span>`;
+      sBtn.onclick = () => {
+        window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "settings" } }));
+      };
+      sItem.appendChild(sBtn);
+
+      const sClose = document.createElement("button");
+      sClose.type = "button";
+      sClose.className = "tab-close";
+      sClose.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>`;
+      sClose.title = "Close Settings tab";
+      sClose.onclick = (e) => {
+        e.stopPropagation();
+        settingsTabOpen = false;
+        if (currentPlatformView === "settings") {
+          window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "transcode" } }));
+        } else {
+          renderTabs();
+        }
+      };
+      sItem.appendChild(sClose);
+      strip.appendChild(sItem);
     }
   }
 
-  function renderToolsPill() {
-    const ts = snapshot.tools;
-    const dot = $("tool-dot");
-    const lbl = $("tool-label");
-    if (ts.discovered && ts.capabilities) {
-      dot.className = "dot ok";
-      const codecs = ts.capabilities.available_codecs.map((c) => c.toUpperCase()).join("+") || "Remux only";
-      lbl.textContent = `FFmpeg ready (${codecs})`;
-    } else {
-      dot.className = "dot err";
-      lbl.textContent = "Locate FFmpeg tools";
+  function requestCloseTab(q, count, isBusy) {
+    if (snapshot.queues.length <= 1) {
+      return showToast("At least one workspace tab must remain open.", "info");
     }
+    if (count === 0 && !isBusy) {
+      invoke("delete_queue_tab", { queueId: q.id }).catch((e) => showToast(String(e), "warn"));
+      return;
+    }
+    if (isBusy) {
+      return showToast("Pause or cancel active work in this tab before closing it.", "warn");
+    }
+    openModal(
+      `Delete "${q.name}" tab?`,
+      `<p>This ${(MODE_META[activeMode(q)] || MODE_META.encode).fullLabel} tab holds <strong>${count}</strong> item${count === 1 ? "" : "s"}. Deleting the tab removes its workspace list only — your original videos on disk are never touched.</p>`,
+      [
+        { label: "Cancel", cls: "btn", onClick: closeModal },
+        {
+          label: "Delete Tab",
+          cls: "btn btn-danger",
+          onClick: async () => {
+            closeModal();
+            try {
+              await invoke("delete_queue_tab", { queueId: q.id });
+              showToast(`Deleted tab "${q.name}"`, "info");
+            } catch (err) {
+              showToast(String(err), "warn");
+            }
+          },
+        },
+      ]
+    );
   }
 
-  function renderToolbar() {
+  function renderActionBar() {
     const q = activeQueue();
     if (!q) return;
-    $("chk-recursive").checked = q.recursive_import;
-    $("lbl-dest-root").textContent = q.destination_root || "Auto (next to source)";
+    const mode = activeMode(q);
+    const jobs = activeQueueJobs();
 
-    const vol = findQueueVolumeInfo(q);
-    if (vol) {
-      const resStr = vol.reserve_bytes > 0 ? ` · reserve ${fmtBytes(vol.reserve_bytes)}` : "";
-      $("lbl-dest-space").textContent = `${fmtBytes(vol.free_bytes)} free${resStr}`;
+    // Update mode switcher active state
+    document.querySelectorAll("#tab-mode-switcher .tab-mode-btn").forEach((btn) => {
+      const targetMode = btn.getAttribute("data-tab-mode");
+      btn.classList.toggle("active", targetMode === mode);
+    });
+
+    // Show Preview 15s in Explore & Transcode when resources attached
+    const prevBtn = $("btn-preview-15s");
+    const showPreview = (mode === "explore" || mode === "encode") && jobs.length > 0;
+    prevBtn.classList.toggle("hidden", !showPreview);
+
+    // Compact Policy Chip
+    const chip = $("toolbar-summary-chip");
+    if (mode === "encode") {
+      const r = q.recipe;
+      const recStr = r.family === "remux" ? `Remux · ${r.container.toUpperCase()}` : `${r.codec.toUpperCase()} CRF ${r.crf} · ${r.container.toUpperCase()}`;
+      const polStr = q.cleanup_policy === "keep_originals" ? "Keep originals" : q.cleanup_policy === "review_after_completion" ? "Review originals" : "Trash verified";
+      chip.textContent = `${recStr} · ${polStr}`;
+    } else if (mode === "explore") {
+      chip.textContent = "Sort largest first · Protect masters · Forward rest";
+    } else if (mode === "organize") {
+      chip.textContent = "Largest · Duplicates & Hash Cache · Watermarks · Faces · Folders";
     } else {
-      $("lbl-dest-space").textContent = "Reserve: 0 B";
+      chip.textContent = "Non-destructive repair · Writes new verified MP4/MKV";
     }
 
-    const polMap = {
-      keep_originals: "Keep originals",
-      review_after_completion: "Review after completion",
-      trash_after_each_file: "Trash verified originals",
-    };
-    $("lbl-cleanup-policy").textContent = polMap[q.cleanup_policy] || "Keep originals";
+    // Forward button state + count
+    const fwdPlan = getDefaultForwardPlan(q, jobs);
+    const fwdBtn = $("btn-forward-tab");
+    const fwdCount = $("forward-tab-count");
+    fwdBtn.disabled = jobs.length === 0;
+    if (fwdPlan.jobIds.length > 0) {
+      fwdCount.textContent = String(fwdPlan.jobIds.length);
+      fwdCount.classList.remove("hidden");
+    } else {
+      fwdCount.classList.add("hidden");
+    }
 
-    const jobs = activeQueueJobs();
-    const readyCount = jobs.filter((j) => j.status === "ready" || j.status === "queued").length;
-    const reviewCount = jobs.filter((j) => j.status === "needs_attention").length;
-    const interCount = jobs.filter((j) => j.status === "interrupted").length;
-
-    const parts = [`${readyCount} ready`];
-    if (reviewCount > 0) parts.push(`${reviewCount} need review`);
-    if (interCount > 0) parts.push(`${interCount} interrupted`);
-    $("lbl-counts").textContent = parts.join(" · ") + (filterNeedsReview ? " (filtered)" : "");
-
-    const activeInQueue = jobs.some((j) => ["encoding", "verifying", "publishing"].includes(j.status));
+    // Filter pills & Primary CTA per mode
+    const pills = $("filter-pills-container");
+    pills.innerHTML = "";
     const startBtn = $("btn-start-queue");
     const pauseBtn = $("btn-pause-after");
     const cancelBtn = $("btn-cancel-current");
+    pauseBtn.classList.add("hidden");
+    cancelBtn.classList.add("hidden");
 
-    if (q.is_running && !q.is_paused) {
-      startBtn.classList.add("hidden");
-      pauseBtn.classList.remove("hidden");
-      pauseBtn.textContent = q.pause_after_current ? "Pausing after current…" : "Pause after current file";
-      pauseBtn.disabled = q.pause_after_current;
-      cancelBtn.classList.toggle("hidden", !activeInQueue);
-    } else {
-      startBtn.classList.remove("hidden");
-      pauseBtn.classList.add("hidden");
-      cancelBtn.classList.add("hidden");
-      if (q.is_paused || interCount > 0) {
-        startBtn.textContent = `Resume queue (${readyCount + interCount})`;
-      } else {
-        startBtn.textContent = readyCount > 0 ? `Start ${readyCount} ready files` : "Start queue";
+    if (mode === "encode") {
+      const selectable = (j) => ["queued", "ready", "canceled"].includes(j.status) && !j.error_message;
+      const selectedReadyCount = jobs.filter((j) => checkedJobIds.has(j.id) && selectable(j) && j.plan?.is_ready).length;
+      const selectedProbingCount = jobs.filter((j) => checkedJobIds.has(j.id) && selectable(j) && !j.plan).length;
+      const readyCount = jobs.filter((j) => ["queued", "ready"].includes(j.status)).length;
+      const attCount = jobs.filter((j) => j.status === "needs_attention").length;
+      const activeJob = jobs.find((j) => ["encoding", "verifying", "publishing"].includes(j.status));
+      const interruptedCount = jobs.filter((j) => j.status === "interrupted").length;
+
+      if (readyCount > 0 || activeJob) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "pill-filter-btn" + (encodeFilterMode === "all" ? " active" : "");
+        b.textContent = activeJob ? `1 active · ${jobs.length} total` : `${jobs.length} files`;
+        b.onclick = () => { encodeFilterMode = "all"; renderWorkspace(); renderActionBar(); };
+        pills.appendChild(b);
       }
-      startBtn.disabled = readyCount === 0 && interCount === 0;
+      if (attCount > 0) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "pill-filter-btn" + (encodeFilterMode === "review" ? " active" : "");
+        b.textContent = `${attCount} need review`;
+        b.onclick = () => { encodeFilterMode = encodeFilterMode === "review" ? "all" : "review"; renderWorkspace(); renderActionBar(); };
+        pills.appendChild(b);
+      }
+
+      const runningActive = q.is_running && !q.is_paused && (activeJob || readyCount > 0);
+      if (runningActive && activeJob) {
+        pauseBtn.classList.remove("hidden");
+        pauseBtn.textContent = q.pause_after_current ? "Pause scheduled" : "Pause after file";
+        cancelBtn.classList.remove("hidden");
+        startBtn.disabled = false;
+        startBtn.textContent = "Queue Running";
+      } else if (q.is_paused || interruptedCount > 0) {
+        startBtn.disabled = false;
+        startBtn.textContent = "Resume Queue";
+      } else {
+        startBtn.disabled = selectedReadyCount === 0;
+        startBtn.textContent = selectedReadyCount > 0
+          ? `Encode ${selectedReadyCount} Selected`
+          : selectedProbingCount > 0
+            ? `Waiting Stats (${selectedProbingCount})…`
+            : "Select Files to Encode";
+      }
+    } else if (mode === "explore") {
+      const compCount = jobs.filter((j) => ["compress_balanced", "compress_compact"].includes(jobDecision(j))).length;
+      startBtn.disabled = compCount === 0;
+      startBtn.textContent = compCount > 0 ? `Send ${compCount} to Transcode` : "Tag Videos to Compress";
+    } else if (mode === "organize") {
+      const trashCount = getOrgSelectedSet(q?.id).size;
+      startBtn.disabled = jobs.length === 0 || dedupeScanning || ocrScanning || faceScanning;
+      if (organizeSideTab === "duplicates") {
+        if (dedupeScanning) {
+          startBtn.textContent = "Scanning…";
+        } else if (trashCount > 0) {
+          startBtn.textContent = `Delete ${trashCount} Selected`;
+        } else {
+          startBtn.textContent = "Scan Duplicates";
+          startBtn.disabled = jobs.length < 2;
+        }
+      } else if (organizeSideTab === "watermarks") {
+        startBtn.textContent = ocrScanning ? "Extracting…" : "Extract Watermarks";
+      } else if (organizeSideTab === "faces") {
+        startBtn.textContent = faceScanning ? "Grouping…" : "Detect People";
+      } else if (organizeSideTab === "folder") {
+        startBtn.textContent = "Preview Move/Copy";
+      } else {
+        startBtn.textContent = trashCount > 0 ? `Delete ${trashCount} Selected` : "Scan Duplicates";
+      }
+    } else if (mode === "repair") {
+      const unrepaired = jobs.filter((j) => {
+        const st = snapshot.tab_repair_items?.[j.id]?.status;
+        return !["recovered", "partial_recovery"].includes(st);
+      });
+      const busy = jobs.some((j) => ["diagnosing", "recovering"].includes(snapshot.tab_repair_items?.[j.id]?.status));
+      startBtn.disabled = jobs.length === 0 || busy || unrepaired.length === 0;
+      startBtn.textContent = busy ? "Repairing…" : unrepaired.length > 0 ? `Repair ${unrepaired.length} Clip${unrepaired.length > 1 ? "s" : ""}` : "All Clips Repaired";
     }
   }
 
-  function findQueueVolumeInfo(q) {
-    if (!snapshot.volumes.length) return null;
-    if (q.destination_root) {
-      return (
-        snapshot.volumes.find((v) => q.destination_root.startsWith(v.mount_point)) ||
-        snapshot.volumes[0]
-      );
+  const statsProgressByQueue = new Map(); // queueId -> { done, total, current_file }
+  function renderLineageBar() {
+    const q = activeQueue();
+    const bar = $("resource-lineage-bar");
+    const jobs = activeQueueJobs();
+    if (!q || jobs.length === 0) {
+      bar.classList.add("hidden");
+      return;
     }
-    return snapshot.volumes[0];
+    bar.classList.remove("hidden");
+    const meta = activeTabMeta(q);
+    const totalBytes = jobs.reduce((a, b) => a + (b.input_bytes || 0), 0);
+    const badgeHtml = meta.forwarded_from
+      ? `<span class="badge" style="margin-right:6px;">← Forwarded from ${escapeHtml(meta.forwarded_from)}</span>`
+      : "";
+    $("resource-lineage-text").innerHTML = `${badgeHtml}<span>${escapeHtml(meta.resource_source || `${jobs.length} attached resource${jobs.length === 1 ? "" : "s"}`)}</span>`;
+    const sp = statsProgressByQueue.get(q.id);
+    const statsLabel = sp && sp.done < sp.total
+      ? `Analyzing stats ${sp.done}/${sp.total}… · `
+      : "";
+    $("resource-lineage-meta").textContent = `${statsLabel}${(MODE_META[activeMode(q)] || MODE_META.encode).fullLabel} · ${jobs.length} items · ${fmtBytes(totalBytes)}`;
   }
 
-  function renderConfigStrip() {
+  function renderWorkspace() {
     const q = activeQueue();
     if (!q) return;
+    const mode = activeMode(q);
+    const jobs = activeQueueJobs();
 
-    // Profiles dropdown
+    const views = {
+      explore: $("mode-view-explore"),
+      encode: $("mode-view-encode"),
+      organize: $("mode-view-organize"),
+      repair: $("mode-view-repair"),
+    };
+    Object.values(views).forEach((el) => el.classList.add("hidden"));
+    $("forward-sticky-bar").classList.add("hidden");
+
+    if (jobs.length === 0) {
+      $("empty-drop-state").classList.remove("hidden");
+      renderEmptyState(q, mode);
+      return;
+    }
+    $("empty-drop-state").classList.add("hidden");
+
+    if (mode === "explore") {
+      views.explore.classList.remove("hidden");
+      renderExploreView(q, jobs);
+    } else if (mode === "organize") {
+      views.organize.classList.remove("hidden");
+      renderOrganizeView(q, jobs);
+    } else if (mode === "repair") {
+      views.repair.classList.remove("hidden");
+      renderRepairView(q, jobs);
+    } else {
+      views.encode.classList.remove("hidden");
+      renderBanners(q, jobs);
+      renderQueueList(q, jobs);
+    }
+  }
+
+  function renderEmptyState(q, mode) {
+    const meta = MODE_META[mode] || MODE_META.encode;
+    $("empty-drop-title").textContent = `Attach videos or a folder to "${q.name}"`;
+    $("empty-defaults-summary").textContent = `Active mode: ${meta.fullLabel} — ${meta.desc}`;
+
+    const picker = $("empty-mode-picker");
+    picker.innerHTML = Object.entries(MODE_META).map(([key, m]) => `
+      <button type="button" data-empty-mode="${key}" class="empty-mode-card ${key === mode ? "active" : ""}">
+        <div class="inline-row" style="gap:6px;font-size:12px;font-weight:600;">${m.icon}<span>${m.label}</span></div>
+        <div class="muted" style="font-size:10.5px;margin-top:4px;line-height:1.35;">${escapeHtml(m.desc)}</div>
+      </button>
+    `).join("");
+
+    picker.querySelectorAll("[data-empty-mode]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const nextMode = btn.getAttribute("data-empty-mode");
+        await invoke("set_queue_tab_type", { queueId: q.id, tabType: nextMode });
+      });
+    });
+  }
+
+  // =========================================================================
+  // 4. MODE VIEWS: EXPLORE | TRANSCODE | ORGANIZE | REPAIR
+  // =========================================================================
+  function renderExploreView(q, jobs) {
+    const el = $("mode-view-explore");
+    const counts = {
+      all: jobs.length,
+      unreviewed: jobs.filter((j) => jobDecision(j) === "unreviewed").length,
+      compress: jobs.filter((j) => ["compress_balanced", "compress_compact"].includes(jobDecision(j))).length,
+      protected: jobs.filter((j) => jobDecision(j) === "protected").length,
+      repair: jobs.filter((j) => jobDecision(j) === "repair").length,
+    };
+
+    let visible = [...jobs];
+    if (exploreFilterMode === "unreviewed") visible = visible.filter((j) => jobDecision(j) === "unreviewed");
+    else if (exploreFilterMode === "compress") visible = visible.filter((j) => ["compress_balanced", "compress_compact"].includes(jobDecision(j)));
+    else if (exploreFilterMode === "protected") visible = visible.filter((j) => jobDecision(j) === "protected");
+    else if (exploreFilterMode === "repair") visible = visible.filter((j) => jobDecision(j) === "repair");
+
+    if (sortMode === "bitrate") visible.sort((a, b) => jobVideoInfo(b).br - jobVideoInfo(a).br);
+    else visible.sort((a, b) => b.input_bytes - a.input_bytes);
+
+    const maxBytes = Math.max(1, ...jobs.map((j) => j.input_bytes || 0));
+
+    el.innerHTML = `
+      <div class="explore-filter-bar">
+        <div class="inline-row" style="flex-wrap:wrap;">
+          ${[
+            ["all", `All (${counts.all})`],
+            ["unreviewed", `Unreviewed (${counts.unreviewed})`],
+            ["compress", `To Compress (${counts.compress})`],
+            ["protected", `Protected ★ (${counts.protected})`],
+            ["repair", `Repair (${counts.repair})`],
+          ].map(([k, lbl]) => `<button type="button" data-exp-flt="${k}" class="pill-filter-btn ${exploreFilterMode === k ? "active" : ""}">${lbl}</button>`).join("")}
+        </div>
+        <label class="inline-row muted" style="font-size:12px;">
+          <span>Sort:</span>
+          <select id="sel-explore-sort" class="compact-sel">
+            <option value="largest" ${sortMode !== "bitrate" ? "selected" : ""}>Largest First (Reclaim Max GB)</option>
+            <option value="bitrate" ${sortMode === "bitrate" ? "selected" : ""}>Highest Bitrate First</option>
+          </select>
+        </label>
+      </div>
+      <div id="explore-rows-list" class="sidebar-panel-stack"></div>
+    `;
+
+    el.querySelectorAll("[data-exp-flt]").forEach((b) => {
+      b.onclick = () => {
+        exploreFilterMode = b.getAttribute("data-exp-flt");
+        renderExploreView(q, jobs);
+      };
+    });
+    el.querySelector("#sel-explore-sort").onchange = (e) => {
+      sortMode = e.target.value;
+      renderExploreView(q, jobs);
+    };
+
+    const list = el.querySelector("#explore-rows-list");
+    for (const j of visible) {
+      const dec = jobDecision(j);
+      const info = jobVideoInfo(j);
+      const pct = Math.max(4, Math.round(((j.input_bytes || 0) / maxBytes) * 100));
+      const row = document.createElement("article");
+      const decCls = dec === "protected" ? "dec-protected" : dec.startsWith("compress") ? "dec-compress" : dec === "repair" ? "dec-repair" : "";
+      row.className = `explore-row ${decCls} ${j.id === selectedJobId ? "selected" : ""}`;
+
+      let badgeHtml = `<span class="badge">Unreviewed</span>`;
+      if (dec === "protected") badgeHtml = `<span class="badge badge-warn">★ Protected · Keep Original</span>`;
+      else if (dec === "compress_balanced") badgeHtml = `<span class="badge badge-ok">Compress · Balanced HEVC</span>`;
+      else if (dec === "compress_compact") badgeHtml = `<span class="badge badge-ok">Compress · Compact AV1</span>`;
+      else if (dec === "repair") badgeHtml = `<span class="badge badge-err">Needs Repair</span>`;
+
+      row.innerHTML = `
+        <div class="explore-size-fill" style="width:${pct}%"></div>
+        <div class="explore-row-inner">
+          <div class="min-w-0" style="flex:1;">
+            <div class="inline-row" style="flex-wrap:wrap;gap:6px;">
+              <strong style="font-size:13px;">${escapeHtml(jobFileName(j))}</strong>
+              ${badgeHtml}
+            </div>
+            <div class="muted tabular-nums" style="font-size:11.5px;margin-top:3px;">
+              ${escapeHtml(info.codec)} · ${escapeHtml(info.res)} · ${info.mbps > 0 ? info.mbps + " Mbps" : "—"} · ${fmtDuration(info.dur)} · <span class="mono">${escapeHtml(j.source_rel_path)}</span>
+            </div>
+          </div>
+          <div class="inline-row" style="gap:10px;">
+            <div style="text-align:right;" class="tabular-nums">
+              <div style="font-size:13px;font-weight:700;">${fmtBytes(j.input_bytes)}</div>
+              <div class="muted" style="font-size:10.5px;">${pct}% of largest</div>
+            </div>
+            <div class="triage-group">
+              <button type="button" class="triage-btn ${dec === "protected" ? "active-protect" : ""}" data-tag="${j.id}:protected">★ Keep</button>
+              <button type="button" class="triage-btn ${dec === "compress_balanced" ? "active-balanced" : ""}" data-tag="${j.id}:compress_balanced">Balanced</button>
+              <button type="button" class="triage-btn ${dec === "compress_compact" ? "active-compact" : ""}" data-tag="${j.id}:compress_compact">Compact</button>
+              <button type="button" class="triage-btn ${dec === "repair" ? "active-repair" : ""}" data-tag="${j.id}:repair">Repair</button>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" data-rm="${j.id}" title="Remove from tab">×</button>
+          </div>
+        </div>
+      `;
+
+      row.addEventListener("click", (e) => {
+        if (e.target.closest("button")) return;
+        selectedJobId = j.id;
+        sidebarMode = "job";
+        sidebarOpen = true;
+        renderAll();
+      });
+      row.querySelectorAll("[data-tag]").forEach((b) => {
+        b.onclick = async (e) => {
+          e.stopPropagation();
+          const [jid, val] = b.getAttribute("data-tag").split(":");
+          const next = dec === val ? "unreviewed" : val;
+          selectedJobId = jid;
+          await invoke("set_job_decision", { jobId: jid, decision: next });
+        };
+      });
+      row.querySelector("[data-rm]").onclick = (e) => {
+        e.stopPropagation();
+        invoke("remove_pending_jobs", { jobIds: [j.id] });
+      };
+      list.appendChild(row);
+    }
+
+    // Sticky pipeline handoff bar
+    const compressItems = jobs.filter((j) => ["compress_balanced", "compress_compact"].includes(jobDecision(j)));
+    const repairItems = jobs.filter((j) => jobDecision(j) === "repair");
+    if (compressItems.length > 0 || repairItems.length > 0) {
+      const bar = $("forward-sticky-bar");
+      bar.classList.remove("hidden");
+      const compBytes = compressItems.reduce((a, b) => a + b.input_bytes, 0);
+      bar.innerHTML = `
+        <div class="tabular-nums" style="font-size:12px;">
+          <strong>Ready to forward:</strong>
+          ${compressItems.length > 0 ? `<span style="color:var(--ok);margin-left:8px;">${compressItems.length} to Compress (${fmtBytes(compBytes)})</span>` : ""}
+          ${repairItems.length > 0 ? `<span style="color:var(--danger);margin-left:8px;">${repairItems.length} to Repair</span>` : ""}
+        </div>
+        <div class="inline-row">
+          ${repairItems.length > 0 ? `<button type="button" id="stk-fwd-repair" class="btn btn-sm btn-danger-outline">Forward ${repairItems.length} → Repair Tab</button>` : ""}
+          ${compressItems.length > 0 ? `<button type="button" id="stk-fwd-transcode" class="btn btn-sm btn-primary">Forward ${compressItems.length} → Transcode Tab</button>` : ""}
+        </div>
+      `;
+      bar.querySelector("#stk-fwd-transcode")?.addEventListener("click", () => {
+        openForwardModal(compressItems.map((j) => j.id), "encode", "clips tagged for compression", false);
+      });
+      bar.querySelector("#stk-fwd-repair")?.addEventListener("click", () => {
+        openForwardModal(repairItems.map((j) => j.id), "repair", "damaged clips for repair", false);
+      });
+    }
+  }
+
+  function renderBanners(q, jobs) {
+    const area = $("banner-area");
+    area.innerHTML = "";
+    const ms = snapshot.morning_summary;
+    const activeSummary = ms && ms.queue_id === q.id ? ms : null;
+    const completed = jobs.filter((j) => j.status === "completed");
+
+    if (activeSummary && completed.length > 0 && activeSummary.total_input_bytes > 0) {
+      const savedBytes = Math.max(0, activeSummary.total_input_bytes - activeSummary.total_output_bytes);
+      const pct = Math.round((1 - activeSummary.total_output_bytes / activeSummary.total_input_bytes) * 100);
+      const b = document.createElement("div");
+      b.className = "banner-card ok";
+      b.innerHTML = `
+        <div>
+          <div class="inline-row" style="gap:8px;flex-wrap:wrap;">
+            <strong>${fmtBytes(activeSummary.total_input_bytes)} input → ${fmtBytes(activeSummary.total_output_bytes)} output</strong>
+            <span class="badge badge-ok">${pct}% smaller · ${fmtBytes(savedBytes)} saved</span>
+          </div>
+          <div class="muted tabular-nums" style="font-size:12px;margin-top:2px;">
+            ${activeSummary.completed_count} verified · ${activeSummary.kept_count} originals kept · ${activeSummary.trashed_count} moved to Trash
+          </div>
+        </div>
+        <div class="inline-row">
+          <button type="button" id="bn-show-output" class="btn btn-sm btn-secondary">Show Output</button>
+          <button type="button" id="bn-review-originals" class="btn btn-sm btn-primary">Review Originals…</button>
+        </div>
+      `;
+      b.querySelector("#bn-show-output").onclick = () => invoke("reveal_output", { path: completed[0].destination_path });
+      b.querySelector("#bn-review-originals").onclick = () => openReviewOriginalsModal(q.id);
+      area.appendChild(b);
+    }
+
+    const otherRunning = snapshot.queues.find((oq) =>
+      oq.id !== q.id && oq.is_running && !oq.is_paused && snapshot.jobs.some((j) => j.queue_id === oq.id && ["encoding", "verifying"].includes(j.status))
+    );
+    if (q.waiting_reason || (otherRunning && q.is_running && !q.is_paused)) {
+      const w = document.createElement("div");
+      w.className = "banner-card warn";
+      const txt = q.waiting_reason || `Waiting: "${otherRunning.name}" is using the single-encoder engine.`;
+      w.innerHTML = `
+        <span style="font-size:12px;">${escapeHtml(txt)}</span>
+        ${otherRunning ? `<button type="button" id="bn-jump-active" class="btn-link">View ${escapeHtml(otherRunning.name)} →</button>` : ""}
+      `;
+      w.querySelector("#bn-jump-active")?.addEventListener("click", () => invoke("select_queue_tab", { queueId: otherRunning.id }));
+      area.appendChild(w);
+    }
+  }
+
+  function jobStatusIconHtml(status) {
+    if (["encoding", "verifying", "publishing"].includes(status)) {
+      return `<span class="job-status-icon running"><svg class="ms-spinner" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12a9 9 0 1 1-6.219-8.56" stroke-linecap="round"/></svg></span>`;
+    }
+    if (status === "completed") {
+      return `<span class="job-status-icon done"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>`;
+    }
+    if (["failed", "needs_attention"].includes(status)) {
+      return `<span class="job-status-icon failed"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>`;
+    }
+    if (["interrupted", "canceled"].includes(status)) {
+      return `<span class="job-status-icon paused"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="10" y1="15" x2="10" y2="9"/><line x1="14" y1="15" x2="14" y2="9"/></svg></span>`;
+    }
+    return `<span class="job-status-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg></span>`;
+  }
+
+  function isModernCodec(codecUpper) {
+    return ["HEVC", "H265", "AV1"].includes((codecUpper || "").toUpperCase());
+  }
+
+  function isEncodeSelectableJob(j) {
+    return ["queued", "ready", "canceled"].includes(j.status) && !j.error_message;
+  }
+
+  function renderQueueList(q, allJobs) {
+    let jobs = [...allJobs];
+    if (encodeFilterMode === "review") jobs = jobs.filter((j) => j.status === "needs_attention");
+    if (sortMode === "largest") jobs.sort((a, b) => b.input_bytes - a.input_bytes);
+    else if (sortMode === "bitrate") jobs.sort((a, b) => jobVideoInfo(b).br - jobVideoInfo(a).br);
+
+    const totalBytes = allJobs.reduce((a, b) => a + (b.input_bytes || 0), 0);
+    const checkedJobs = allJobs.filter((j) => checkedJobIds.has(j.id) && isEncodeSelectableJob(j));
+    const checkedBytes = checkedJobs.reduce((a, b) => a + (b.input_bytes || 0), 0);
+    $("lbl-queue-filter-bar").textContent = `${jobs.length} of ${allJobs.length} files · ${fmtBytes(totalBytes)} source`;
+    if ($("lbl-encode-sel-pill")) {
+      $("lbl-encode-sel-pill").textContent = `${checkedJobs.length} selected (${fmtBytes(checkedBytes)})`;
+      $("lbl-encode-sel-pill").classList.toggle("hidden", checkedJobs.length === 0);
+    }
+    if ($("btn-desel-all")) {
+      $("btn-desel-all").classList.toggle("hidden", checkedJobs.length === 0);
+    }
+    $("sel-queue-sort").value = sortMode;
+
+    const alreadyHevc = allJobs.filter((j) => ["queued", "ready"].includes(j.status) && isModernCodec(jobVideoInfo(j).codec));
+    const skipBtn = $("btn-triage-skip-hevc");
+    skipBtn.classList.toggle("hidden", alreadyHevc.length === 0);
+    if (alreadyHevc.length > 0) skipBtn.textContent = `Remove ${alreadyHevc.length} HEVC/AV1`;
+
+    const hasEncoding = allJobs.some((j) => j.status === "encoding");
+    $("btn-live-monitor").classList.toggle("hidden", !hasEncoding);
+
+    const hasRetryable = allJobs.some((j) => ["failed", "canceled", "interrupted", "needs_attention"].includes(j.status) && j.status_reason !== "Not selected");
+    const hasFinished = allJobs.some((j) => ["completed", "below_savings_target", "canceled"].includes(j.status));
+    $("btn-retry-failed").classList.toggle("hidden", !hasRetryable);
+    $("btn-clear-completed").classList.toggle("hidden", !hasFinished);
+
+    const rowsEl = $("queue-rows");
+    rowsEl.innerHTML = "";
+    const activeProg = snapshot.active_progress;
+
+    const selectableVisible = jobs.filter(isEncodeSelectableJob);
+    const checkedVisibleCount = selectableVisible.filter((j) => checkedJobIds.has(j.id)).length;
+    const allVisibleChecked = selectableVisible.length > 0 && checkedVisibleCount === selectableVisible.length;
+    const someVisibleChecked = checkedVisibleCount > 0 && !allVisibleChecked;
+
+    const tbl = document.createElement("table");
+    tbl.className = "transcode-table";
+    tbl.innerHTML = `
+      <thead>
+        <tr>
+          <th style="width:34px;"><input type="checkbox" id="tc-chk-master" ${allVisibleChecked ? "checked" : ""} ${selectableVisible.length === 0 ? "disabled" : ""} title="Toggle all selectable files" /></th>
+          <th>File</th>
+          <th>Codec</th>
+          <th>Resolution</th>
+          <th>Duration</th>
+          <th style="text-align:right;">Size</th>
+          <th style="text-align:right;">Bitrate</th>
+          <th>Target Recipe</th>
+          <th>Queue Status</th>
+          <th style="text-align:right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    `;
+    const tbody = tbl.querySelector("tbody");
+    const masterChk = tbl.querySelector("#tc-chk-master");
+    if (masterChk) masterChk.indeterminate = someVisibleChecked;
+
+    masterChk.addEventListener("change", (e) => {
+      if (e.target.checked) selectableVisible.forEach((j) => checkedJobIds.add(j.id));
+      else selectableVisible.forEach((j) => checkedJobIds.delete(j.id));
+      renderQueueList(q, allJobs);
+      renderActionBar();
+      renderSidebar();
+    });
+
+    jobs.forEach((j) => {
+      const isSel = j.id === selectedJobId;
+      const isExp = expandedJobIds.has(j.id);
+      const isChecked = checkedJobIds.has(j.id);
+      const canChk = isEncodeSelectableJob(j);
+      const prog = activeProg && activeProg.job_id === j.id ? activeProg : null;
+      const shared = sharedQueueName(j);
+      const info = jobVideoInfo(j);
+
+      const targetDesc = j.recipe.family === "remux"
+        ? `Remux · ${j.recipe.container.toUpperCase()}`
+        : `${j.recipe.codec.toUpperCase()} CRF ${j.recipe.crf} · ${j.recipe.container.toUpperCase()}`;
+
+      let statusHtml = "";
+      if (j.status === "completed" && j.output_bytes) {
+        statusHtml = `<span class="badge badge-ok">${fmtRatio(j.input_bytes, j.output_bytes)}</span>`;
+      } else if (prog) {
+        const dur = prog.duration_secs || 1;
+        const pct = Math.min(100, (prog.out_time_secs / dur) * 100);
+        statusHtml = `
+          <div class="tabular-nums" style="min-width:120px;">
+            <div style="font-size:11px;font-weight:600;color:var(--accent-text);">${pct.toFixed(1)}% · ETA ${prog.eta_secs ? fmtDuration(prog.eta_secs) : "—"}</div>
+            <div class="progress-track" style="height:5px;margin-top:3px;"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div>
+          </div>
+        `;
+      } else if (["verifying", "publishing"].includes(j.status)) {
+        statusHtml = `<span class="badge badge-active">${escapeHtml(statusLabel(j.status))}</span>`;
+      } else if (info.isPendingStats) {
+        statusHtml = `<span class="badge">Computing stats…</span>`;
+      } else if (j.status === "canceled" && j.status_reason === "Not selected") {
+        statusHtml = isChecked ? `<span class="badge badge-active">Selected</span>` : `<span class="badge">Skipped</span>`;
+      } else if (j.status === "ready") {
+        statusHtml = isChecked ? `<span class="badge badge-active">Selected</span>` : `<span class="badge">Not Selected</span>`;
+      } else {
+        statusHtml = `<span class="badge ${statusBadgeClass(j.status)}">${escapeHtml(statusLabel(j.status))}</span>`;
+      }
+
+      const codecBadgeClass = isModernCodec(info.codec) ? "badge-warn" : "";
+
+      const tr = document.createElement("tr");
+      tr.className = "tc-row" + (isSel ? " selected" : "") + (canChk && !isChecked ? " tc-unchecked" : "");
+      tr.innerHTML = `
+        <td><input type="checkbox" class="job-chk" ${isChecked ? "checked" : ""} ${canChk ? "" : "disabled"} /></td>
+        <td class="min-w-0" style="max-width:290px;">
+          <div class="inline-row" style="gap:6px;">
+            <button type="button" class="job-chevron ${isExp ? "open" : ""}" aria-expanded="${isExp}" title="Toggle stream tracks">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            ${jobStatusIconHtml(j.status)}
+            <div class="min-w-0" style="flex:1;">
+              <div class="inline-row" style="gap:5px;">
+                <span class="job-name truncate" title="${escapeHtml(j.source_path)}">${escapeHtml(jobFileName(j))}</span>
+                ${shared ? `<span class="badge badge-warn">${escapeHtml(shared)}</span>` : ""}
+              </div>
+              <div class="mono muted truncate" style="font-size:10.5px;">${escapeHtml(j.source_rel_path)}</div>
+            </div>
+          </div>
+        </td>
+        <td><span class="badge ${codecBadgeClass}">${escapeHtml(info.codec)}</span></td>
+        <td class="tabular-nums muted">${escapeHtml(info.res)}</td>
+        <td class="tabular-nums muted">${info.dur > 0 ? fmtDuration(info.dur) : "—"}</td>
+        <td class="tabular-nums" style="text-align:right;font-weight:600;">${fmtBytes(j.input_bytes)}</td>
+        <td class="tabular-nums muted" style="text-align:right;">${info.mbps > 0 ? `${info.mbps} Mbps` : "—"}</td>
+        <td class="muted">${escapeHtml(targetDesc)}</td>
+        <td>${statusHtml}</td>
+        <td style="text-align:right;"><div class="row-actions-slot inline-row" style="justify-content:flex-end;gap:3px;"></div></td>
+      `;
+
+      tr.addEventListener("click", (e) => {
+        if (e.target.closest("button") || e.target.closest("input")) return;
+        selectedJobId = j.id;
+        sidebarMode = "job";
+        sidebarOpen = true;
+        renderAll();
+      });
+
+      tr.querySelector(".job-chk").addEventListener("change", (e) => {
+        if (e.target.checked) checkedJobIds.add(j.id);
+        else checkedJobIds.delete(j.id);
+        renderQueueList(q, allJobs);
+        renderActionBar();
+        renderSidebar();
+      });
+
+      tr.querySelector(".job-chevron").addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (expandedJobIds.has(j.id)) expandedJobIds.delete(j.id);
+        else expandedJobIds.add(j.id);
+        renderQueueList(q, allJobs);
+      });
+
+      const acts = tr.querySelector(".row-actions-slot");
+      if (j.status === "encoding") {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn btn-sm btn-secondary";
+        b.textContent = "Live";
+        b.onclick = (e) => { e.stopPropagation(); openLivePreviewModal(j.id); };
+        acts.appendChild(b);
+      }
+      if (j.status === "completed") {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn btn-sm btn-secondary";
+        b.textContent = "Show";
+        b.onclick = (e) => { e.stopPropagation(); invoke("reveal_output", { path: j.destination_path }); };
+        acts.appendChild(b);
+      }
+      if (["failed", "interrupted", "needs_attention"].includes(j.status) || (j.status === "canceled" && j.status_reason !== "Not selected")) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn btn-sm btn-secondary";
+        b.textContent = "Retry";
+        b.onclick = (e) => { e.stopPropagation(); invoke("retry_jobs", { jobIds: [j.id] }); };
+        acts.appendChild(b);
+      }
+      if (canChk || ["needs_attention", "interrupted", "failed"].includes(j.status)) {
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "btn btn-ghost btn-sm";
+        rm.textContent = "×";
+        rm.title = "Remove from tab (keeps original on disk)";
+        rm.onclick = (e) => { e.stopPropagation(); checkedJobIds.delete(j.id); invoke("remove_pending_jobs", { jobIds: [j.id] }); };
+        acts.appendChild(rm);
+      }
+
+      tbody.appendChild(tr);
+
+      if (j.status === "needs_attention" && j.error_message) {
+        const errTr = document.createElement("tr");
+        errTr.className = "tc-subrow";
+        const canMkv = j.plan?.issues?.some((iss) => iss.can_use_mkv);
+        errTr.innerHTML = `
+          <td colspan="10">
+            <div class="inline-row" style="justify-content:space-between;gap:8px;flex-wrap:wrap;">
+              <span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span>
+              <div class="inline-row" style="gap:6px;">
+                <button type="button" class="btn btn-sm btn-secondary" data-fwd-rep="${j.id}">Send to Repair</button>
+                ${canMkv ? `<button type="button" class="btn btn-sm btn-primary" data-fix-mkv="${j.id}">Use MKV</button>` : ""}
+              </div>
+            </div>
+          </td>
+        `;
+        errTr.querySelector("[data-fwd-rep]").onclick = (e) => {
+          e.stopPropagation();
+          openForwardModal([j.id], "repair", "file needing repair", false);
+        };
+        errTr.querySelector("[data-fix-mkv]")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          invoke("update_pending_job", { jobId: j.id, patch: { recipe: { ...j.recipe, container: "mkv" } } });
+        });
+        tbody.appendChild(errTr);
+      }
+
+      if (isExp) {
+        const detTr = document.createElement("tr");
+        detTr.className = "tc-subrow";
+        detTr.innerHTML = `<td colspan="10">${renderExpandedMediaHtml(j)}</td>`;
+        tbody.appendChild(detTr);
+      }
+    });
+
+    rowsEl.appendChild(tbl);
+  }
+
+  function renderExpandedMediaHtml(j) {
+    if (!j.probe) return `<p class="muted">No ffprobe stream details cached yet.</p>`;
+    const f = j.probe.format;
+    const summary = `Container: <strong>${escapeHtml(f.format_long_name || f.format_name || "—")}</strong> · Size: <strong>${fmtBytes(j.input_bytes)}</strong> · Duration: <strong>${fmtDuration(f.duration_secs)}</strong> · Bitrate: <strong>${f.bit_rate ? Math.round(f.bit_rate / 1000) + " kbps" : "—"}</strong>`;
+    let rows = "";
+    for (const s of j.probe.streams) {
+      const specs = s.codec_type === "video"
+        ? `${s.width || "?"}×${s.height || "?"} · ${s.r_frame_rate || s.avg_frame_rate || "—"} fps · ${s.pix_fmt || "—"}`
+        : s.codec_type === "audio"
+          ? `${s.channel_layout || (s.channels ? s.channels + " ch" : "—")} · ${s.sample_rate ? s.sample_rate + " Hz" : "—"}`
+          : (s.title || "—");
+      rows += `<tr><td>#${s.index}</td><td>${escapeHtml(s.codec_type)}</td><td>${escapeHtml(s.codec_name)}</td><td>${escapeHtml(s.language || "—")}</td><td>${escapeHtml(specs)}</td></tr>`;
+    }
+    return `<div>${summary}</div><table class="media-tracks-table"><thead><tr><th>#</th><th>Type</th><th>Codec</th><th>Lang</th><th>Specs</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function imageMimeFromPath(p) {
+    const ext = (p || "").split(".").pop()?.toLowerCase() || "";
+    if (ext === "png") return "image/png";
+    if (ext === "webp") return "image/webp";
+    if (ext === "gif") return "image/gif";
+    if (ext === "bmp") return "image/bmp";
+    return "image/jpeg";
+  }
+
+  async function loadLocalImageUrl(mediaPath) {
+    const bytes = await invoke("read_local_media_preview", { mediaPath });
+    return URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: imageMimeFromPath(mediaPath) }));
+  }
+
+  async function openMediaPreviewModal(item) {
+    const path = item.source_path || item.path || "";
+    const name = item.name || (item.source_rel_path || path).split(/[\\/]/).pop() || "Media";
+    const isImg = isImagePath(path);
+    const dur = Math.max(1, Math.floor(item.duration_secs || item.probe?.format?.duration_secs || 60));
+    let seekT = Math.min(Math.floor(dur * 0.25), Math.max(0, dur - 1));
+    let activeBlobUrl = null;
+
+    const wrap = document.createElement("div");
+    wrap.className = "sidebar-panel-stack";
+    wrap.innerHTML = `
+      <div class="inline-row" style="justify-content:space-between;font-size:12px;flex-wrap:wrap;gap:6px;">
+        <span class="mono muted truncate" style="max-width:460px;">${escapeHtml(path)}</span>
+        <span class="badge">${isImg ? "Image" : "Video"}${item.input_bytes ? " · " + fmtBytes(item.input_bytes) : ""}</span>
+      </div>
+      <div class="media-preview-stage" style="min-height:240px;">
+        <span id="mprev-status" class="muted" style="font-size:12px;">Loading preview…</span>
+        <img id="mprev-img" class="hidden" alt="${escapeHtml(name)}" />
+      </div>
+      ${isImg ? "" : `
+        <div class="inline-row" style="gap:8px;flex-wrap:wrap;">
+          <input type="range" id="mprev-seek" min="0" max="${dur}" step="1" value="${seekT}" style="flex:1;min-width:160px;" />
+          <span id="mprev-time" class="mono muted tabular-nums" style="font-size:11px;min-width:52px;">${fmtDuration(seekT)}</span>
+          <button type="button" class="btn btn-sm btn-secondary" data-jump="0.1">10%</button>
+          <button type="button" class="btn btn-sm btn-secondary" data-jump="0.5">50%</button>
+          <button type="button" class="btn btn-sm btn-secondary" data-jump="0.8">80%</button>
+        </div>
+      `}
+    `;
+
+    const imgEl = wrap.querySelector("#mprev-img");
+    const statusEl = wrap.querySelector("#mprev-status");
+
+    const loadFrame = async (tSec) => {
+      statusEl.textContent = "Loading preview…";
+      statusEl.classList.remove("hidden");
+      try {
+        let nextUrl;
+        if (isImg) {
+          nextUrl = await loadLocalImageUrl(path);
+        } else {
+          const bytes = await invoke("get_comparison_frame", {
+            mediaPath: path,
+            timestampSecs: tSec,
+            fullResolution: false,
+          });
+          nextUrl = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }));
+        }
+        if (activeBlobUrl) URL.revokeObjectURL(activeBlobUrl);
+        activeBlobUrl = nextUrl;
+        imgEl.src = nextUrl;
+        imgEl.classList.remove("hidden");
+        statusEl.classList.add("hidden");
+      } catch (err) {
+        statusEl.textContent = `Preview unavailable: ${String(err)}`;
+        imgEl.classList.add("hidden");
+      }
+    };
+
+    if (!isImg) {
+      const seekInp = wrap.querySelector("#mprev-seek");
+      const timeLbl = wrap.querySelector("#mprev-time");
+      seekInp.oninput = (e) => {
+        seekT = Number(e.target.value);
+        timeLbl.textContent = fmtDuration(seekT);
+      };
+      seekInp.onchange = () => loadFrame(seekT);
+      wrap.querySelectorAll("[data-jump]").forEach((b) => {
+        b.onclick = () => {
+          seekT = Math.max(0, Math.floor(dur * Number(b.getAttribute("data-jump"))));
+          seekInp.value = String(seekT);
+          timeLbl.textContent = fmtDuration(seekT);
+          loadFrame(seekT);
+        };
+      });
+    }
+
+    const buttons = [];
+    if (!isImg && path) {
+      buttons.push({
+        label: "Open in Default Player",
+        cls: "btn btn-secondary",
+        onClick: () => invoke("open_output_player", { path }),
+      });
+    }
+    buttons.push({
+      label: "Close",
+      cls: "btn btn-primary",
+      onClick: () => {
+        if (activeBlobUrl) URL.revokeObjectURL(activeBlobUrl);
+        closeModal();
+      },
+    });
+
+    openModalEl(`Preview · ${name}`, wrap, buttons);
+    loadFrame(seekT);
+  }
+
+  function renderJobTagsHtml(jobId, tags) {
+    const list = tags || [];
+    return `
+      <div class="inline-row" style="gap:4px;flex-wrap:wrap;margin-top:4px;">
+        ${list.map((t) => `<span class="tag-chip">${escapeHtml(t)}<button type="button" class="tag-chip-x" data-untag="${escapeHtml(jobId)}::${escapeHtml(t)}" title="Remove tag">×</button></span>`).join("")}
+        <button type="button" class="btn-link" style="font-size:11px;" data-add-tag-job="${escapeHtml(jobId)}">+ Tag</button>
+      </div>
+    `;
+  }
+
+  function renderOrganizeView(q, jobs) {
+    const el = $("mode-view-organize");
+    if (!organizeOverview || organizeOverviewQueueId !== q.id) {
+      loadOrganizeOverview(q.id, false);
+    }
+
+    const ov = organizeOverview && organizeOverviewQueueId === q.id
+      ? organizeOverview
+      : { job_tags: {}, available_tags: [], ocr_detections: [], face_groups: [], hash_cache: snapshot.hash_cache_stats || {} };
+    const cacheStats = ov.hash_cache || snapshot.hash_cache_stats || { entry_count: 0, total_hashed_bytes: 0, cache_bytes_estimate: 0 };
+    const groups = snapshot.tab_dedupe_groups?.[q.id] || [];
+    const jobById = new Map(jobs.map((j) => [j.id, j]));
+
+    const dupItemCount = groups.reduce((acc, g) => acc + g.items.length, 0);
+    const sideItems = [
+      { id: "largest", label: "Largest Files", count: jobs.length },
+      { id: "duplicates", label: "Duplicates & Similar", count: dupItemCount || groups.length },
+      { id: "watermarks", label: "Watermarks & Tags", count: (ov.ocr_detections || []).length },
+      { id: "faces", label: "People & Faces", count: (ov.face_groups || []).length },
+      { id: "folder", label: "Sort to Folder", count: (ov.available_tags || []).length },
+    ];
+
+    const orgSel = getOrgSelectedSet(q.id);
+    let mainHtml = "";
+
+    if (organizeSideTab === "largest") {
+      const sorted = [...jobs].sort((a, b) => (b.input_bytes || 0) - (a.input_bytes || 0));
+      const maxBytes = sorted[0]?.input_bytes || 1;
+      const totalBytes = sorted.reduce((a, b) => a + (b.input_bytes || 0), 0);
+      const selectedTrashBytes = sorted.filter((j) => orgSel.has(j.id)).reduce((a, b) => a + (b.input_bytes || 0), 0);
+
+      mainHtml = `
+        <div class="summary-hero-card">
+          <div>
+            <strong style="font-size:14px;">Largest Files in Collection · ${fmtBytes(totalBytes)} Total</strong>
+            <div class="muted" style="font-size:12px;margin-top:3px;">Sorted largest first across all ${jobs.length} videos &amp; images in this tab. Preview, apply tags, forward big videos to compress, or move unwanted files to Trash.</div>
+          </div>
+          <div class="inline-row" style="gap:8px;flex-wrap:wrap;">
+            ${orgSel.size > 0 ? `<button type="button" id="org-trash-selected" class="btn btn-sm btn-danger">Move ${orgSel.size} (${fmtBytes(selectedTrashBytes)}) to Trash</button>` : ""}
+            <button type="button" id="org-fwd-largest" class="btn btn-sm btn-primary" ${jobs.length === 0 ? "disabled" : ""}>Forward Videos → Transcode</button>
+          </div>
+        </div>
+        <div class="sidebar-panel-stack">
+          ${sorted.map((j, idx) => {
+            const name = jobFileName(j);
+            const info = jobVideoInfo(j);
+            const isImg = isImagePath(j.source_path);
+            const prot = isProtectedSource(j.source_path);
+            const tags = ov.job_tags?.[j.id] || [];
+            const pct = Math.max(4, Math.round(((j.input_bytes || 0) / maxBytes) * 100));
+            return `
+              <div class="job-card ${selectedJobId === j.id ? "selected" : ""}" data-org-job-card="${escapeHtml(j.id)}">
+                <div class="job-top-row" style="align-items:flex-start;">
+                  <div class="inline-row min-w-0" style="gap:10px;flex:1;align-items:flex-start;">
+                    <input type="checkbox" class="org-del-chk" data-org-del-id="${escapeHtml(j.id)}" ${orgSel.has(j.id) ? "checked" : ""} ${prot ? "disabled" : ""} style="margin-top:4px;" />
+                    <div class="min-w-0" style="flex:1;">
+                      <div class="inline-row" style="gap:6px;flex-wrap:wrap;">
+                        <span class="muted tabular-nums" style="font-size:11px;font-weight:700;">#${idx + 1}</span>
+                        <strong style="font-size:13px;" class="truncate">${escapeHtml(name)}</strong>
+                        <span class="badge">${isImg ? "Image" : escapeHtml(info.res)}</span>
+                        ${prot ? `<span class="badge badge-warn">Protected ★</span>` : ""}
+                      </div>
+                      <div class="mono muted truncate" style="font-size:11px;margin-top:2px;">${escapeHtml(j.source_path)}</div>
+                      <div style="height:4px;border-radius:999px;background:var(--surface-2);overflow:hidden;margin-top:6px;max-width:340px;">
+                        <div style="height:100%;width:${pct}%;background:var(--accent);"></div>
+                      </div>
+                      ${renderJobTagsHtml(j.id, tags)}
+                    </div>
+                  </div>
+                  <div class="inline-row tabular-nums" style="gap:8px;flex-shrink:0;">
+                    <div style="text-align:right;">
+                      <div style="font-size:13px;font-weight:700;">${fmtBytes(j.input_bytes)}</div>
+                      <div class="muted" style="font-size:10.5px;">${isImg ? "Photo / Image" : `${info.dur} · ${info.mbps} Mbps`}</div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-secondary" data-preview-job="${escapeHtml(j.id)}">Preview</button>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      `;
+    } else if (organizeSideTab === "duplicates") {
+      const redundant = groups
+        .filter((g) => String(g.match_type || "").startsWith("Exact"))
+        .flatMap((g) => g.items)
+        .filter((i) => i.role === "trash" && !i.trashed);
+      const selectedCount = orgSel.size;
+      const selectedBytes = Array.from(orgSel).reduce((acc, jid) => acc + (jobById.get(jid)?.input_bytes || 0), 0);
+
+      mainHtml = `
+        <div class="org-cache-bar">
+          <div class="inline-row" style="gap:8px;flex-wrap:wrap;">
+            <strong>SQLite Hash Cache:</strong>
+            <span class="tabular-nums">${cacheStats.entry_count || 0} files cached · ${fmtBytes(cacheStats.total_hashed_bytes || 0)} indexed · ${fmtBytes(cacheStats.cache_bytes_estimate || 0)} cache DB</span>
+          </div>
+          <div class="inline-row" style="gap:8px;">
+            <button type="button" id="org-clear-cache" class="btn btn-sm btn-secondary" ${(cacheStats.entry_count || 0) === 0 ? "disabled" : ""}>Delete Hash Cache</button>
+          </div>
+        </div>
+        <div class="summary-hero-card">
+          <div>
+            <strong style="font-size:14px;">${groups.length} Exact / Similar Group${groups.length === 1 ? "" : "s"}</strong>
+            <div class="muted" style="font-size:12px;margin-top:3px;">Uses cached BLAKE3/SHA-256 + perceptual frame/image hashes in SQLite. Exact copies can be bulk-selected safely; visually similar clips require manual review before Trashing.</div>
+          </div>
+          <div class="inline-row" style="gap:8px;flex-wrap:wrap;">
+            <button type="button" id="btn-tab-dedupe-scan" class="btn btn-sm btn-secondary" ${dedupeScanning || jobs.length < 2 ? "disabled" : ""}>${dedupeScanning ? "Scanning…" : "Scan Duplicates & Similar"}</button>
+            ${redundant.length > 0 ? `<button type="button" id="org-select-redundant" class="btn btn-sm btn-secondary">Select Recommended (${redundant.length})</button>` : ""}
+            ${selectedCount > 0 ? `<button type="button" id="org-trash-selected" class="btn btn-sm btn-danger">Review Trash (${selectedCount} · ${fmtBytes(selectedBytes)})</button>` : ""}
+          </div>
+        </div>
+        ${groups.length === 0 ? `
+          <div class="setup-card" style="padding:24px;text-align:center;">
+            <strong style="font-size:13px;">${jobs.length < 2 ? "Attach at least 2 videos or images to find duplicates" : "No exact or similar duplicates computed yet (or every file is unique)"}</strong>
+            <p class="muted" style="font-size:12px;margin:4px 0 0;">Click <strong>Scan Duplicates &amp; Similar</strong> above. File hashes are stored in SQLite so future scans skip re-hashing unchanged files.</p>
+          </div>
+        ` : `<div class="sidebar-panel-stack">
+          ${groups.map((g) => {
+            const isExact = String(g.match_type || "").startsWith("Exact");
+            return `
+            <section class="dedupe-group-box">
+              <div class="dedupe-group-head">
+                <strong>${escapeHtml(g.match_type)}</strong>
+                <span class="muted tabular-nums">${isExact ? `${g.items.length} copies` : `${g.items.length} clips · Visual Review (check audio &amp; ending)`}</span>
+              </div>
+              <div>
+                ${g.items.map((it) => {
+                  const j = jobById.get(it.job_id);
+                  const prot = j ? isProtectedSource(j.source_path) : false;
+                  const checked = orgSel.has(it.job_id);
+                  const roleLabel = it.trashed ? "In OS Trash" : it.role === "keep" ? "Master Copy" : isExact ? "Exact Duplicate" : "Visual Review";
+                  const roleCls = it.trashed ? "" : it.role === "keep" ? "badge-ok" : isExact ? "badge-warn" : "";
+                  return `
+                    <div class="dedupe-member-row ${it.trashed ? "trashed" : ""}">
+                      <div class="inline-row min-w-0" style="gap:10px;flex:1;">
+                        <input type="checkbox" class="org-del-chk" data-org-del-id="${escapeHtml(it.job_id)}" ${checked ? "checked" : ""} ${it.trashed || prot ? "disabled" : ""} />
+                        <div class="min-w-0" style="flex:1;">
+                          <div class="inline-row" style="gap:6px;flex-wrap:wrap;">
+                            <strong style="font-size:12.5px;">${escapeHtml(it.name)}</strong>
+                            <span class="badge ${roleCls}">${roleLabel}</span>
+                            ${prot ? `<span class="badge badge-warn">Protected ★</span>` : ""}
+                          </div>
+                          <div class="mono muted truncate" style="font-size:11px;margin-top:2px;">${escapeHtml(it.rel_path)}</div>
+                        </div>
+                      </div>
+                      <div class="inline-row tabular-nums" style="gap:8px;">
+                        <div style="text-align:right;">
+                          <div style="font-size:12px;font-weight:600;">${fmtBytes(it.input_bytes)}</div>
+                          <div class="muted" style="font-size:10.5px;">${escapeHtml(it.resolution)} · ${it.bitrate_mbps} Mbps</div>
+                        </div>
+                        ${j ? `<button type="button" class="btn btn-sm btn-secondary" data-preview-job="${escapeHtml(j.id)}">Preview</button>` : ""}
+                      </div>
+                    </div>
+                  `;
+                }).join("")}
+              </div>
+            </section>
+          `;
+          }).join("")}
+        </div>`}
+      `;
+    } else if (organizeSideTab === "watermarks") {
+      const hits = ov.ocr_detections || [];
+      const jobByPath = new Map();
+      for (const j of jobs) jobByPath.set(j.source_path, j);
+
+      mainHtml = `
+        <div class="summary-hero-card">
+          <div>
+            <strong style="font-size:14px;">Watermark Extraction &amp; Tagging</strong>
+            <div class="muted" style="font-size:12px;margin-top:3px;">Scans corner &amp; frame regions on videos and images to extract channel handles, watermarks, and studio overlays into searchable SQLite tags.</div>
+          </div>
+          <div class="inline-row" style="gap:8px;">
+            <button type="button" id="org-ocr-scan" class="btn btn-sm btn-primary" ${ocrScanning || jobs.length === 0 ? "disabled" : ""}>${ocrScanning ? "Extracting Watermarks…" : "Extract Watermarks"}</button>
+          </div>
+        </div>
+        ${hits.length > 0 ? `
+          <div class="setup-card">
+            <span class="setup-kicker">Detected Watermarks &amp; Text (${hits.length})</span>
+            <div class="sidebar-panel-stack" style="gap:8px;">
+              ${hits.map((h) => {
+                const matchedJob = jobByPath.get(h.path) || jobs.find((x) => h.path.endsWith("/" + jobFileName(x)));
+                const suggested = h.suggested_creator_tag || h.normalized_text || h.raw_text;
+                return `
+                  <div class="dedupe-member-row">
+                    <div class="min-w-0" style="flex:1;">
+                      <div class="inline-row" style="gap:6px;flex-wrap:wrap;">
+                        <strong style="font-size:12.5px;">${escapeHtml(h.normalized_text || h.raw_text)}</strong>
+                        <span class="badge badge-ok">${Math.round((h.confidence || 0) * 100)}% conf</span>
+                        <span class="badge">${escapeHtml(h.classification || "watermark")}</span>
+                      </div>
+                      <div class="mono muted truncate" style="font-size:11px;margin-top:2px;">${escapeHtml(h.path)} @ ${fmtDuration(h.timestamp_secs || 0)}</div>
+                    </div>
+                    <div class="inline-row" style="gap:6px;">
+                      ${matchedJob ? `<button type="button" class="btn btn-sm btn-secondary" data-preview-job="${escapeHtml(matchedJob.id)}">Preview</button>` : ""}
+                      ${matchedJob && suggested ? `<button type="button" class="btn btn-sm btn-primary" data-apply-wm-tag="${escapeHtml(matchedJob.id)}::${escapeHtml(suggested)}">Tag "${escapeHtml(suggested)}"</button>` : ""}
+                    </div>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          </div>
+        ` : `
+          <div class="setup-card" style="padding:20px;text-align:center;">
+            <strong style="font-size:13px;">No watermarks extracted for these files yet</strong>
+            <p class="muted" style="font-size:12px;margin:4px 0 0;">Click <strong>Extract Watermarks</strong> above, or apply custom tags directly to any file below.</p>
+          </div>
+        `}
+        <div class="setup-card">
+          <div class="setup-row-between" style="flex-wrap:wrap;gap:8px;">
+            <span class="setup-kicker" style="margin:0;">Collection Files &amp; Tags (${jobs.length})</span>
+            <div class="inline-row" style="gap:6px;">
+              <input type="text" id="org-batch-tag-input" class="compact-sel" placeholder="Tag all / selected…" style="min-width:160px;" />
+              <button type="button" id="org-batch-tag-btn" class="btn btn-sm btn-secondary">Apply Tag</button>
+            </div>
+          </div>
+          <div class="sidebar-panel-stack" style="gap:6px;margin-top:8px;">
+            ${jobs.map((j) => `
+              <div class="inline-row" style="justify-content:space-between;padding:8px 10px;border-radius:9px;background:var(--surface-2);border:1px solid var(--border);gap:10px;">
+                <div class="min-w-0" style="flex:1;">
+                  <div class="inline-row" style="gap:6px;">
+                    <input type="checkbox" class="org-del-chk" data-org-del-id="${escapeHtml(j.id)}" ${orgSel.has(j.id) ? "checked" : ""} />
+                    <strong style="font-size:12.5px;" class="truncate">${escapeHtml(jobFileName(j))}</strong>
+                  </div>
+                  ${renderJobTagsHtml(j.id, ov.job_tags?.[j.id] || [])}
+                </div>
+                <button type="button" class="btn btn-sm btn-secondary" data-preview-job="${escapeHtml(j.id)}">Preview</button>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    } else if (organizeSideTab === "faces") {
+      const clusters = ov.face_groups || [];
+      mainHtml = `
+        <div class="summary-hero-card">
+          <div>
+            <strong style="font-size:14px;">People &amp; Face Grouping</strong>
+            <div class="muted" style="font-size:12px;margin-top:3px;">Detects &amp; clusters faces locally on your Mac. Name a person once to automatically apply their <code class="mono">person:Name</code> tag to all matching clips.</div>
+          </div>
+          <div class="inline-row" style="gap:8px;">
+            <button type="button" id="org-face-scan" class="btn btn-sm btn-primary" ${faceScanning || jobs.length === 0 ? "disabled" : ""}>${faceScanning ? "Detecting Faces…" : "Detect People"}</button>
+          </div>
+        </div>
+        ${clusters.length === 0 ? `
+          <div class="setup-card" style="padding:24px;text-align:center;">
+            <strong style="font-size:13px;">No face clusters detected in this tab yet</strong>
+            <p class="muted" style="font-size:12px;margin:4px 0 0;">Click <strong>Detect People</strong> above to sample frames &amp; group recurring faces privately offline.</p>
+          </div>
+        ` : `
+          <div class="face-cluster-grid">
+            ${clusters.map((grp) => `
+              <div class="face-cluster-card">
+                <div class="inline-row" style="gap:10px;">
+                  <img class="face-crop-thumb" data-crop-path="${escapeHtml(grp.sample_crop_path || "")}" alt="Face sample" />
+                  <div class="min-w-0" style="flex:1;">
+                    <div style="font-size:12.5px;font-weight:700;">${escapeHtml(grp.label || "Unnamed Person")}</div>
+                    <div class="muted tabular-nums" style="font-size:11px;">${grp.observation_count} sighting${grp.observation_count === 1 ? "" : "s"} · ${grp.matched_job_ids.length} file${grp.matched_job_ids.length === 1 ? "" : "s"}</div>
+                  </div>
+                </div>
+                <div class="inline-row" style="gap:6px;">
+                  <input type="text" class="full-input" id="face-name-${escapeHtml(grp.group_id)}" placeholder="Enter person name…" value="${escapeHtml(grp.label || "")}" />
+                  <button type="button" class="btn btn-sm btn-primary" data-label-face="${escapeHtml(grp.group_id)}">Name &amp; Tag</button>
+                </div>
+                <div class="inline-row" style="gap:4px;flex-wrap:wrap;">
+                  ${grp.matched_job_ids.slice(0, 5).map((jid) => {
+                    const mj = jobById.get(jid);
+                    return mj ? `<button type="button" class="tag-chip" style="cursor:pointer;" data-preview-job="${escapeHtml(mj.id)}">${escapeHtml(jobFileName(mj))}</button>` : "";
+                  }).join("")}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        `}
+      `;
+    } else if (organizeSideTab === "folder") {
+      const availTags = ov.available_tags || [];
+      if (!moveFolderTargetDir && q.destination_root) {
+        moveFolderTargetDir = q.destination_root;
+      }
+      const prevRes = movePreviewResult && movePreviewResult._queueId === q.id ? movePreviewResult : null;
+      const validMoveCount = prevRes?.items?.filter((x) => x.valid).length || 0;
+
+      mainHtml = `
+        <div class="summary-hero-card">
+          <div>
+            <strong style="font-size:14px;">Sort Files Into Folder by Tag</strong>
+            <div class="muted" style="font-size:12px;margin-top:3px;">Pick any watermark, person, or custom tag and move (or copy) matching files into a target folder using a reviewed, atomic plan.</div>
+          </div>
+        </div>
+        <div class="setup-card">
+          <span class="setup-kicker">1. Pick Tag &amp; Destination Folder</span>
+          ${availTags.length > 0 ? `
+            <div class="inline-row" style="gap:6px;flex-wrap:wrap;">
+              ${availTags.map((t) => `<button type="button" class="pill-filter-btn ${moveSelectedTag === t ? "active" : ""}" data-pick-move-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`).join("")}
+            </div>
+          ` : `<p class="muted" style="font-size:12px;margin:0;">No tags found on files in this tab yet. Add tags in Largest, Watermarks, or People first.</p>`}
+          <div class="seg-pair-grid">
+            <div class="field-block">
+              <label class="field-label" for="org-move-tag">Selected Tag</label>
+              <input id="org-move-tag" class="full-input" type="text" value="${escapeHtml(moveSelectedTag)}" placeholder="e.g. person:Alex or channel..." />
+            </div>
+            <div class="field-block">
+              <label class="field-label" for="org-move-dest">Destination Folder</label>
+              <div class="inline-row" style="gap:6px;">
+                <input id="org-move-dest" class="full-input mono" type="text" value="${escapeHtml(moveFolderTargetDir)}" placeholder="/path/to/target/folder" />
+                <button type="button" id="org-move-browse" class="btn btn-sm btn-secondary">Browse…</button>
+              </div>
+            </div>
+          </div>
+          <div class="seg-pair-grid" style="margin-top:4px;">
+            <label class="check-row" style="gap:8px;"><input type="checkbox" id="org-move-subfolders" class="switch-chk" ${movePreserveSubfolders ? "checked" : ""} /><span>Preserve original subfolders inside target</span></label>
+            <div class="field-block">
+              <label class="field-label" for="org-move-collision">Filename Collisions</label>
+              <select id="org-move-collision" class="compact-sel" style="width:100%;">
+                <option value="keep_existing" ${moveCollisionPolicy === "keep_existing" ? "selected" : ""}>Keep existing (skip &amp; warn — safest)</option>
+                <option value="number" ${moveCollisionPolicy === "number" ? "selected" : ""}>Auto-number duplicates (e.g. clip (1).mp4)</option>
+                <option value="skip" ${moveCollisionPolicy === "skip" ? "selected" : ""}>Skip conflicting files silently</option>
+              </select>
+            </div>
+          </div>
+          <div class="setup-row-between" style="flex-wrap:wrap;gap:8px;">
+            <label class="check-row" style="gap:8px;"><input type="checkbox" id="org-move-copy" class="switch-chk" ${moveCopyOnly ? "checked" : ""} /><span>Copy files instead of moving them</span></label>
+            <div class="inline-row" style="gap:8px;">
+              <button type="button" id="org-move-preview" class="btn btn-sm btn-secondary" ${!moveSelectedTag || !moveFolderTargetDir ? "disabled" : ""}>Preview Matching Files</button>
+              ${prevRes && validMoveCount > 0 && prevRes.plan_id ? `<button type="button" id="org-move-exec" class="btn btn-sm btn-primary">${moveCopyOnly ? "Copy" : "Move"} ${validMoveCount} Matching File(s)</button>` : ""}
+            </div>
+          </div>
+        </div>
+        ${prevRes ? `
+          <div class="setup-card">
+            <span class="setup-kicker">Preview (${prevRes.items.length} file${prevRes.items.length === 1 ? "" : "s"} matched "${escapeHtml(prevRes.tag)}")</span>
+            ${prevRes.items.length === 0 ? `<p class="muted" style="font-size:12px;margin:0;">No files in this tab carry the tag "${escapeHtml(prevRes.tag)}".</p>` : `
+              <table class="table-simple">
+                <thead><tr><th>File</th><th>Destination</th><th>Size</th><th>Status</th></tr></thead>
+                <tbody>
+                  ${prevRes.items.map((it) => `
+                    <tr>
+                      <td><strong>${escapeHtml(it.filename)}</strong>${it.cross_volume ? ` <span class="badge">Cross-vol</span>` : ""}</td>
+                      <td class="mono muted truncate" style="max-width:260px;">${escapeHtml(it.new_path)}</td>
+                      <td class="tabular-nums">${fmtBytes(it.size_bytes)}</td>
+                      <td>${it.copied_original_retained ? `<span class="badge badge-warn">Copied; original retained</span>` : it.valid ? `<span class="badge badge-ok">Ready</span>` : `<span class="badge badge-err">${escapeHtml(it.error || "Skipped")}</span>`}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            `}
+          </div>
+        ` : ""}
+      `;
+    }
+
+    el.innerHTML = `
+      <div class="org-split-layout">
+        <aside class="org-side-rail" aria-label="Organize tools">
+          ${sideItems.map((s) => `
+            <button type="button" class="org-side-tab ${organizeSideTab === s.id ? "active" : ""}" data-org-side="${s.id}">
+              <span>${escapeHtml(s.label)}</span>
+              <span class="org-side-count">${s.count}</span>
+            </button>
+          `).join("")}
+        </aside>
+        <div class="org-main-pane">
+          ${mainHtml}
+        </div>
+      </div>
+    `;
+
+    // Wire vertical side-tab switches
+    el.querySelectorAll("[data-org-side]").forEach((btn) => {
+      btn.onclick = () => {
+        organizeSideTab = btn.getAttribute("data-org-side");
+        movePreviewResult = null;
+        renderOrganizeView(q, jobs);
+        renderActionBar();
+        renderSidebar();
+      };
+    });
+
+    // Wire selection checkboxes
+    el.querySelectorAll(".org-del-chk").forEach((chk) => {
+      chk.onchange = () => {
+        const jid = chk.getAttribute("data-org-del-id");
+        const s = getOrgSelectedSet(q.id);
+        if (chk.checked) s.add(jid);
+        else s.delete(jid);
+        renderOrganizeView(q, jobs);
+        renderActionBar();
+      };
+    });
+
+    // Wire preview buttons (both images and videos)
+    el.querySelectorAll("[data-preview-job]").forEach((btn) => {
+      btn.onclick = (ev) => {
+        ev.stopPropagation();
+        const j = jobById.get(btn.getAttribute("data-preview-job"));
+        if (j) openMediaPreviewModal(j);
+      };
+    });
+
+    // Wire selecting a job card in Largest view
+    el.querySelectorAll("[data-org-job-card]").forEach((card) => {
+      card.onclick = (ev) => {
+        if (ev.target.closest("button, input")) return;
+        selectedJobId = card.getAttribute("data-org-job-card");
+        renderOrganizeView(q, jobs);
+        renderSidebar();
+      };
+    });
+
+    // Wire untag / add-tag
+    el.querySelectorAll("[data-untag]").forEach((btn) => {
+      btn.onclick = async (ev) => {
+        ev.stopPropagation();
+        const [jobId, ...rest] = btn.getAttribute("data-untag").split("::");
+        await invoke("tab_untag_resource", { jobId, tagName: rest.join("::") });
+        await loadOrganizeOverview(q.id, true);
+      };
+    });
+    el.querySelectorAll("[data-add-tag-job]").forEach((btn) => {
+      btn.onclick = (ev) => {
+        ev.stopPropagation();
+        const jobId = btn.getAttribute("data-add-tag-job");
+        openPromptModal("Add Tag", "Tag name:", "", async (val) => {
+          await invoke("tab_tag_resources", { jobIds: [jobId], tagNames: [val] });
+          await loadOrganizeOverview(q.id, true);
+        });
+      };
+    });
+
+    // Side-tab-specific handlers
+    el.querySelector("#org-fwd-largest")?.addEventListener("click", () => {
+      const videoJobs = jobs.filter((j) => !isImagePath(j.source_path));
+      openForwardModal(videoJobs.map((j) => j.id), "encode", "videos from Organize", false);
+    });
+
+    el.querySelector("#org-trash-selected")?.addEventListener("click", () => trashOrgSelected(q));
+
+    el.querySelector("#org-select-redundant")?.addEventListener("click", () => {
+      const s = getOrgSelectedSet(q.id);
+      groups
+        .filter((g) => String(g.match_type || "").startsWith("Exact"))
+        .flatMap((g) => g.items)
+        .filter((i) => i.role === "trash" && !i.trashed)
+        .forEach((i) => {
+          const j = jobById.get(i.job_id);
+          if (j && !isProtectedSource(j.source_path)) s.add(i.job_id);
+        });
+      renderOrganizeView(q, jobs);
+      renderActionBar();
+    });
+
+    el.querySelector("#btn-tab-dedupe-scan")?.addEventListener("click", () => triggerTabDedupeScan(q));
+
+    el.querySelector("#org-clear-cache")?.addEventListener("click", async () => {
+      const removed = await invoke("clear_hash_cache");
+      showToast(`Deleted ${removed} cached SQLite file hash entr${removed === 1 ? "y" : "ies"}.`, "info");
+      await loadOrganizeOverview(q.id, true);
+    });
+
+    el.querySelector("#org-ocr-scan")?.addEventListener("click", () => triggerTabWatermarkScan(q));
+
+    el.querySelectorAll("[data-apply-wm-tag]").forEach((btn) => {
+      btn.onclick = async () => {
+        const [jobId, ...rest] = btn.getAttribute("data-apply-wm-tag").split("::");
+        const tag = rest.join("::");
+        await invoke("tab_tag_resources", { jobIds: [jobId], tagNames: [tag] });
+        showToast(`Tagged file with "${tag}"`, "success");
+        await loadOrganizeOverview(q.id, true);
+      };
+    });
+
+    el.querySelector("#org-batch-tag-btn")?.addEventListener("click", async () => {
+      const val = el.querySelector("#org-batch-tag-input")?.value.trim();
+      if (!val) return showToast("Enter a tag name first.", "warn");
+      const s = getOrgSelectedSet(q.id);
+      const targets = s.size > 0 ? Array.from(s) : jobs.map((j) => j.id);
+      const count = await invoke("tab_tag_resources", { jobIds: targets, tagNames: [val] });
+      showToast(`Tagged ${count} item(s) with "${val}".`, "success");
+      await loadOrganizeOverview(q.id, true);
+    });
+
+    el.querySelector("#org-face-scan")?.addEventListener("click", () => triggerTabFaceScan(q));
+
+    el.querySelectorAll("[data-crop-path]").forEach((imgEl) => {
+      const cp = imgEl.getAttribute("data-crop-path");
+      if (!cp) return;
+      loadLocalImageUrl(cp).then((url) => { imgEl.src = url; }).catch(() => {});
+    });
+
+    el.querySelectorAll("[data-label-face]").forEach((btn) => {
+      btn.onclick = async () => {
+        const gid = btn.getAttribute("data-label-face");
+        const inp = el.querySelector(`#face-name-${CSS.escape(gid)}`);
+        const label = inp?.value.trim();
+        if (!label) return showToast("Enter a person name first.", "warn");
+        const tagged = await invoke("tab_label_face_and_tag", { queueId: q.id, groupId: gid, label });
+        showToast(`Named "${label}" and tagged ${tagged} matching file(s).`, "success");
+        await loadOrganizeOverview(q.id, true);
+      };
+    });
+
+    el.querySelectorAll("[data-pick-move-tag]").forEach((btn) => {
+      btn.onclick = () => {
+        moveSelectedTag = btn.getAttribute("data-pick-move-tag");
+        movePreviewResult = null;
+        renderOrganizeView(q, jobs);
+      };
+    });
+
+    el.querySelector("#org-move-tag")?.addEventListener("input", (e) => {
+      moveSelectedTag = e.target.value;
+      movePreviewResult = null;
+      const prevBtn = el.querySelector("#org-move-preview");
+      if (prevBtn) prevBtn.disabled = !moveSelectedTag.trim() || !moveFolderTargetDir.trim();
+      const execBtn = el.querySelector("#org-move-exec");
+      if (execBtn) execBtn.disabled = true;
+    });
+
+    el.querySelector("#org-move-dest")?.addEventListener("input", (e) => {
+      moveFolderTargetDir = e.target.value;
+      movePreviewResult = null;
+      const prevBtn = el.querySelector("#org-move-preview");
+      if (prevBtn) prevBtn.disabled = !moveSelectedTag.trim() || !moveFolderTargetDir.trim();
+      const execBtn = el.querySelector("#org-move-exec");
+      if (execBtn) execBtn.disabled = true;
+    });
+
+    el.querySelector("#org-move-browse")?.addEventListener("click", async () => {
+      const dir = await dialog.open({ directory: true, defaultPath: moveFolderTargetDir || q.destination_root || undefined });
+      if (dir) {
+        moveFolderTargetDir = Array.isArray(dir) ? dir[0] : dir;
+        movePreviewResult = null;
+        renderOrganizeView(q, jobs);
+      }
+    });
+
+    el.querySelector("#org-move-copy")?.addEventListener("change", (e) => {
+      moveCopyOnly = e.target.checked;
+      movePreviewResult = null;
+      renderOrganizeView(q, jobs);
+    });
+
+    el.querySelector("#org-move-subfolders")?.addEventListener("change", (e) => {
+      movePreserveSubfolders = e.target.checked;
+      movePreviewResult = null;
+      renderOrganizeView(q, jobs);
+    });
+
+    el.querySelector("#org-move-collision")?.addEventListener("change", (e) => {
+      moveCollisionPolicy = e.target.value;
+      movePreviewResult = null;
+      renderOrganizeView(q, jobs);
+    });
+
+    el.querySelector("#org-move-preview")?.addEventListener("click", () => runMoveByTag(q, true));
+    el.querySelector("#org-move-exec")?.addEventListener("click", () => runMoveByTag(q, false));
+  }
+
+  function renderRepairView(q, jobs) {
+    const el = $("mode-view-repair");
+    const repairedJobs = jobs.filter((j) => {
+      const r = snapshot.tab_repair_items?.[j.id];
+      return r && ["recovered", "partial_recovery"].includes(r.status) && r.output_path;
+    });
+
+    el.innerHTML = `
+      <div class="summary-hero-card">
+        <div>
+          <strong style="font-size:14px;">Non-Destructive Video Diagnosis &amp; Bitstream Recovery</strong>
+          <div class="muted" style="font-size:12px;margin-top:3px;">Inspects MP4/MOV atoms, matches reference parameters, and writes a fresh recovered file without altering damaged originals.</div>
+        </div>
+        ${repairedJobs.length > 0 ? `<button type="button" id="btn-repair-fwd-all" class="btn btn-sm btn-primary">Forward ${repairedJobs.length} Repaired → Transcode</button>` : ""}
+      </div>
+      <div id="repair-cards-list" class="sidebar-panel-stack"></div>
+    `;
+
+    el.querySelector("#btn-repair-fwd-all")?.addEventListener("click", () => {
+      openForwardModal(repairedJobs.map((j) => j.id), "encode", "verified repaired outputs", true);
+    });
+
+    const list = el.querySelector("#repair-cards-list");
+    for (const j of jobs) {
+      const rState = snapshot.tab_repair_items?.[j.id];
+      const st = rState?.status || "idle";
+      const isDone = ["recovered", "partial_recovery"].includes(st);
+      const isBusy = st === "diagnosing" || st === "recovering";
+      const lp = repairLiveProgress.get(j.id);
+
+      const badgeCls = isDone ? "badge-ok" : isBusy ? "badge-active" : st === "failed" || st === "unrecoverable" ? "badge-err" : "badge-warn";
+      const stText = {
+        idle: "Ready to Diagnose / Repair",
+        diagnosing: "Diagnosing container…",
+        diagnosed: "Diagnosed",
+        recovering: "Recovering streams…",
+        recovered: "Repaired & Verified",
+        partial_recovery: "Partial Recovery",
+        failed: "Recovery Failed",
+        unrecoverable: "Unrecoverable",
+      }[st] || st;
+
+      const diagSummary = rState?.diagnosis
+        ? `${rState.diagnosis.detected_issues?.[0] || "Container analyzed"} · Size: ${fmtBytes(rState.diagnosis.actual_file_size)}`
+        : (j.error_message || "Click Diagnose or Run Repair to analyze MP4/MOV atoms and streams");
+
+      const card = document.createElement("article");
+      card.className = `repair-item-card ${j.id === selectedJobId ? "selected" : ""}`;
+      card.innerHTML = `
+        <div class="inline-row" style="justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <div class="min-w-0" style="flex:1;">
+            <div class="inline-row" style="gap:7px;flex-wrap:wrap;">
+              <strong style="font-size:13px;">${escapeHtml(jobFileName(j))}</strong>
+              <span class="badge ${badgeCls}">${escapeHtml(stText)}</span>
+            </div>
+            <div class="muted" style="font-size:11.5px;margin-top:4px;">${escapeHtml(diagSummary)}</div>
+            ${rState?.output_path ? `<div style="font-size:11px;color:var(--ok);margin-top:4px;" class="mono truncate">Output: ${escapeHtml(rState.output_path)} (${fmtBytes(rState.output_bytes || 0)})</div>` : ""}
+            ${rState?.error ? `<div style="font-size:11px;color:var(--danger);margin-top:4px;">${escapeHtml(rState.error)}</div>` : ""}
+          </div>
+          <div class="inline-row" style="gap:6px;flex-shrink:0;">
+            ${isDone && rState?.output_path ? `
+              <button type="button" class="btn btn-sm btn-secondary" data-show-rep="${j.id}">Show</button>
+              <button type="button" class="accent-pill-btn" data-fwd-rep="${j.id}">Forward Output →</button>
+            ` : `
+              <button type="button" class="btn btn-sm btn-secondary" data-diag="${j.id}" ${isBusy ? "disabled" : ""}>Diagnose</button>
+              <button type="button" class="btn btn-sm btn-primary" data-run-rep="${j.id}" ${isBusy ? "disabled" : ""}>Run Repair</button>
+            `}
+            <button type="button" class="btn btn-ghost btn-sm" data-rm="${j.id}" title="Remove from tab">×</button>
+          </div>
+        </div>
+        ${isBusy && lp ? `
+          <div class="progress-wrap" style="margin-top:8px;">
+            <div class="inline-row" style="justify-content:space-between;font-size:11px;margin-bottom:3px;">
+              <span>${escapeHtml(lp.stage || "Working…")}</span>
+              <span class="mono muted">${Math.round((lp.fraction || 0) * 100)}%</span>
+            </div>
+            <div class="progress-track"><div class="progress-fill" style="width:${Math.round((lp.fraction || 0) * 100)}%"></div></div>
+          </div>
+        ` : ""}
+      `;
+
+      card.addEventListener("click", (e) => {
+        if (e.target.closest("button")) return;
+        selectedJobId = j.id;
+        sidebarMode = "job";
+        sidebarOpen = true;
+        renderAll();
+      });
+      card.querySelector("[data-diag]")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        selectedJobId = j.id;
+        sidebarMode = "job";
+        invoke("run_tab_repair_diagnosis", { queueId: q.id, jobId: j.id });
+      });
+      card.querySelector("[data-run-rep]")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        selectedJobId = j.id;
+        sidebarMode = "job";
+        invoke("run_tab_repair_execute", { queueId: q.id, jobIds: [j.id] });
+      });
+      card.querySelector("[data-show-rep]")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (rState?.output_path) invoke("reveal_output", { path: rState.output_path });
+      });
+      card.querySelector("[data-fwd-rep]")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openForwardModal([j.id], "encode", "repaired output", true);
+      });
+      card.querySelector("[data-rm]").onclick = (e) => {
+        e.stopPropagation();
+        invoke("remove_pending_jobs", { jobIds: [j.id] });
+      };
+
+      list.appendChild(card);
+    }
+  }
+
+  // =========================================================================
+  // 5. CONTEXTUAL RIGHT SIDEBAR
+  // =========================================================================
+  function renderSidebar() {
+    const sp = $("side-panel");
+    sp.classList.toggle("collapsed", !sidebarOpen);
+    $("btn-toggle-inspector").setAttribute("aria-expanded", String(sidebarOpen));
+    if (!sidebarOpen) return;
+
+    const q = activeQueue();
+    if (!q) return;
+    const mode = activeMode(q);
+    const jobs = activeQueueJobs();
+
+    const labels = {
+      encode: ["Queue Setup", "Job Details"],
+      explore: ["Tab Resources", "Inspect & Decide"],
+      organize: ["Organize Rules", "Tags & Preview"],
+      repair: ["Repair Policy", "Diagnosis"],
+    }[mode] || ["Setup", "Details"];
+
+    $("sidebar-tab-setup").textContent = labels[0];
+    $("sidebar-tab-job").textContent = labels[1];
+    $("sidebar-tab-setup").classList.toggle("active", sidebarMode === "setup");
+    $("sidebar-tab-job").classList.toggle("active", sidebarMode === "job");
+
+    $("panel-queue-setup").classList.add("hidden");
+    $("side-panel-content").classList.add("hidden");
+    $("panel-mode-config").classList.add("hidden");
+    $("panel-mode-inspect").classList.add("hidden");
+
+    if (sidebarMode === "setup") {
+      if (mode === "encode") {
+        $("panel-queue-setup").classList.remove("hidden");
+        renderQueueSetupPanel(q, jobs);
+      } else {
+        $("panel-mode-config").classList.remove("hidden");
+        renderModeConfigPanel(q, mode, jobs);
+      }
+    } else {
+      if (mode === "encode") {
+        $("side-panel-content").classList.remove("hidden");
+        renderEncodeJobDetailsPanel(q, jobs);
+      } else {
+        $("panel-mode-inspect").classList.remove("hidden");
+        renderModeInspectPanel(q, mode, jobs);
+      }
+    }
+  }
+
+  function renderQueueSetupPanel(q, jobs) {
     const selProf = $("sel-profile");
-    selProf.innerHTML = `<option value="">(No profile / Custom)</option>`;
+    selProf.innerHTML = `<option value="">Custom / Queue Settings</option>`;
     for (const p of snapshot.profiles) {
       const opt = document.createElement("option");
       opt.value = p.id;
@@ -260,16 +1990,10 @@
       selProf.appendChild(opt);
     }
 
-    const checkedWaitingCount = activeQueueJobs().filter(
-      (j) => checkedJobIds.has(j.id) && ["queued", "ready", "needs_attention", "interrupted", "failed", "canceled"].includes(j.status)
-    ).length;
-    const waitingCount = activeQueueJobs().filter((j) =>
-      ["queued", "ready", "needs_attention", "interrupted", "failed", "canceled"].includes(j.status)
-    ).length;
-    $("btn-apply-waiting").textContent = checkedWaitingCount > 0
-      ? `Apply to ${checkedWaitingCount} selected`
-      : `Apply to ${waitingCount} waiting files`;
-    $("btn-apply-waiting").disabled = waitingCount === 0;
+    const checkedWait = jobs.filter((j) => checkedJobIds.has(j.id) && ["queued", "ready", "needs_attention", "interrupted", "failed", "canceled"].includes(j.status)).length;
+    const waitCount = jobs.filter((j) => ["queued", "ready", "needs_attention", "interrupted", "failed", "canceled"].includes(j.status)).length;
+    $("btn-apply-waiting").textContent = checkedWait > 0 ? `Apply to ${checkedWait} selected` : `Apply to ${waitCount} waiting`;
+    $("btn-apply-waiting").disabled = waitCount === 0;
 
     const r = q.recipe;
     $("sel-family").value = r.family;
@@ -277,27 +2001,60 @@
     $("sel-codec").value = r.codec;
     $("sel-container").value = r.container;
 
+    document.querySelectorAll("[data-seg]").forEach((grp) => {
+      const key = grp.getAttribute("data-seg");
+      grp.querySelectorAll(".seg-btn").forEach((btn) => {
+        btn.classList.toggle("active", btn.getAttribute("data-val") === r[key]);
+      });
+    });
+
     const isRemux = r.family === "remux";
     $("wrap-encode-controls").classList.toggle("hidden", isRemux);
-    $("adv-encode-fields").classList.toggle("hidden", isRemux);
     $("badge-custom").classList.toggle("hidden", !r.is_custom);
     $("btn-reset-preset").classList.toggle("hidden", !r.is_custom);
 
-    // Advanced fields
-    $("lbl-crf-range").textContent = r.codec === "hevc" ? "0–51" : "0–63";
-    $("inp-crf").min = 0;
-    $("inp-crf").max = r.codec === "hevc" ? 51 : 63;
+    const crfMax = r.codec === "hevc" ? 51 : 63;
+    $("lbl-crf-range").textContent = `0–${crfMax}`;
+    $("inp-crf").max = crfMax;
     $("inp-crf").value = r.crf;
+    $("rng-crf").max = crfMax;
+    $("rng-crf").value = r.crf;
 
-    const efforts = r.codec === "hevc" ? ["medium", "slow", "slower", "veryslow"] : ["3", "4", "5", "6", "7"];
-    const selEffort = $("sel-effort");
-    selEffort.innerHTML = "";
+    const efforts = r.codec === "hevc" ? ["medium", "slow", "slower", "veryslow"] : ["3", "4", "5", "6"];
+    const effPills = $("effort-pills");
+    effPills.innerHTML = "";
+    const selEff = $("sel-effort");
+    selEff.innerHTML = "";
     for (const ef of efforts) {
       const opt = document.createElement("option");
       opt.value = ef;
-      opt.textContent = r.codec === "av1" ? `preset ${ef}` : ef;
+      opt.textContent = ef;
       if (String(r.effort) === ef) opt.selected = true;
-      selEffort.appendChild(opt);
+      selEff.appendChild(opt);
+
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "seg-btn" + (String(r.effort) === ef ? " active" : "");
+      b.textContent = r.codec === "av1" ? `P${ef}` : ef.charAt(0).toUpperCase() + ef.slice(1);
+      b.onclick = () => patchActiveQueueSettings((p) => { p.recipe.effort = ef; });
+      effPills.appendChild(b);
+    }
+
+    const crfHelp = $("help-crf-box");
+    if (crfHelp) {
+      crfHelp.innerHTML = r.codec === "hevc"
+        ? `<strong>HEVC (x265) CRF guide:</strong><br>• <strong>16–18</strong>: Archival / near-lossless (Anime BD, masters)<br>• <strong>19–21</strong>: Balanced sweet spot (sharp lines, big savings)<br>• <strong>22–24</strong>: Compact space-saver (slight softness)`
+        : `<strong>AV1 (SVT-AV1) CRF guide:</strong><br>• <strong>20–24</strong>: Archival / high detail<br>• <strong>25–29</strong>: Balanced everyday compression<br>• <strong>30–34</strong>: Compact library storage`;
+    }
+
+    if ($("sel-tune")) {
+      const isAv1 = r.codec === "av1";
+      $("sel-tune").disabled = isAv1;
+      $("sel-tune").value = isAv1 ? "" : (r.tune || "");
+      $("sel-aq-mode").disabled = isAv1;
+      $("sel-aq-mode").value = isAv1 ? "" : (r.aq_mode ? String(r.aq_mode) : "");
+      $("chk-ten-bit").checked = Boolean(r.ten_bit);
+      $("btn-anime-preset-quick").classList.toggle("hidden", isAv1);
     }
 
     const selNp = $("sel-named-preset");
@@ -312,661 +2069,599 @@
     }
     $("btn-delete-named-preset").classList.toggle("hidden", !selNp.value);
 
-    $("sel-priority").value = q.priority;
-    $("sel-error-policy").value = q.error_policy;
+    $("lbl-dest-root").textContent = q.destination_root || "Same folder as source";
+    const vol = findQueueVolumeInfo(q);
+    $("lbl-dest-space").textContent = vol ? `${fmtBytes(vol.free_bytes)} free (${vol.mount_point})` : "Auto";
+    if (vol && vol.total_bytes > 0) {
+      const usedPct = Math.min(100, Math.max(4, Math.round(((vol.total_bytes - vol.free_bytes) / vol.total_bytes) * 100)));
+      $("disk-bar-fill").style.width = `${usedPct}%`;
+    }
+
     $("sel-cleanup-policy").value = q.cleanup_policy;
-    $("chk-keep-awake").checked = q.keep_awake;
-    $("chk-full-decode").checked = q.full_decode_verify;
     $("chk-min-savings").checked = q.min_savings_enabled;
     $("inp-min-savings-pct").value = q.min_savings_pct;
-
-    const hasJobs = activeQueueJobs().length > 0;
-    $("btn-preview-15s").disabled = !selectedJobId && !hasJobs;
+    $("sel-priority").value = q.priority;
+    $("sel-error-policy").value = q.error_policy;
+    $("chk-recursive").checked = q.recursive_import;
+    $("chk-keep-awake").checked = q.keep_awake;
+    $("chk-full-decode").checked = q.full_decode_verify;
+    $("lbl-advanced-summary").textContent = `${q.priority} · ${q.keep_awake ? "Keep awake" : "Allow sleep"} · ${q.error_policy === "continue" ? "Continue on error" : "Pause on error"}`;
   }
 
-  function renderBanners() {
-    const area = $("banner-area");
-    area.innerHTML = "";
-    const q = activeQueue();
-    if (!q) return;
-
-    if (!snapshot.tools.discovered) {
-      const b = document.createElement("div");
-      b.className = "banner banner-warn";
-      b.innerHTML = `<span><strong>FFmpeg tools not detected.</strong> ${snapshot.tools.repair_hint || ""}</span>`;
-      const btn = document.createElement("button");
-      btn.className = "btn btn-sm btn-primary";
-      btn.textContent = "Locate FFmpeg tools";
-      btn.onclick = openToolsModal;
-      b.appendChild(btn);
-      area.appendChild(b);
-    } else if (
-      snapshot.tools.capabilities &&
-      q.recipe.family === "archive" &&
-      q.recipe.codec === "hevc" &&
-      !snapshot.tools.capabilities.has_libx265
-    ) {
-      const b = document.createElement("div");
-      b.className = "banner banner-warn";
-      b.innerHTML = `<span><strong>HEVC (libx265) is unavailable in the detected FFmpeg build.</strong> Switch to an available alternative before encoding.</span>`;
-      const acts = document.createElement("div");
-      acts.style.display = "flex";
-      acts.style.gap = "6px";
-      if (snapshot.tools.capabilities.has_libsvtav1) {
-        const av1Btn = document.createElement("button");
-        av1Btn.className = "btn btn-sm btn-primary";
-        av1Btn.textContent = "Use AV1 (Balanced)";
-        av1Btn.onclick = () => patchActiveQueueSettings((p) => { p.recipe.codec = "av1"; applyCodecDefaults(p.recipe); });
-        acts.appendChild(av1Btn);
-      }
-      const rmxBtn = document.createElement("button");
-      rmxBtn.className = "btn btn-sm";
-      rmxBtn.textContent = "Use Remux";
-      rmxBtn.onclick = () => patchActiveQueueSettings((p) => { p.recipe.family = "remux"; applyCodecDefaults(p.recipe); });
-      acts.appendChild(rmxBtn);
-      b.appendChild(acts);
-      area.appendChild(b);
-    }
-
-    if (q.waiting_reason) {
-      const b = document.createElement("div");
-      b.className = "banner banner-warn";
-      b.innerHTML = `<span><strong>${q.name}:</strong> ${escapeHtml(q.waiting_reason)}</span>`;
-      const acts = document.createElement("div");
-      acts.style.display = "flex";
-      acts.style.gap = "6px";
-      const recheck = document.createElement("button");
-      recheck.className = "btn btn-sm";
-      recheck.textContent = "Recheck volumes";
-      recheck.onclick = () => invoke("recheck_volumes");
-      acts.appendChild(recheck);
-      b.appendChild(acts);
-      area.appendChild(b);
-    }
-
-    const ms = snapshot.morning_summary;
-    if (ms && ms.queue_id === q.id && (ms.completed_count > 0 || ms.failed_count > 0 || ms.below_savings_count > 0)) {
-      const b = document.createElement("div");
-      b.className = "banner banner-ok";
-      const ratioStr = ms.total_output_bytes > 0
-        ? fmtRatio(ms.total_input_bytes, ms.total_output_bytes)
-        : "—";
-      const cleanNote =
-        ms.trashed_count > 0 && ms.kept_count === 0
-          ? `${ms.trashed_count} originals trashed`
-          : ms.trashed_count > 0
-          ? `${ms.trashed_count} trashed, ${ms.kept_count} kept`
-          : "originals kept";
-      const vol = findQueueVolumeInfo(q);
-      const freeTxt = vol ? ` · Dest free: ${fmtBytes(vol.free_bytes)}` : "";
-      b.innerHTML = `<span><strong>Summary:</strong> ${ms.completed_count} completed (${fmtBytes(ms.total_input_bytes)} → ${fmtBytes(ms.total_output_bytes)} · ${ratioStr} · ${cleanNote})${ms.failed_count ? ` · ${ms.failed_count} failed` : ""}${ms.below_savings_count ? ` · ${ms.below_savings_count} below savings target` : ""}${freeTxt}</span>`;
-
-      const acts = document.createElement("div");
-      acts.style.display = "flex";
-      acts.style.gap = "6px";
-      const firstDone = activeQueueJobs().find((j) => j.status === "completed");
-      if (firstDone) {
-        const showBtn = document.createElement("button");
-        showBtn.className = "btn btn-sm";
-        showBtn.textContent = "Show output";
-        showBtn.onclick = () => invoke("reveal_output", { path: firstDone.destination_path });
-        acts.appendChild(showBtn);
-      }
-      if (ms.kept_count > 0 || ms.cleanup_uncertain_count > 0 || ms.cleanup_failed_count > 0) {
-        const revBtn = document.createElement("button");
-        revBtn.className = "btn btn-sm btn-primary";
-        revBtn.textContent = "Review originals";
-        revBtn.onclick = () => openReviewOriginalsModal(q.id);
-        acts.appendChild(revBtn);
-      }
-      b.appendChild(acts);
-      area.appendChild(b);
-    }
-  }
-
-  function renderQueueList() {
-    const allQJobs = activeQueueJobs();
-    const emptyEl = $("empty-drop-state");
-    const listWrap = $("queue-list-wrap");
-    const q = activeQueue();
-
-    if (allQJobs.length === 0) {
-      emptyEl.classList.remove("hidden");
-      listWrap.classList.add("hidden");
-      if (q) {
-        const tag = q.recipe.family === "remux" ? "Remux" : `Archive → ${q.recipe.variant === "best" ? "Best" : "Balanced"} · ${q.recipe.codec.toUpperCase()} / ${q.recipe.container.toUpperCase()}`;
-        $("empty-defaults-summary").textContent = `${tag} · Keep originals`;
-      }
-      return;
-    }
-
-    emptyEl.classList.add("hidden");
-    listWrap.classList.remove("hidden");
-
-    const jobs = filterNeedsReview
-      ? allQJobs.filter((j) => j.status === "needs_attention" || j.status === "failed")
-      : allQJobs;
-
-    $("lbl-queue-filter-bar").textContent = filterNeedsReview
-      ? `Showing ${jobs.length} items needing attention or failed (of ${allQJobs.length})`
-      : `${allQJobs.length} files in ${q ? q.name : "queue"}`;
-
-    const hasRetryable = allQJobs.some((j) => ["failed", "canceled", "interrupted", "needs_attention"].includes(j.status));
-    const hasFinished = allQJobs.some((j) => ["completed", "below_savings_target", "canceled"].includes(j.status));
-    $("btn-retry-failed").classList.toggle("hidden", !hasRetryable);
-    $("btn-clear-completed").classList.toggle("hidden", !hasFinished);
-
-    const rowsEl = $("queue-rows");
-    rowsEl.innerHTML = "";
-
-    for (let idx = 0; idx < jobs.length; idx++) {
-      const j = jobs[idx];
-      const isSelected = j.id === selectedJobId;
-      const isExpanded = expandedJobIds.has(j.id);
-      const isActive = j.id === snapshot.active_progress?.job_id;
-      const prog = isActive ? snapshot.active_progress : null;
-
-      const row = document.createElement("div");
-      row.className = "job-row" + (isSelected ? " selected" : "");
-      row.setAttribute("role", "listitem");
-      row.addEventListener("click", () => {
-        selectedJobId = j.id;
-        renderQueueList();
-        renderSidePanel();
-      });
-
-      const main = document.createElement("div");
-      main.className = "job-row-main";
-
-      const selCb = document.createElement("input");
-      selCb.type = "checkbox";
-      selCb.checked = checkedJobIds.has(j.id);
-      selCb.title = "Select row for batch apply/retry";
-      selCb.addEventListener("click", (e) => e.stopPropagation());
-      selCb.addEventListener("change", () => {
-        if (selCb.checked) checkedJobIds.add(j.id);
-        else checkedJobIds.delete(j.id);
-        renderConfigStrip();
-      });
-      main.appendChild(selCb);
-
-      const disc = document.createElement("button");
-      disc.type = "button";
-      disc.className = "disclosure-btn";
-      disc.textContent = isExpanded ? "▼" : "▶";
-      disc.setAttribute("aria-expanded", String(isExpanded));
-      disc.setAttribute("aria-label", `Media details for ${j.source_rel_path}`);
-      disc.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (expandedJobIds.has(j.id)) expandedJobIds.delete(j.id);
-        else expandedJobIds.add(j.id);
-        renderQueueList();
-      });
-      main.appendChild(disc);
-
-      const titleCol = document.createElement("div");
-      titleCol.className = "job-title-col";
-      const subBits = [
-        j.recipe.family === "remux" ? `Remux · ${j.recipe.container.toUpperCase()}` : `${j.recipe.codec.toUpperCase()} CRF ${j.recipe.crf} · ${j.recipe.container.toUpperCase()}`,
-        fmtBytes(j.input_bytes),
-      ];
-      if (j.status === "completed" && j.output_bytes) {
-        subBits.push(`→ ${fmtBytes(j.output_bytes)} (${fmtRatio(j.input_bytes, j.output_bytes)})`);
-      } else if (j.status === "below_savings_target" && j.output_bytes) {
-        subBits.push(`Attempt: ${fmtBytes(j.output_bytes)} · original kept`);
-      }
-      titleCol.innerHTML = `<div class="job-name" title="${escapeHtml(j.source_path)}">${escapeHtml(j.source_rel_path)}</div>
-        <div class="job-sub">${escapeHtml(subBits.join(" · "))}</div>`;
-      main.appendChild(titleCol);
-
-      // Status badge
-      const statusBadge = document.createElement("span");
-      statusBadge.className = "badge " + statusBadgeClass(j.status);
-      statusBadge.textContent = statusLabel(j.status);
-      main.appendChild(statusBadge);
-
-      // Cleanup badge if completed
-      if (j.status === "completed") {
-        const cleanBadge = document.createElement("span");
-        cleanBadge.className = "badge";
-        cleanBadge.textContent = cleanupOutcomeLabel(j.cleanup_outcome);
-        main.appendChild(cleanBadge);
-      } else {
-        const spacer = document.createElement("span");
-        main.appendChild(spacer);
-      }
-
-      // Row action buttons
-      const rowActs = document.createElement("div");
-      rowActs.style.display = "flex";
-      rowActs.style.gap = "4px";
-      if (j.status === "encoding") {
-        const lpBtn = document.createElement("button");
-        lpBtn.type = "button";
-        lpBtn.className = "btn btn-sm btn-secondary";
-        lpBtn.textContent = "Live preview";
-        lpBtn.onclick = (e) => {
-          e.stopPropagation();
-          openLivePreviewModal(j.id);
-        };
-        rowActs.appendChild(lpBtn);
-      }
-      if (["failed", "canceled", "interrupted", "needs_attention"].includes(j.status)) {
-        const rBtn = document.createElement("button");
-        rBtn.type = "button";
-        rBtn.className = "btn btn-sm";
-        rBtn.textContent = "Retry";
-        rBtn.onclick = async (e) => {
-          e.stopPropagation();
-          try {
-            await invoke("retry_jobs", { jobIds: [j.id] });
-          } catch (err) {
-            alert(err);
-          }
-        };
-        rowActs.appendChild(rBtn);
-      }
-      if (j.status === "completed") {
-        const shBtn = document.createElement("button");
-        shBtn.type = "button";
-        shBtn.className = "btn btn-sm";
-        shBtn.textContent = "Show";
-        shBtn.onclick = (e) => {
-          e.stopPropagation();
-          invoke("reveal_output", { path: j.destination_path });
-        };
-        rowActs.appendChild(shBtn);
-      }
-      if (["queued", "ready", "needs_attention", "interrupted", "failed", "canceled"].includes(j.status)) {
-        const upBtn = document.createElement("button");
-        upBtn.type = "button";
-        upBtn.className = "btn btn-ghost btn-sm";
-        upBtn.textContent = "↑";
-        upBtn.title = "Move up";
-        upBtn.disabled = idx === 0;
-        upBtn.onclick = (e) => {
-          e.stopPropagation();
-          moveJob(allQJobs, j.id, -1);
-        };
-        rowActs.appendChild(upBtn);
-
-        const dnBtn = document.createElement("button");
-        dnBtn.type = "button";
-        dnBtn.className = "btn btn-ghost btn-sm";
-        dnBtn.textContent = "↓";
-        dnBtn.title = "Move down";
-        dnBtn.disabled = idx === jobs.length - 1;
-        dnBtn.onclick = (e) => {
-          e.stopPropagation();
-          moveJob(allQJobs, j.id, 1);
-        };
-        rowActs.appendChild(dnBtn);
-
-        const rmBtn = document.createElement("button");
-        rmBtn.type = "button";
-        rmBtn.className = "btn btn-ghost btn-sm";
-        rmBtn.textContent = "×";
-        rmBtn.title = "Remove from queue";
-        rmBtn.onclick = (e) => {
-          e.stopPropagation();
-          invoke("remove_pending_jobs", { jobIds: [j.id] });
-        };
-        rowActs.appendChild(rmBtn);
-      }
-      main.appendChild(rowActs);
-      row.appendChild(main);
-
-      // Live Progress Bar
-      if (prog || j.status === "verifying" || j.status === "publishing") {
-        const pw = document.createElement("div");
-        pw.className = "progress-wrap";
-        const dur = prog?.duration_secs;
-        const pct = dur && dur > 0 ? Math.min(100, (prog.out_time_secs / dur) * 100) : null;
-        const indet = pct === null && j.status === "encoding";
-        pw.innerHTML = `<div class="progress-track"><div class="progress-fill ${indet ? "indeterminate" : ""}" style="width:${pct !== null ? pct.toFixed(1) : j.status === "encoding" ? 35 : 100}%"></div></div>`;
-        const meta = document.createElement("div");
-        meta.className = "progress-meta";
-        if (j.status === "verifying") {
-          meta.textContent = "Verifying streams, timing, and output integrity…";
-        } else if (j.status === "publishing") {
-          meta.textContent = "Publishing verified output atomically…";
-        } else if (prog) {
-          const items = [
-            `${fmtDuration(prog.out_time_secs)} / ${fmtDuration(prog.duration_secs)}`,
-            `Written: ${fmtBytes(prog.bytes_written)}`,
-            `Speed: ${prog.speed ? prog.speed.toFixed(2) + "x" : "—"}`,
-            `FPS: ${prog.fps ? prog.fps.toFixed(1) : "—"}`,
-            `ETA: ${prog.eta_secs ? fmtDuration(prog.eta_secs) : "—"}`,
-          ];
-          if (prog.est_final_ratio) {
-            items.push(`Est. final ratio: ${prog.est_final_ratio.toFixed(2)}:1`);
-          }
-          meta.textContent = items.join("  ·  ");
-        }
-        pw.appendChild(meta);
-        row.appendChild(pw);
-      }
-
-      // Expanded In-Place Input Media Details
-      if (isExpanded) {
-        const det = document.createElement("div");
-        det.className = "job-expand-details";
-        det.innerHTML = renderExpandedMediaHtml(j);
-        row.appendChild(det);
-      }
-
-      rowsEl.appendChild(row);
-    }
-  }
-
-  function renderExpandedMediaHtml(j) {
-    if (!j.probe) {
-      return `<p class="muted">No cached ffprobe data available.</p>`;
-    }
-    const f = j.probe.format;
-    const summary = `Container: <strong>${escapeHtml(f.format_long_name || f.format_name || "—")}</strong> · Exact size: <strong>${j.input_bytes.toLocaleString()} bytes</strong> (${fmtBytes(j.input_bytes)}) · Duration: <strong>${fmtDuration(f.duration_secs)}</strong> · Bitrate: <strong>${f.bit_rate ? Math.round(f.bit_rate / 1000) + " kbps" : "—"}</strong>`;
-
-    let rows = "";
-    for (const s of j.probe.streams) {
-      const dispFlags = [];
-      if (s.disposition.default) dispFlags.push("default");
-      if (s.disposition.forced) dispFlags.push("forced");
-      if (s.disposition.attached_pic) dispFlags.push("cover");
-      const langDisp = `${s.language || "—"} ${dispFlags.length ? "(" + dispFlags.join(",") + ")" : ""}`;
-
-      let specs = "—";
-      if (s.codec_type === "video") {
-        const fr = s.is_vfr
-          ? `${s.avg_frame_rate || "—"} (VFR avg)`
-          : (s.r_frame_rate || s.avg_frame_rate || "—");
-        const color = [s.color_primaries, s.color_transfer, s.color_space].filter(Boolean).join("/") || "—";
-        specs = `${s.width || "?"}×${s.height || "?"} · fps: ${fr} · ${s.pix_fmt || "—"} (${s.bit_depth ? s.bit_depth + "-bit" : "—"}) · color: ${color}`;
-      } else if (s.codec_type === "audio") {
-        specs = `${s.channel_layout || (s.channels ? s.channels + " ch" : "—")} · ${s.sample_rate ? s.sample_rate + " Hz" : "—"} · ${s.bit_rate ? Math.round(s.bit_rate / 1000) + " kbps" : "—"}`;
-      } else {
-        specs = s.title || "—";
-      }
-
-      rows += `<tr>
-        <td>#${s.index}</td>
-        <td>${escapeHtml(s.disposition.attached_pic ? "cover" : s.codec_type)}</td>
-        <td>${escapeHtml(s.codec_name)}</td>
-        <td>${escapeHtml(langDisp)}</td>
-        <td>${escapeHtml(specs)}</td>
-      </tr>`;
-    }
-
-    return `<div>${summary}</div>
-      <table class="media-tracks-table">
-        <thead><tr><th>#</th><th>Type</th><th>Codec</th><th>Language / Flags</th><th>Properties</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`;
-  }
-
-  function renderSidePanel() {
-    const panel = $("side-panel-content");
-    const j = activeQueueJobs().find((x) => x.id === selectedJobId);
+  function renderEncodeJobDetailsPanel(q, jobs) {
+    const el = $("side-panel-content");
+    const j = jobs.find((x) => x.id === selectedJobId) || jobs[0];
     if (!j) {
-      panel.innerHTML = `<p class="muted">Select a job row to inspect its tracks, output destination, pending settings, or recovery actions.</p>`;
+      el.innerHTML = `<div class="setup-card" style="text-align:center;padding:24px;"><span class="muted" style="font-size:12px;">Select a file to inspect its stream plan, output path, and FFmpeg command.</span></div>`;
       return;
     }
 
-    panel.innerHTML = "";
+    const info = jobVideoInfo(j);
+    el.innerHTML = `
+      <div class="setup-card">
+        <span class="setup-kicker">Selected Job</span>
+        <div style="font-size:12.5px;font-weight:600;word-break:break-all;">${escapeHtml(jobFileName(j))}</div>
+        <div class="muted tabular-nums" style="font-size:11px;">${fmtBytes(j.input_bytes)} · ${fmtDuration(info.dur)} · ${escapeHtml(info.codec)} ${info.mbps > 0 ? info.mbps + " Mbps" : ""}</div>
+        <div class="inline-row" style="gap:6px;">
+          <button type="button" id="jd-preview" class="accent-pill-btn" style="flex:1;">Preview 15s</button>
+          ${j.status === "encoding"
+            ? `<button type="button" id="jd-live" class="btn btn-sm btn-secondary" style="flex:1;">Live View</button>`
+            : `<button type="button" id="jd-fwd" class="btn btn-sm btn-secondary" style="flex:1;">Forward →</button>`}
+        </div>
+      </div>
 
-    // Summary & Output Path
-    const s1 = document.createElement("div");
-    s1.className = "side-section";
-    s1.innerHTML = `<h3>Selected Job</h3>
-      <div class="mono" style="word-break:break-all;margin-bottom:6px">${escapeHtml(j.source_rel_path)}</div>
-      <div class="muted" style="font-size:11px;word-break:break-all">Output: ${escapeHtml(j.destination_path)}</div>`;
-    if (["queued", "ready", "needs_attention", "interrupted", "failed", "canceled"].includes(j.status)) {
-      const chBtn = document.createElement("button");
-      chBtn.type = "button";
-      chBtn.className = "btn btn-sm btn-secondary";
-      chBtn.style.marginTop = "6px";
-      chBtn.textContent = "Choose destination…";
-      chBtn.onclick = async () => {
-        const picked = await dialog.save({ defaultPath: j.destination_path });
-        if (picked) {
-          try {
-            await invoke("update_pending_job", { jobId: j.id, patch: { destination_path: picked } });
-          } catch (err) {
-            alert(err);
-          }
-        }
+      <div class="setup-card">
+        <div class="setup-card-head">
+          <span class="setup-kicker">Planned Output Path</span>
+          ${["queued", "ready", "needs_attention", "interrupted", "failed", "canceled"].includes(j.status) ? `<button type="button" id="jd-dest" class="btn-link">Change</button>` : ""}
+        </div>
+        <div class="mono muted" style="font-size:11px;word-break:break-all;">${escapeHtml(j.destination_path)}</div>
+      </div>
+
+      ${j.plan ? `
+        <div class="setup-card">
+          <span class="setup-kicker">Explicit Stream Plan (${j.plan.tracks.length} tracks)</span>
+          <div class="sidebar-panel-stack" style="gap:5px;">
+            ${j.plan.tracks.map((t) => `
+              <div style="font-size:11px;padding:6px 8px;border-radius:7px;background:var(--surface);border:1px solid var(--border);">
+                <span class="mono">#${t.stream_index}</span> <strong>${escapeHtml(t.codec_type)}</strong> (${escapeHtml(t.codec_name)}) → ${escapeHtml(t.action)}
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      ` : ""}
+
+      <div class="setup-card">
+        <span class="setup-kicker">FFmpeg Command</span>
+        <pre class="mono muted" style="font-size:10px;white-space:pre-wrap;word-break:break-all;margin:0;">${escapeHtml(j.plan?.printable_command || "Will be planned before encode")}</pre>
+      </div>
+    `;
+
+    el.querySelector("#jd-preview").onclick = () => openSamplePreviewModal(j);
+    el.querySelector("#jd-live")?.addEventListener("click", () => openLivePreviewModal(j.id));
+    el.querySelector("#jd-fwd")?.addEventListener("click", () => {
+      openForwardModal([j.id], j.status === "needs_attention" ? "repair" : "explore", "selected file", j.status === "completed");
+    });
+    el.querySelector("#jd-dest")?.addEventListener("click", async () => {
+      const picked = await dialog.save({ defaultPath: j.destination_path });
+      if (picked) await invoke("update_pending_job", { jobId: j.id, patch: { destination_path: picked } });
+    });
+  }
+
+  function renderModeConfigPanel(q, mode, jobs) {
+    const el = $("panel-mode-config");
+    const meta = activeTabMeta(q);
+
+    if (mode === "explore") {
+      const totalB = jobs.reduce((a, b) => a + (b.input_bytes || 0), 0);
+      const protB = jobs.filter((j) => jobDecision(j) === "protected").reduce((a, b) => a + (b.input_bytes || 0), 0);
+      const compB = jobs.filter((j) => ["compress_balanced", "compress_compact"].includes(jobDecision(j))).reduce((a, b) => a + (b.input_bytes || 0), 0);
+      el.innerHTML = `
+        <div class="setup-card">
+          <span class="setup-kicker">Resource Bundle Summary</span>
+          <div class="mono muted" style="font-size:11px;word-break:break-all;background:var(--surface);padding:7px;border-radius:7px;border:1px solid var(--border);">${escapeHtml(meta.resource_source || `${jobs.length} files attached`)}</div>
+          <div class="seg-pair-grid tabular-nums">
+            <div style="padding:7px;border-radius:8px;background:var(--surface);border:1px solid var(--border);">
+              <div class="muted" style="font-size:10px;">Total Scanned</div>
+              <div style="font-size:12.5px;font-weight:700;">${fmtBytes(totalB)}</div>
+            </div>
+            <div style="padding:7px;border-radius:8px;background:var(--surface);border:1px solid var(--border);">
+              <div style="font-size:10px;color:var(--warn);">Protected ★</div>
+              <div style="font-size:12.5px;font-weight:700;">${fmtBytes(protB)}</div>
+            </div>
+          </div>
+          <div style="padding:8px;border-radius:8px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.28);">
+            <div style="font-size:10px;color:var(--ok);">Tagged for Compression</div>
+            <div style="font-size:12px;font-weight:600;">${fmtBytes(compB)} selected</div>
+          </div>
+        </div>
+        <div class="setup-card">
+          <span class="setup-kicker">Pipeline Tip</span>
+          <p class="muted" style="font-size:11.5px;line-height:1.45;margin:0;">Click any video to load real extracted storyboard frames in <strong>Inspect &amp; Decide</strong>. Mark key masters <strong>★ Keep</strong>, tag the rest <strong>Balanced</strong> or <strong>Compact</strong>, then click <strong>Forward →</strong> to send them straight to a Transcode tab.</p>
+        </div>
+      `;
+    } else if (mode === "organize") {
+      const ov = organizeOverview && organizeOverviewQueueId === q.id ? organizeOverview : null;
+      const cacheStats = ov?.hash_cache || snapshot.hash_cache_stats || { entry_count: 0, total_hashed_bytes: 0, cache_bytes_estimate: 0 };
+      const tags = ov?.available_tags || [];
+      el.innerHTML = `
+        <div class="setup-card">
+          <span class="setup-kicker">Duplicate &amp; Similar Scan Rules</span>
+          <label class="check-row-card" style="cursor:pointer;"><span class="check-title">Exact BLAKE3 + SHA-256 hash</span><input type="checkbox" id="cfg-ded-sha" class="switch-chk" ${dedupeAlsoSha256 ? "checked" : ""} /></label>
+          <label class="check-row-card" style="cursor:pointer;"><span class="check-title">Perceptual match (≥88%)</span><input type="checkbox" id="cfg-ded-perc" class="switch-chk" ${dedupePerceptual ? "checked" : ""} /></label>
+          <button type="button" id="cfg-ded-run" class="btn btn-sm btn-primary" ${dedupeScanning || jobs.length < 2 ? "disabled" : ""}>Run Duplicate Scan</button>
+        </div>
+        <div class="setup-card">
+          <span class="setup-kicker">SQLite Hash Cache</span>
+          <div class="muted tabular-nums" style="font-size:11.5px;">${cacheStats.entry_count || 0} cached files · ${fmtBytes(cacheStats.total_hashed_bytes || 0)} indexed (${fmtBytes(cacheStats.cache_bytes_estimate || 0)})</div>
+          <button type="button" id="cfg-clear-cache" class="btn btn-sm btn-secondary" ${(cacheStats.entry_count || 0) === 0 ? "disabled" : ""}>Delete Hash Cache</button>
+        </div>
+        <div class="setup-card">
+          <span class="setup-kicker">Tags in This Tab (${tags.length})</span>
+          <div class="inline-row" style="gap:4px;flex-wrap:wrap;">
+            ${tags.length > 0 ? tags.map((t) => `<span class="tag-chip">${escapeHtml(t)}</span>`).join("") : `<span class="muted" style="font-size:11px;">No tags yet — extract watermarks, group faces, or add tags manually.</span>`}
+          </div>
+        </div>
+      `;
+      el.querySelector("#cfg-ded-sha").onchange = (e) => { dedupeAlsoSha256 = e.target.checked; };
+      el.querySelector("#cfg-ded-perc").onchange = (e) => { dedupePerceptual = e.target.checked; };
+      el.querySelector("#cfg-ded-run").onclick = () => triggerTabDedupeScan(q);
+      el.querySelector("#cfg-clear-cache").onclick = async () => {
+        const removed = await invoke("clear_hash_cache");
+        showToast(`Deleted ${removed} cached SQLite file hash entr${removed === 1 ? "y" : "ies"}.`, "info");
+        await loadOrganizeOverview(q.id, true);
       };
-      s1.appendChild(chBtn);
+    } else {
+      el.innerHTML = `
+        <div class="setup-card">
+          <span class="setup-kicker">Repair Policy &amp; References</span>
+          <div class="field-block">
+            <div class="setup-row-between">
+              <span class="field-label">Reference Videos (${meta.repair_refs.length})</span>
+              <button type="button" id="rp-add-ref" class="btn-link">+ Add ref…</button>
+            </div>
+            <div id="rp-refs-list" class="sidebar-panel-stack" style="gap:4px;">
+              ${meta.repair_refs.length === 0 ? `<span class="muted" style="font-size:11px;">None (recommended if moov is missing)</span>` : meta.repair_refs.map((p, idx) => `
+                <div class="inline-row" style="justify-content:space-between;padding:4px 7px;border-radius:6px;background:var(--surface);border:1px solid var(--border);font-size:11px;">
+                  <span class="truncate mono">${escapeHtml(p.split(/[\\/]/).pop())}</span>
+                  <button type="button" class="btn-link" data-rm-ref="${idx}">×</button>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+          <label class="check-row-card" style="cursor:pointer;"><span class="check-title">Deep bitstream &amp; candidate scan</span><input type="checkbox" id="rp-deep" class="switch-chk" ${meta.repair_deep_scan ? "checked" : ""} /></label>
+          <label class="check-row-card" style="cursor:pointer;"><span class="check-title">Prioritize video-only (omit audio)</span><input type="checkbox" id="rp-vonly" class="switch-chk" ${meta.repair_video_only ? "checked" : ""} /></label>
+          <div class="setup-row-between">
+            <span class="field-label">Timeout (s)</span>
+            <input type="number" id="rp-timeout" min="15" max="3600" value="${meta.repair_timeout_secs || 300}" style="width:72px;" />
+          </div>
+        </div>
+      `;
+      el.querySelector("#rp-add-ref").onclick = async () => {
+        const res = await dialog.open({ multiple: true });
+        if (!res) return;
+        const nextRefs = [...meta.repair_refs, ...(Array.isArray(res) ? res : [res])];
+        await invoke("set_tab_workspace_meta", { queueId: q.id, meta: { ...meta, repair_refs: Array.from(new Set(nextRefs)) } });
+      };
+      el.querySelectorAll("[data-rm-ref]").forEach((b) => {
+        b.onclick = () => {
+          const idx = Number(b.getAttribute("data-rm-ref"));
+          const nextRefs = meta.repair_refs.filter((_, i) => i !== idx);
+          invoke("set_tab_workspace_meta", { queueId: q.id, meta: { ...meta, repair_refs: nextRefs } });
+        };
+      });
+      const saveRepairMeta = () => {
+        invoke("set_tab_workspace_meta", {
+          queueId: q.id,
+          meta: {
+            ...meta,
+            repair_deep_scan: el.querySelector("#rp-deep").checked,
+            repair_video_only: el.querySelector("#rp-vonly").checked,
+            repair_timeout_secs: Number(el.querySelector("#rp-timeout").value) || 300,
+          },
+        });
+      };
+      el.querySelector("#rp-deep").onchange = saveRepairMeta;
+      el.querySelector("#rp-vonly").onchange = saveRepairMeta;
+      el.querySelector("#rp-timeout").onchange = saveRepairMeta;
     }
-    panel.appendChild(s1);
+  }
 
-    // Issues & One-Click Recovery Actions
-    if (j.error_message || (j.plan && j.plan.issues.length > 0)) {
-      const sErr = document.createElement("div");
-      sErr.className = "side-section";
-      sErr.innerHTML = `<h3>Attention / Error Details</h3>`;
-      if (j.error_message) {
-        sErr.innerHTML += `<div class="badge badge-err" style="margin-bottom:6px">${escapeHtml(j.error_stage || "error")}</div>
-          <p style="margin:4px 0;font-size:12px">${escapeHtml(j.error_message)}</p>`;
+  function renderModeInspectPanel(q, mode, jobs) {
+    const el = $("panel-mode-inspect");
+    const j = jobs.find((x) => x.id === selectedJobId) || jobs[0];
+
+    if (mode === "organize") {
+      if (!j) {
+        el.innerHTML = `<div class="setup-card" style="text-align:center;padding:24px;"><span class="muted" style="font-size:12px;">Select a file in Organize to preview or edit tags.</span></div>`;
+        return;
       }
-      if (j.plan && j.plan.issues.length > 0) {
-        for (const iss of j.plan.issues) {
-          const card = document.createElement("div");
-          card.style.marginTop = "8px";
-          card.style.padding = "8px";
-          card.style.border = "1px solid var(--border)";
-          card.style.borderRadius = "6px";
-          card.innerHTML = `<strong>${escapeHtml(iss.summary)}</strong><p style="margin:4px 0;font-size:12px">${escapeHtml(iss.details)}</p>`;
-          const acts = document.createElement("div");
-          acts.style.display = "flex";
-          acts.style.flexWrap = "wrap";
-          acts.style.gap = "6px";
-          if (iss.can_use_mkv) {
-            const mkvBtn = document.createElement("button");
-            mkvBtn.type = "button";
-            mkvBtn.className = "btn btn-sm btn-primary";
-            mkvBtn.textContent = "Use MKV for this file";
-            mkvBtn.onclick = () => {
-              const nextRecipe = { ...j.recipe, container: "mkv" };
-              invoke("update_pending_job", { jobId: j.id, patch: { recipe: nextRecipe } });
-            };
-            acts.appendChild(mkvBtn);
-          }
-          if (iss.can_remux) {
-            const rmxBtn = document.createElement("button");
-            rmxBtn.type = "button";
-            rmxBtn.className = "btn btn-sm btn-secondary";
-            rmxBtn.textContent = "Remux (stream copy)";
-            rmxBtn.onclick = () => {
-              const nextRecipe = { ...j.recipe, family: "remux", crf: 0, effort: "none" };
-              invoke("update_pending_job", { jobId: j.id, patch: { recipe: nextRecipe } });
-            };
-            acts.appendChild(rmxBtn);
-          }
-          if (iss.can_opt_in_fallback && iss.fallback_description) {
-            const fbBtn = document.createElement("button");
-            fbBtn.type = "button";
-            fbBtn.className = "btn btn-sm";
-            fbBtn.textContent = iss.fallback_description;
-            fbBtn.onclick = () => {
-              const ov = { ...j.compat_overrides };
-              if (iss.kind === "mp4_incompatible_audio") ov.allow_mp4_audio_aac_fallback = true;
-              if (iss.kind === "mp4_incompatible_subtitle") ov.allow_mp4_sub_mov_text_fallback = true;
-              invoke("update_pending_job", { jobId: j.id, patch: { compat_overrides: ov } });
-            };
-            acts.appendChild(fbBtn);
-          }
-          if (iss.kind === "multiple_moving_video_streams" && j.probe) {
-            for (const st of j.probe.streams.filter((s) => s.codec_type === "video" && !s.disposition.attached_pic)) {
-              const vBtn = document.createElement("button");
-              vBtn.type = "button";
-              vBtn.className = "btn btn-sm";
-              vBtn.textContent = `Use video #${st.index} (${st.codec_name} ${st.width}×${st.height})`;
-              vBtn.onclick = () => {
-                const ov = { ...j.compat_overrides, selected_video_stream: st.index };
-                invoke("update_pending_job", { jobId: j.id, patch: { compat_overrides: ov } });
-              };
-              acts.appendChild(vBtn);
-            }
-          }
-          card.appendChild(acts);
-          sErr.appendChild(card);
+      const tags = (organizeOverview && organizeOverviewQueueId === q.id ? organizeOverview.job_tags?.[j.id] : []) || [];
+      el.innerHTML = `
+        <div class="setup-card">
+          <span class="setup-kicker">Selected Resource</span>
+          <div style="font-size:13px;font-weight:700;">${escapeHtml(jobFileName(j))}</div>
+          <div class="mono muted" style="font-size:11px;word-break:break-all;">${escapeHtml(j.source_path)}</div>
+          <div class="muted tabular-nums" style="font-size:11.5px;">${fmtBytes(j.input_bytes)} · ${isImagePath(j.source_path) ? "Image" : `${jobVideoInfo(j).res} · ${jobVideoInfo(j).dur}`}</div>
+          <button type="button" id="org-ins-preview" class="btn btn-sm btn-primary">Preview ${isImagePath(j.source_path) ? "Image" : "Video"}</button>
+        </div>
+        <div class="setup-card">
+          <span class="setup-kicker">Tags (${tags.length})</span>
+          <div class="inline-row" style="gap:4px;flex-wrap:wrap;">
+            ${tags.length > 0 ? tags.map((t) => `<span class="tag-chip">${escapeHtml(t)}<button type="button" class="tag-chip-x" data-ins-untag="${escapeHtml(t)}">×</button></span>`).join("") : `<span class="muted" style="font-size:11px;">No tags yet.</span>`}
+          </div>
+          <div class="inline-row" style="gap:6px;margin-top:4px;">
+            <input type="text" id="org-ins-tag-inp" class="full-input" placeholder="Add tag…" />
+            <button type="button" id="org-ins-tag-add" class="btn btn-sm btn-secondary">Add</button>
+          </div>
+        </div>
+      `;
+      el.querySelector("#org-ins-preview").onclick = () => openMediaPreviewModal(j);
+      el.querySelectorAll("[data-ins-untag]").forEach((b) => {
+        b.onclick = async () => {
+          await invoke("tab_untag_resource", { jobId: j.id, tagName: b.getAttribute("data-ins-untag") });
+          await loadOrganizeOverview(q.id, true);
+        };
+      });
+      el.querySelector("#org-ins-tag-add").onclick = async () => {
+        const val = el.querySelector("#org-ins-tag-inp").value.trim();
+        if (!val) return;
+        await invoke("tab_tag_resources", { jobIds: [j.id], tagNames: [val] });
+        await loadOrganizeOverview(q.id, true);
+      };
+      return;
+    }
+
+    if (!j) {
+      el.innerHTML = `<div class="setup-card" style="text-align:center;padding:24px;"><span class="muted" style="font-size:12px;">Select an item on the left to inspect it.</span></div>`;
+      return;
+    }
+
+    if (mode === "repair") {
+      const rState = snapshot.tab_repair_items?.[j.id];
+      const diag = rState?.diagnosis;
+      const rep = rState?.report;
+      const protoBase = navigator.userAgent.includes("Windows") ? "http://preview.localhost" : "preview://localhost";
+      el.innerHTML = `
+        <div class="setup-card">
+          <span class="setup-kicker">Repair Diagnosis</span>
+          <div style="font-size:12.5px;font-weight:600;word-break:break-all;">${escapeHtml(jobFileName(j))}</div>
+          ${diag ? `
+            <div class="muted tabular-nums" style="font-size:11px;">
+              Size: ${fmtBytes(diag.actual_file_size)} · SHA-256: <span class="mono">${escapeHtml((diag.sha256 || "").slice(0, 14))}…</span>
+            </div>
+            ${diag.detected_issues?.length ? `<ul style="margin:4px 0 0 16px;padding:0;font-size:11px;color:var(--warn);">${diag.detected_issues.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : ""}
+            ${diag.atoms?.length ? `<div class="muted mono" style="font-size:10.5px;margin-top:4px;">Atoms: ${diag.atoms.slice(0, 8).map((a) => `${a.box_type}(${fmtBytes(a.size)})`).join(" → ")}</div>` : ""}
+          ` : `<p class="muted" style="font-size:11.5px;margin:0;">Click <strong>Diagnose</strong> or <strong>Run Repair</strong> to inspect MP4 atoms and recover streams.</p>`}
+        </div>
+        ${rState?.preview_sheet_filename ? `
+          <div class="setup-card">
+            <span class="setup-kicker">Recovered Contact Sheet</span>
+            <img src="${protoBase}/${encodeURIComponent(rState.preview_sheet_filename)}" style="width:100%;border-radius:8px;border:1px solid var(--border);" alt="Recovered contact sheet" />
+          </div>
+        ` : ""}
+        ${rep ? `
+          <div class="setup-card">
+            <span class="setup-kicker">Recovery Report</span>
+            <div style="font-size:11.5px;">Strategy: <strong>${escapeHtml(rep.selected_strategy || "—")}</strong></div>
+            <div class="muted tabular-nums" style="font-size:11px;">Frames: ${rep.decoded_frames ?? "—"} · Duration: ${fmtDuration(rep.recovered_duration_secs || 0)} · Integrity: ${rep.source_checksum_verified ? "Original untouched ✓" : "—"}</div>
+            <div class="inline-row" style="gap:6px;margin-top:4px;">
+              <button type="button" id="rep-exp-json" class="btn btn-sm btn-secondary">Export JSON</button>
+              <button type="button" id="rep-exp-txt" class="btn btn-sm btn-secondary">Export TXT</button>
+            </div>
+          </div>
+        ` : ""}
+      `;
+      el.querySelector("#rep-exp-json")?.addEventListener("click", async () => {
+        const dest = await dialog.save({ defaultPath: `${jobFileName(j)}.recovery.json` });
+        if (dest) invoke("export_tab_repair_report", { jobId: j.id, destPath: dest, format: "json" });
+      });
+      el.querySelector("#rep-exp-txt")?.addEventListener("click", async () => {
+        const dest = await dialog.save({ defaultPath: `${jobFileName(j)}.recovery.txt` });
+        if (dest) invoke("export_tab_repair_report", { jobId: j.id, destPath: dest, format: "txt" });
+      });
+      return;
+    }
+
+    // Explore Inspector with REAL 6-Frame Storyboard via get_comparison_frame!
+    const dec = jobDecision(j);
+    const info = jobVideoInfo(j);
+    const stamps = [0.10, 0.25, 0.40, 0.60, 0.75, 0.90];
+    const cachedUrls = storyboardCache.get(j.id);
+
+    el.innerHTML = `
+      <div class="setup-card">
+        <div class="setup-card-head">
+          <span class="setup-kicker">6-Frame Scene Preview</span>
+          <button type="button" id="ins-preview-15" class="btn-link">15s Compare</button>
+        </div>
+        <div class="storyboard-grid">
+          ${stamps.map((pct, i) => `
+            <div class="storyboard-cell">
+              ${cachedUrls && cachedUrls[i] ? `<img src="${cachedUrls[i]}" alt="Frame ${Math.round(pct * 100)}%" />` : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#71717A;font-size:10px;">Loading…</div>`}
+              <span class="storyboard-ts">${Math.round(pct * 100)}%</span>
+            </div>
+          `).join("")}
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:600;word-break:break-all;">${escapeHtml(jobFileName(j))}</div>
+          <div class="muted tabular-nums" style="font-size:11px;margin-top:2px;">${fmtBytes(j.input_bytes)} · ${fmtDuration(info.dur)} · ${escapeHtml(info.codec)} ${info.mbps > 0 ? info.mbps + " Mbps" : ""}</div>
+        </div>
+      </div>
+
+      <div class="setup-card">
+        <span class="setup-kicker">Decision for This Video</span>
+        <button type="button" data-ins-dec="protected" class="decision-btn ${dec === "protected" ? "active" : ""}">
+          <span>★ Protect &amp; Keep Original</span><span class="muted" style="font-size:10px;">Lock file</span>
+        </button>
+        <button type="button" data-ins-dec="compress_balanced" class="decision-btn ${dec === "compress_balanced" ? "active" : ""}">
+          <span>Compress · Balanced</span><span class="muted" style="font-size:10px;">HEVC CRF 20</span>
+        </button>
+        <button type="button" data-ins-dec="compress_compact" class="decision-btn ${dec === "compress_compact" ? "active" : ""}">
+          <span>Compress · Compact (Max GB)</span><span class="muted" style="font-size:10px;">AV1 CRF 28</span>
+        </button>
+        <button type="button" data-ins-dec="repair" class="decision-btn ${dec === "repair" ? "active" : ""}">
+          <span>Needs Repair</span><span class="muted" style="font-size:10px;">Fix header</span>
+        </button>
+        <button type="button" id="ins-fwd-one" class="btn btn-sm btn-primary" style="width:100%;margin-top:4px;">Forward This File to Another Tab →</button>
+      </div>
+    `;
+
+    el.querySelector("#ins-preview-15").onclick = () => openSamplePreviewModal(j);
+    el.querySelector("#ins-fwd-one").onclick = () => openForwardModal([j.id], dec === "repair" ? "repair" : "encode", "selected file", false);
+    el.querySelectorAll("[data-ins-dec]").forEach((b) => {
+      b.onclick = () => {
+        const val = b.getAttribute("data-ins-dec");
+        invoke("set_job_decision", { jobId: j.id, decision: dec === val ? "unreviewed" : val });
+      };
+    });
+
+    if (!cachedUrls && !storyboardInflight.has(j.id)) {
+      loadRealStoryboardFrames(j, info.dur, stamps);
+    }
+  }
+
+  async function loadRealStoryboardFrames(job, durSecs, stamps) {
+    storyboardInflight.add(job.id);
+    const dur = Math.max(2, durSecs || 12);
+    try {
+      const urls = await Promise.all(stamps.map(async (frac) => {
+        try {
+          const ts = Math.min(dur - 0.2, Math.max(0.1, dur * frac));
+          const bytes = await invoke("get_comparison_frame", { mediaPath: job.source_path, timestampSecs: ts, fullResolution: false });
+          return URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }));
+        } catch (_) {
+          return "";
         }
-      }
-      panel.appendChild(sErr);
+      }));
+      storyboardCache.set(job.id, urls);
+      if (selectedJobId === job.id) renderSidebar();
+    } finally {
+      storyboardInflight.delete(job.id);
     }
-
-    // Track Plan
-    if (j.plan) {
-      const sPlan = document.createElement("div");
-      sPlan.className = "side-section";
-      sPlan.innerHTML = `<h3>Track Plan (${j.plan.tracks.length} tracks)</h3>`;
-      for (const t of j.plan.tracks) {
-        const div = document.createElement("div");
-        div.style.fontSize = "12px";
-        div.style.marginBottom = "4px";
-        div.textContent = `#${t.stream_index} ${t.codec_type} (${t.codec_name}) → ${t.action}${t.reason ? " — " + t.reason : ""}`;
-        sPlan.appendChild(div);
-      }
-      panel.appendChild(sPlan);
-    }
-
-    // Details (Printable command & diagnostics)
-    const sDet = document.createElement("div");
-    sDet.className = "side-section";
-    const detBtn = document.createElement("button");
-    detBtn.type = "button";
-    detBtn.className = "btn btn-sm btn-ghost";
-    detBtn.textContent = "Details (FFmpeg command & diagnostics) ▾";
-    const detBody = document.createElement("div");
-    detBody.className = "hidden";
-    detBody.style.marginTop = "6px";
-    detBody.innerHTML = `<div class="mono" style="background:var(--bg);padding:6px;border-radius:4px;word-break:break-all;margin-bottom:6px">${escapeHtml(j.plan?.printable_command || "—")}</div>
-      ${j.diagnostics ? `<pre class="mono" style="background:var(--bg);padding:6px;border-radius:4px;max-height:180px;overflow:auto;white-space:pre-wrap">${escapeHtml(j.diagnostics)}</pre>` : ""}`;
-    detBtn.onclick = () => detBody.classList.toggle("hidden");
-    sDet.appendChild(detBtn);
-    sDet.appendChild(detBody);
-    panel.appendChild(sDet);
   }
 
   function renderFooter() {
-    $("lbl-power-status").textContent = snapshot.power_assertion_active
-      ? "Awake assertion active (preventing idle system sleep; display sleep allowed)"
-      : "Idle";
+    const q = activeQueue();
+    const dot = $("tool-dot");
+    const ts = snapshot.tools;
+    if (ts.discovered && ts.capabilities) {
+      const codecs = ts.capabilities.available_codecs.map((c) => c.toUpperCase()).join(" + ") || "Remux";
+      dot.className = "dot ok";
+      $("tool-label").textContent = `FFmpeg ready · ${codecs}`;
+    } else {
+      dot.className = "dot err";
+      $("tool-label").textContent = "Locate FFmpeg";
+    }
+
+    const activeJob = snapshot.jobs.find((j) => j.status === "encoding");
+    if (snapshot.power_assertion_active || activeJob) {
+      $("lbl-power-status").textContent = activeJob
+        ? `Encoding ${jobFileName(activeJob)}`
+        : "Awake assertion active";
+      $("footer-awake-badge").classList.remove("hidden");
+    } else {
+      $("lbl-power-status").textContent = `Idle · ${snapshot.queues.length} workspace tab${snapshot.queues.length === 1 ? "" : "s"}`;
+      $("footer-awake-badge").classList.add("hidden");
+    }
     $("lbl-scheduler-status").textContent = snapshot.scheduler_busy_reason || "";
   }
 
-  function statusLabel(st) {
-    return {
-      queued: "Queued",
-      probing: "Probing",
-      ready: "Ready",
-      needs_attention: "Needs attention",
-      encoding: "Encoding",
-      verifying: "Verifying",
-      publishing: "Publishing",
-      completed: "Completed",
-      below_savings_target: "Below savings target · original kept",
-      failed: "Failed",
-      canceled: "Canceled",
-      interrupted: "Interrupted",
-    }[st] || st;
+  // =========================================================================
+  // 6. FORWARD MODAL & EXISTING FEATURE MODALS
+  // =========================================================================
+  function getDefaultForwardPlan(q, jobs) {
+    const mode = activeMode(q);
+    if (mode === "explore") {
+      const comp = jobs.filter((j) => ["compress_balanced", "compress_compact"].includes(jobDecision(j)));
+      if (comp.length > 0) return { jobIds: comp.map((j) => j.id), targetMode: "encode", label: "clips tagged for compression", useOutputFile: false };
+      const rep = jobs.filter((j) => jobDecision(j) === "repair");
+      if (rep.length > 0) return { jobIds: rep.map((j) => j.id), targetMode: "repair", label: "clips tagged for repair", useOutputFile: false };
+      const sel = jobs.find((j) => j.id === selectedJobId);
+      const nonProt = jobs.filter((j) => jobDecision(j) !== "protected");
+      const pick = sel ? [sel] : nonProt;
+      return { jobIds: pick.map((j) => j.id), targetMode: "encode", label: "selected clips", useOutputFile: false };
+    }
+    if (mode === "repair") {
+      const repDone = jobs.filter((j) => {
+        const st = snapshot.tab_repair_items?.[j.id]?.status;
+        return ["recovered", "partial_recovery"].includes(st);
+      });
+      if (repDone.length > 0) return { jobIds: repDone.map((j) => j.id), targetMode: "encode", label: "verified repaired outputs", useOutputFile: true };
+      return { jobIds: jobs.map((j) => j.id), targetMode: "encode", label: "clips", useOutputFile: false };
+    }
+    if (mode === "organize") {
+      const s = getOrgSelectedSet(q.id);
+      if (s.size > 0) {
+        const kept = jobs.filter((j) => !s.has(j.id));
+        if (kept.length > 0) return { jobIds: kept.map((k) => k.id), targetMode: "encode", label: "organized items", useOutputFile: false };
+      }
+      return { jobIds: jobs.map((j) => j.id), targetMode: "encode", label: "collection items", useOutputFile: false };
+    }
+    // encode mode
+    const done = jobs.filter((j) => j.status === "completed");
+    if (done.length > 0) return { jobIds: done.map((j) => j.id), targetMode: "explore", label: "completed outputs", useOutputFile: true };
+    const review = jobs.filter((j) => j.status === "needs_attention");
+    if (review.length > 0) return { jobIds: review.map((j) => j.id), targetMode: "repair", label: "clips needing repair", useOutputFile: false };
+    return { jobIds: jobs.map((j) => j.id), targetMode: "explore", label: "queue clips", useOutputFile: false };
   }
 
-  function statusBadgeClass(st) {
-    if (st === "completed") return "badge-ok";
-    if (st === "encoding" || st === "verifying" || st === "publishing") return "badge-active";
-    if (st === "failed") return "badge-err";
-    if (st === "needs_attention" || st === "interrupted" || st === "below_savings_target") return "badge-warn";
-    return "";
-  }
-
-  function cleanupOutcomeLabel(co) {
-    return {
-      none: "Original kept",
-      kept: "Original kept",
-      pending: "Pending review",
-      trashed: "Moved to Trash",
-      skipped: "Cleanup skipped",
-      declined: "Kept by user",
-      uncertain: "Review cleanup",
-      failed: "Cleanup failed",
-    }[co] || co;
-  }
-
-  async function moveJob(jobs, jobId, delta) {
-    const ids = jobs.map((j) => j.id);
-    const i = ids.indexOf(jobId);
-    const j = i + delta;
-    if (i < 0 || j < 0 || j >= ids.length) return;
-    [ids[i], ids[j]] = [ids[j], ids[i]];
-    await invoke("reorder_jobs", { queueId: activeQueue().id, orderedJobIds: ids });
-  }
-
-  async function patchActiveQueueSettings(mutator) {
+  function openForwardModal(customJobIds = null, targetMode = null, customLabel = null, useOutputFile = null) {
     const q = activeQueue();
     if (!q) return;
-    const patch = {
-      recipe: { ...q.recipe },
-      priority: q.priority,
-      recursive_import: q.recursive_import,
-      destination_root: q.destination_root,
-      keep_awake: q.keep_awake,
-      error_policy: q.error_policy,
-      min_savings_enabled: q.min_savings_enabled,
-      min_savings_pct: q.min_savings_pct,
-      cleanup_policy: q.cleanup_policy,
-      full_decode_verify: q.full_decode_verify,
+    const jobs = activeQueueJobs();
+    const def = getDefaultForwardPlan(q, jobs);
+    const jobIds = customJobIds || def.jobIds;
+    const destMode = targetMode || def.targetMode;
+    const label = customLabel || def.label;
+    const useOut = useOutputFile !== null ? useOutputFile : def.useOutputFile;
+    if (!jobIds || jobIds.length === 0) {
+      return showToast("Select, tag, or finish at least one file to forward it.", "warn");
+    }
+
+    const chosenJobs = jobIds.map((id) => snapshot.jobs.find((j) => j.id === id)).filter(Boolean);
+    const otherTabs = snapshot.queues.filter((oq) => oq.id !== q.id);
+    const preferredExisting = otherTabs.find((oq) => activeMode(oq) === destMode);
+    const defaultNewName = destMode === "encode" ? `${q.name} · Compress` : destMode === "repair" ? `${q.name} · Repair` : destMode === "organize" ? `${q.name} · Organize` : `${q.name} · Explore`;
+
+    const wrap = document.createElement("div");
+    wrap.className = "sidebar-panel-stack";
+    wrap.innerHTML = `
+      <div class="muted" style="font-size:12px;">Forwarding <strong>${chosenJobs.length}</strong> ${escapeHtml(label)} from "${escapeHtml(q.name)}"</div>
+      <div style="max-height:150px;overflow-y:auto;padding:8px;border-radius:10px;background:var(--surface-2);border:1px solid var(--border);display:flex;flex-direction:column;gap:5px;">
+        ${chosenJobs.map((j) => `
+          <div class="inline-row" style="justify-content:space-between;font-size:11.5px;">
+            <span class="truncate" style="font-weight:500;">${escapeHtml(useOut && snapshot.tab_repair_items?.[j.id]?.output_path ? snapshot.tab_repair_items[j.id].output_path.split(/[\\/]/).pop() : jobFileName(j))}</span>
+            <span class="muted tabular-nums">${fmtBytes(j.input_bytes)}</span>
+          </div>
+        `).join("")}
+      </div>
+      <div class="field-block">
+        <label class="field-label" for="fwd-target-sel">Destination Tab</label>
+        <select id="fwd-target-sel" class="full-input">
+          ${otherTabs.map((ot) => `<option value="${escapeHtml(ot.id)}" ${preferredExisting?.id === ot.id ? "selected" : ""}>Existing: ${escapeHtml(ot.name)} (${(MODE_META[activeMode(ot)] || MODE_META.encode).label})</option>`).join("")}
+          <option value="__new__" ${!preferredExisting ? "selected" : ""}>+ Create New ${(MODE_META[destMode] || MODE_META.encode).fullLabel} Tab…</option>
+        </select>
+      </div>
+      <div id="fwd-new-row" class="${preferredExisting ? "hidden" : ""} seg-pair-grid">
+        <div class="field-block">
+          <label class="field-label" for="fwd-new-name">New Tab Name</label>
+          <input id="fwd-new-name" class="full-input" type="text" value="${escapeHtml(defaultNewName)}" />
+        </div>
+        <div class="field-block">
+          <label class="field-label" for="fwd-new-mode">Action Mode</label>
+          <select id="fwd-new-mode" class="full-input">
+            <option value="encode" ${destMode === "encode" ? "selected" : ""}>Transcode Queue</option>
+            <option value="repair" ${destMode === "repair" ? "selected" : ""}>Repair Videos</option>
+            <option value="organize" ${destMode === "organize" ? "selected" : ""}>Organize Collection</option>
+            <option value="explore" ${destMode === "explore" ? "selected" : ""}>Explore &amp; Triage</option>
+          </select>
+        </div>
+      </div>
+    `;
+
+    const sel = wrap.querySelector("#fwd-target-sel");
+    const newRow = wrap.querySelector("#fwd-new-row");
+    sel.onchange = () => newRow.classList.toggle("hidden", sel.value !== "__new__");
+
+    openModalEl("Forward Resources to Tab", wrap, [
+      { label: "Cancel", cls: "btn", onClick: closeModal },
+      {
+        label: "Forward & Open Tab",
+        cls: "btn btn-primary",
+        onClick: async () => {
+          const isNew = sel.value === "__new__";
+          try {
+            const dest = await invoke("forward_resources_to_tab", {
+              fromQueueId: q.id,
+              targetQueueId: isNew ? null : sel.value,
+              newTabName: isNew ? wrap.querySelector("#fwd-new-name").value : null,
+              newTabMode: isNew ? wrap.querySelector("#fwd-new-mode").value : null,
+              jobIds,
+              useOutputFile: Boolean(useOut),
+            });
+            closeModal();
+            showToast(`Forwarded ${chosenJobs.length} item${chosenJobs.length === 1 ? "" : "s"} to "${dest.name}"`, "success");
+          } catch (err) {
+            showToast(String(err), "warn");
+          }
+        },
+      },
+    ]);
+  }
+
+  function openIconShowcaseModal() {
+    const wrap = document.createElement("div");
+    wrap.className = "sidebar-panel-stack";
+    wrap.innerHTML = `
+      <div class="seg-pair-grid">
+        <div style="border-radius:14px;background:#121212;border:1px solid rgba(255,255,255,0.1);padding:20px;display:flex;flex-direction:column;align-items:center;gap:10px;">
+          <div style="width:96px;height:96px;border-radius:22px;overflow:hidden;box-shadow:0 12px 28px rgba(0,0,0,0.5);">${APP_ICON_SVG}</div>
+          <span style="font-size:11px;color:#A1A1AA;">Dark Dock</span>
+        </div>
+        <div style="border-radius:14px;background:#F4F4F2;border:1px solid #E4E4E2;padding:20px;display:flex;flex-direction:column;align-items:center;gap:10px;">
+          <div style="width:96px;height:96px;border-radius:22px;overflow:hidden;box-shadow:0 12px 28px rgba(0,0,0,0.14);">${APP_ICON_SVG}</div>
+          <span style="font-size:11px;color:#52525B;">Light Desktop</span>
+        </div>
+      </div>
+      <div class="setup-row-between" style="padding:10px;border-radius:10px;background:var(--surface-2);border:1px solid var(--border);">
+        <span class="muted" style="font-size:12px;">Media Shack vector app icon (SVG)</span>
+        <button type="button" id="ic-dl-btn" class="btn btn-sm btn-primary">Save SVG…</button>
+      </div>
+    `;
+    wrap.querySelector("#ic-dl-btn").onclick = async () => {
+      const blob = new Blob([APP_ICON_SVG], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "media-shack-icon.svg";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast("Saved media-shack-icon.svg", "success");
     };
-    mutator(patch);
-    patch.recipe.is_custom = checkRecipeCustom(patch.recipe);
-    await invoke("update_queue_settings", { queueId: q.id, patch });
-  }
-
-  function checkRecipeCustom(r) {
-    if (r.family === "remux") return false;
-    const defaults = {
-      "best:hevc": [17, "slower"],
-      "balanced:hevc": [20, "slow"],
-      "best:av1": [22, "3"],
-      "balanced:av1": [27, "5"],
-    }[`${r.variant}:${r.codec}`];
-    if (!defaults) return false;
-    return Number(r.crf) !== defaults[0] || String(r.effort) !== defaults[1];
-  }
-
-  function applyCodecDefaults(r) {
-    if (r.family === "remux") {
-      r.crf = 0;
-      r.effort = "none";
-      r.is_custom = false;
-      return;
-    }
-    const defaults = {
-      "best:hevc": [17, "slower"],
-      "balanced:hevc": [20, "slow"],
-      "best:av1": [22, "3"],
-      "balanced:av1": [27, "5"],
-    }[`${r.variant}:${r.codec}`];
-    if (defaults) {
-      r.crf = defaults[0];
-      r.effort = defaults[1];
-    }
-    r.is_custom = false;
+    openModalEl("Media Shack — App Icon", wrap, [{ label: "Done", cls: "btn btn-primary", onClick: closeModal }]);
   }
 
   // Import & Staging Flow
+  let latestImportProgress = null;
+  function updateScanProgressDom() {
+    const wrap = $("import-scan-progress-box");
+    if (!wrap || !latestImportProgress) return;
+    const p = latestImportProgress;
+    const titleEl = wrap.querySelector("#scan-prog-title");
+    const subEl = wrap.querySelector("#scan-prog-sub");
+    const fillEl = wrap.querySelector("#scan-prog-fill");
+    const pct = p.total > 0 ? Math.min(100, Math.round((p.probed / p.total) * 100)) : 28;
+    if (p.phase === "discovering") {
+      if (titleEl) titleEl.textContent = `Discovering files… Found ${p.discovered} item${p.discovered === 1 ? "" : "s"}`;
+      if (fillEl) fillEl.style.width = `${Math.min(45, 10 + Math.min(35, p.discovered))}%`;
+    } else if (p.phase === "loading") {
+      if (titleEl) titleEl.textContent = `Loading ${p.probed} / ${p.total} discovered files (stats run asynchronously)…`;
+      if (fillEl) fillEl.style.width = `${pct}%`;
+    } else {
+      if (titleEl) titleEl.textContent = `Probing stats ${p.probed} / ${p.total} (${p.discovered} discovered)…`;
+      if (fillEl) fillEl.style.width = `${pct}%`;
+    }
+    if (subEl) subEl.textContent = p.current_file || "Scanning directories…";
+  }
+
   async function startImportFlow(paths) {
     const q = activeQueue();
     if (!q || !paths || paths.length === 0) return;
-    openModal("Scanning media…", `<p>Probing dropped/selected items for <strong>${escapeHtml(q.name)}</strong>…</p>`, [
-      {
-        label: "Cancel scan",
-        cls: "btn",
-        onClick: async () => {
-          await invoke("cancel_import_scan");
-          closeModal();
-        },
-      },
+    const mode = activeMode(q);
+    latestImportProgress = { phase: "discovering", discovered: 0, probed: 0, total: 0, current_file: "Scanning folders…" };
+    const scanBox = document.createElement("div");
+    scanBox.id = "import-scan-progress-box";
+    scanBox.className = "sidebar-panel-stack";
+    scanBox.innerHTML = `
+      <div id="scan-prog-title" style="font-size:13px;font-weight:600;">Discovering media for "${escapeHtml(q.name)}"…</div>
+      <div class="progress-track"><div id="scan-prog-fill" class="progress-fill" style="width:12%;"></div></div>
+      <div id="scan-prog-sub" class="mono muted truncate" style="font-size:11px;">Starting scan…</div>
+    `;
+    openModalEl("Scanning media…", scanBox, [
+      { label: "Cancel scan", cls: "btn", onClick: async () => { await invoke("cancel_import_scan"); closeModal(); } },
     ]);
     try {
       const scan = await invoke("start_import_scan", {
@@ -974,67 +2669,73 @@
         paths,
         recursive: q.recursive_import,
         destinationRootOverride: q.destination_root,
+        deferProbe: true,
       });
-      if (scan.canceled) {
-        closeModal();
-        return;
+      if (scan.canceled) return closeModal();
+
+      // In Repair mode, include even unreadable/damaged containers so user can diagnose/recover them
+      if (mode === "repair") {
+        scan.items.forEach((it) => { if (!it.duplicate_in_queue) it.include = true; });
       }
       stagingState = scan;
-      renderStagingModal();
+
+      // Unified Table / Workspace Flow: always load discovered items directly & compute stats async
+      const chosen = scan.items.filter((i) => i.include).map((i) => ({
+        source_path: i.source_path,
+        source_rel_path: i.source_rel_path,
+        source_root: i.source_root,
+        destination_path: i.destination_path,
+        input_bytes: i.input_bytes,
+        probe: i.probe,
+        plan: i.plan,
+        unreadable_error: i.unreadable_error,
+      }));
+      if (chosen.length > 0) {
+        await invoke("commit_staged_import", {
+          queueId: scan.queue_id,
+          destinationRoot: scan.destination_root,
+          recipe: scan.recipe,
+          items: chosen,
+        });
+        closeModal();
+        showToast(
+          mode === "encode"
+            ? `Loaded ${chosen.length} file${chosen.length === 1 ? "" : "s"} into table — check rows or apply criteria to queue.`
+            : `Loaded ${chosen.length} file${chosen.length === 1 ? "" : "s"} into "${q.name}" — computing media stats in background.`,
+          "success"
+        );
+        return;
+      }
+      closeModal();
+      showToast(`No new files found to attach (${scan.skipped_count} skipped).`, "info");
     } catch (err) {
-      openModal("Import Error", `<p>${escapeHtml(String(err))}</p>`, [
-        { label: "Close", cls: "btn btn-primary", onClick: closeModal },
-      ]);
+      openModal("Import Error", `<p>${escapeHtml(String(err))}</p>`, [{ label: "Close", cls: "btn btn-primary", onClick: closeModal }]);
     }
   }
 
   function renderStagingModal() {
     const s = stagingState;
     if (!s) return;
+    const isRepairMode = activeMode(activeQueue()) === "repair";
     let sortBy = "name";
     const draw = () => {
-      const sorted = [...s.items].sort((a, b) => {
-        if (sortBy === "size") return b.input_bytes - a.input_bytes;
-        if (sortBy === "bitrate") return (b.bit_rate || 0) - (a.bit_rate || 0);
-        return a.source_rel_path.localeCompare(b.source_rel_path);
-      });
+      const sorted = [...s.items].sort((a, b) => sortBy === "size" ? b.input_bytes - a.input_bytes : sortBy === "bitrate" ? (b.bit_rate || 0) - (a.bit_rate || 0) : a.source_rel_path.localeCompare(b.source_rel_path));
       const includedCount = s.items.filter((i) => i.include).length;
       const body = document.createElement("div");
       body.innerHTML = `
-        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin-bottom:10px">
+        <div class="setup-row-between" style="flex-wrap:wrap;margin-bottom:10px;">
           <div>
-            <strong>Queue:</strong> ${escapeHtml(s.queue_name)}
-            ${s.profile_name ? ` · <strong>Profile:</strong> ${escapeHtml(s.profile_name)}` : ""}
-            <div class="muted" style="font-size:12px;margin-top:2px">
-              Destination: <span class="mono">${escapeHtml(s.destination_root)}</span>
-              <button id="stg-dest-btn" class="btn btn-ghost btn-sm" type="button">Change…</button>
-            </div>
-            <div class="inline-row" style="margin-top:4px">
-              <label>Preset:</label>
-              <select id="stg-family">
-                <option value="archive" ${s.recipe.family === "archive" ? "selected" : ""}>Archive</option>
-                <option value="remux" ${s.recipe.family === "remux" ? "selected" : ""}>Remux</option>
-              </select>
-              <select id="stg-codec" ${s.recipe.family === "remux" ? "disabled" : ""}>
-                <option value="hevc" ${s.recipe.codec === "hevc" ? "selected" : ""}>HEVC</option>
-                <option value="av1" ${s.recipe.codec === "av1" ? "selected" : ""}>AV1</option>
-              </select>
-              <select id="stg-container">
-                <option value="mkv" ${s.recipe.container === "mkv" ? "selected" : ""}>MKV</option>
-                <option value="mp4" ${s.recipe.container === "mp4" ? "selected" : ""}>MP4</option>
-              </select>
-            </div>
+            <strong>Tab:</strong> ${escapeHtml(s.queue_name)}
+            <div class="muted" style="font-size:12px;margin-top:2px;">Dest: <span class="mono">${escapeHtml(s.destination_root)}</span> <button id="stg-dest-btn" class="btn-link" type="button">Change…</button></div>
           </div>
-          <div class="inline-row">
-            <label>Sort:</label>
-            <select id="stg-sort">
+          <label class="inline-row" style="font-size:12px;"><span>Sort:</span>
+            <select id="stg-sort" class="compact-sel">
               <option value="name" ${sortBy === "name" ? "selected" : ""}>Name</option>
-              <option value="size" ${sortBy === "size" ? "selected" : ""}>Input size (largest)</option>
-              <option value="bitrate" ${sortBy === "bitrate" ? "selected" : ""}>Bitrate (highest)</option>
+              <option value="size" ${sortBy === "size" ? "selected" : ""}>Largest</option>
+              <option value="bitrate" ${sortBy === "bitrate" ? "selected" : ""}>Bitrate</option>
             </select>
-          </div>
+          </label>
         </div>
-        ${s.unreadable_count > 0 ? `<div class="banner banner-warn" style="margin-bottom:8px">${s.unreadable_count} unreadable or blocked items were excluded by default.</div>` : ""}
         <table class="table-simple">
           <thead><tr><th>Add</th><th>File</th><th>Codec / Bitrate</th><th>Size</th><th>Status</th></tr></thead>
           <tbody id="stg-tbody"></tbody>
@@ -1043,50 +2744,24 @@
       for (const it of sorted) {
         const tr = document.createElement("tr");
         const stNotes = [];
-        if (it.duplicate_in_queue) stNotes.push("Already in queue");
-        if (it.destination_collision) stNotes.push("Numbered to avoid collision");
+        if (it.duplicate_in_queue) stNotes.push("Already in tab");
         if (it.unreadable_error) stNotes.push(it.unreadable_error);
         else if (it.plan && !it.plan.is_ready) stNotes.push("Needs review");
-
-        tr.innerHTML = `<td><input type="checkbox" ${it.include ? "checked" : ""} ${it.unreadable_error ? "disabled" : ""}/></td>
-          <td><div style="max-width:260px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(it.source_rel_path)}</div></td>
+        const disableChk = it.unreadable_error && !isRepairMode;
+        tr.innerHTML = `<td><input type="checkbox" ${it.include ? "checked" : ""} ${disableChk ? "disabled" : ""}/></td>
+          <td><div class="truncate" style="max-width:250px;">${escapeHtml(it.source_rel_path)}</div></td>
           <td>${escapeHtml(it.current_codec || "—")} · ${it.bit_rate ? Math.round(it.bit_rate / 1000) + " kbps" : "—"}</td>
-          <td>${fmtBytes(it.input_bytes)}</td>
+          <td class="tabular-nums">${fmtBytes(it.input_bytes)}</td>
           <td>${escapeHtml(stNotes.join("; ") || "Ready")}</td>`;
-        const cb = tr.querySelector("input");
-        cb.addEventListener("change", () => {
-          it.include = cb.checked;
-          draw();
-        });
+        tr.querySelector("input").addEventListener("change", (e) => { it.include = e.target.checked; draw(); });
         tbody.appendChild(tr);
       }
-      body.querySelector("#stg-dest-btn").addEventListener("click", async () => {
+      body.querySelector("#stg-dest-btn").onclick = async () => {
         const dir = await dialog.open({ directory: true, defaultPath: s.destination_root });
-        if (dir) {
-          s.destination_root = dir;
-          draw();
-        }
-      });
-      body.querySelector("#stg-family").addEventListener("change", (e) => {
-        s.recipe.family = e.target.value;
-        applyCodecDefaults(s.recipe);
-        draw();
-      });
-      body.querySelector("#stg-codec").addEventListener("change", (e) => {
-        s.recipe.codec = e.target.value;
-        applyCodecDefaults(s.recipe);
-        draw();
-      });
-      body.querySelector("#stg-container").addEventListener("change", (e) => {
-        s.recipe.container = e.target.value;
-        draw();
-      });
-      body.querySelector("#stg-sort").addEventListener("change", (e) => {
-        sortBy = e.target.value;
-        draw();
-      });
-
-      openModalEl(`Stage Import (${includedCount} of ${s.items.length} selected)`, body, [
+        if (dir) { s.destination_root = dir; draw(); }
+      };
+      body.querySelector("#stg-sort").onchange = (e) => { sortBy = e.target.value; draw(); };
+      openModalEl(`Attach Resources (${includedCount} of ${s.items.length})`, body, [
         { label: "Cancel", cls: "btn", onClick: closeModal },
         {
           label: `Add ${includedCount} files to ${s.queue_name}`,
@@ -1094,21 +2769,10 @@
           disabled: includedCount === 0,
           onClick: async () => {
             const chosen = s.items.filter((i) => i.include).map((i) => ({
-              source_path: i.source_path,
-              source_rel_path: i.source_rel_path,
-              source_root: i.source_root,
-              destination_path: i.destination_path,
-              input_bytes: i.input_bytes,
-              probe: i.probe,
-              plan: i.plan,
-              unreadable_error: i.unreadable_error,
+              source_path: i.source_path, source_rel_path: i.source_rel_path, source_root: i.source_root,
+              destination_path: i.destination_path, input_bytes: i.input_bytes, probe: i.probe, plan: i.plan, unreadable_error: i.unreadable_error,
             }));
-            await invoke("commit_staged_import", {
-              queueId: s.queue_id,
-              destinationRoot: s.destination_root,
-              recipe: s.recipe,
-              items: chosen,
-            });
+            await invoke("commit_staged_import", { queueId: s.queue_id, destinationRoot: s.destination_root, recipe: s.recipe, items: chosen });
             closeModal();
           },
         },
@@ -1117,13 +2781,59 @@
     draw();
   }
 
-  // Modal helpers
+  // Settings & Recipe Helpers
+  function checkRecipeCustom(r) {
+    if (r.family === "remux") return false;
+    const defaults = { "best:hevc": [17, "slower"], "balanced:hevc": [20, "slow"], "best:av1": [22, "3"], "balanced:av1": [27, "5"] }[`${r.variant}:${r.codec}`];
+    const hasCustomTuning = Boolean(r.tune) || (r.ten_bit === false) || Boolean(r.aq_mode);
+    return (defaults ? (Number(r.crf) !== defaults[0] || String(r.effort) !== defaults[1]) : false) || hasCustomTuning;
+  }
+
+  function applyCodecDefaults(r) {
+    if (r.family === "remux") {
+      r.crf = 0; r.effort = "none"; r.tune = null; r.ten_bit = false; r.aq_mode = null; r.is_custom = false;
+      return;
+    }
+    const defaults = { "best:hevc": [17, "slower"], "balanced:hevc": [20, "slow"], "best:av1": [22, "3"], "balanced:av1": [27, "5"] }[`${r.variant}:${r.codec}`];
+    if (defaults) { r.crf = defaults[0]; r.effort = defaults[1]; }
+    r.ten_bit = true;
+    if (r.codec === "av1") { r.tune = null; r.aq_mode = null; }
+    r.is_custom = checkRecipeCustom(r);
+  }
+
+  async function patchActiveQueueSettings(mutator) {
+    const q = activeQueue();
+    if (!q) return;
+    const patch = {
+      recipe: { ...q.recipe }, priority: q.priority, recursive_import: q.recursive_import, destination_root: q.destination_root,
+      keep_awake: q.keep_awake, error_policy: q.error_policy, min_savings_enabled: q.min_savings_enabled, min_savings_pct: q.min_savings_pct,
+      cleanup_policy: q.cleanup_policy, full_decode_verify: q.full_decode_verify,
+    };
+    mutator(patch);
+    patch.recipe.is_custom = checkRecipeCustom(patch.recipe);
+    await invoke("update_queue_settings", { queueId: q.id, patch });
+  }
+
+  function statusLabel(st) {
+    return { queued: "Queued", probing: "Probing", ready: "Ready", needs_attention: "Needs review", encoding: "Encoding", verifying: "Verifying", publishing: "Publishing", completed: "Verified", below_savings_target: "Kept original (<savings)", failed: "Failed", canceled: "Canceled", interrupted: "Interrupted" }[st] || st;
+  }
+  function statusBadgeClass(st) {
+    if (st === "completed") return "badge-ok";
+    if (["encoding", "verifying", "publishing"].includes(st)) return "badge-active";
+    if (st === "failed") return "badge-err";
+    if (["needs_attention", "interrupted", "below_savings_target"].includes(st)) return "badge-warn";
+    return "";
+  }
+  function cleanupOutcomeLabel(co) {
+    return { none: "Original kept", kept: "Original kept", pending: "Pending review", trashed: "Moved to Trash", skipped: "Cleanup skipped", declined: "Kept by user", uncertain: "Review cleanup", failed: "Cleanup failed" }[co] || co;
+  }
+
+  // Shared Modal Utilities + Preview / Review / Live / Tools / Profiles
   function openModal(title, html, buttons) {
     const div = document.createElement("div");
     div.innerHTML = html;
     openModalEl(title, div, buttons);
   }
-
   function openModalEl(title, bodyEl, buttons) {
     const root = $("modal-root");
     const box = $("modal-box");
@@ -1132,300 +2842,110 @@
     head.className = "modal-head";
     head.innerHTML = `<h2>${escapeHtml(title)}</h2>`;
     const xBtn = document.createElement("button");
-    xBtn.className = "btn btn-ghost btn-sm";
-    xBtn.textContent = "×";
-    xBtn.onclick = closeModal;
+    xBtn.type = "button"; xBtn.className = "btn btn-ghost btn-sm"; xBtn.textContent = "×"; xBtn.onclick = closeModal;
     head.appendChild(xBtn);
-
     const body = document.createElement("div");
     body.className = "modal-body";
     body.appendChild(bodyEl);
-
     const foot = document.createElement("div");
     foot.className = "modal-foot";
     for (const b of buttons) {
       const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = b.cls || "btn";
-      btn.textContent = b.label;
-      btn.disabled = !!b.disabled;
+      btn.type = "button"; btn.className = b.cls || "btn"; btn.textContent = b.label; btn.disabled = !!b.disabled;
       if (b.autofocus) btn.autofocus = true;
       btn.onclick = b.onClick;
       foot.appendChild(btn);
     }
-
-    box.appendChild(head);
-    box.appendChild(body);
-    box.appendChild(foot);
+    box.append(head, body, foot);
     root.classList.remove("hidden");
   }
-
   function closeModal() {
     $("modal-root").classList.add("hidden");
     openSampleRefresh = null;
-    if (livePreviewTimer) {
-      clearInterval(livePreviewTimer);
-      livePreviewTimer = null;
-    }
-    if (currentLiveJobId) {
-      invoke("stop_live_preview").catch(() => {});
-      currentLiveJobId = null;
-    }
+    if (livePreviewTimer) { clearInterval(livePreviewTimer); livePreviewTimer = null; }
+    if (currentLiveJobId) { invoke("stop_live_preview").catch(() => {}); currentLiveJobId = null; }
   }
-
   function openPromptModal(title, label, defaultValue, onConfirm) {
     const wrap = document.createElement("div");
-    wrap.innerHTML = `<div class="field"><label for="prm-input">${escapeHtml(label)}</label><input id="prm-input" type="text" value="${escapeHtml(defaultValue || "")}" style="width:100%" /></div>`;
+    wrap.innerHTML = `<div class="field"><label for="prm-input">${escapeHtml(label)}</label><input id="prm-input" class="full-input" type="text" value="${escapeHtml(defaultValue || "")}" /></div>`;
     const inputEl = wrap.querySelector("#prm-input");
-    const submit = async () => {
-      const val = inputEl.value.trim();
-      if (!val) return;
-      closeModal();
-      await onConfirm(val);
-    };
-    inputEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        submit();
-      }
-    });
-    openModalEl(title, wrap, [
-      { label: "Cancel", cls: "btn", onClick: closeModal },
-      { label: "Save", cls: "btn btn-primary", onClick: submit },
-    ]);
+    const submit = async () => { const v = inputEl.value.trim(); if (!v) return; closeModal(); await onConfirm(v); };
+    inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+    openModalEl(title, wrap, [{ label: "Cancel", cls: "btn", onClick: closeModal }, { label: "Save", cls: "btn btn-primary", onClick: submit }]);
     setTimeout(() => { inputEl.focus(); inputEl.select(); }, 20);
   }
 
-  // Tools Modal
   function openToolsModal() {
     const ts = snapshot.tools;
     const caps = ts.capabilities;
-    let html = "";
-    if (caps) {
-      html += `<p><strong>ffmpeg:</strong> <span class="mono">${escapeHtml(caps.ffmpeg_path)}</span><br><span class="muted">${escapeHtml(caps.ffmpeg_version)}</span></p>
-        <p><strong>ffprobe:</strong> <span class="mono">${escapeHtml(caps.ffprobe_path)}</span><br><span class="muted">${escapeHtml(caps.ffprobe_version)}</span></p>
-        <p><strong>Available encoders:</strong> ${caps.available_codecs.map((c) => c.toUpperCase()).join(", ") || "None (Remux only)"}</p>
-        <table class="table-simple"><thead><tr><th>Smoke test</th><th>Result</th><th>Details</th></tr></thead><tbody>`;
-      for (const st of caps.smoke_tests) {
-        html += `<tr><td>${escapeHtml(st.name)}</td><td>${st.passed ? "Pass" : "Fail"}</td><td>${escapeHtml(st.details)}</td></tr>`;
-      }
-      html += `</tbody></table>`;
-    } else {
-      html += `<p><strong>Status:</strong> ${escapeHtml(ts.error || "Not found")}</p>
-        <p>${escapeHtml(ts.repair_hint || "")}</p>`;
-    }
-
+    let html = caps
+      ? `<p><strong>ffmpeg:</strong> <span class="mono">${escapeHtml(caps.ffmpeg_path)}</span><br><span class="muted">${escapeHtml(caps.ffmpeg_version)}</span></p>
+         <p><strong>ffprobe:</strong> <span class="mono">${escapeHtml(caps.ffprobe_path)}</span><br><span class="muted">${escapeHtml(caps.ffprobe_version)}</span></p>
+         <p><strong>Available encoders:</strong> ${caps.available_codecs.map((c) => c.toUpperCase()).join(", ") || "None (Remux only)"}</p>`
+      : `<p><strong>Status:</strong> ${escapeHtml(ts.error || "Not found")}</p><p>${escapeHtml(ts.repair_hint || "")}</p>`;
     openModal("FFmpeg & ffprobe Tools", html, [
-      {
-        label: "Select tools folder…",
-        cls: "btn",
-        onClick: async () => {
-          const dir = await dialog.open({ directory: true });
-          if (dir) {
-            await invoke("locate_ffmpeg_tools", { toolsDir: dir });
-            openToolsModal();
-          }
-        },
-      },
-      {
-        label: "Select ffmpeg binary…",
-        cls: "btn",
-        onClick: async () => {
-          const ff = await dialog.open({ multiple: false });
-          if (ff) {
-            await invoke("locate_ffmpeg_tools", { ffmpegPath: ff });
-            openToolsModal();
-          }
-        },
-      },
-      {
-        label: "Select ffprobe binary…",
-        cls: "btn",
-        onClick: async () => {
-          const fp = await dialog.open({ multiple: false });
-          if (fp) {
-            await invoke("locate_ffmpeg_tools", { ffprobePath: fp });
-            openToolsModal();
-          }
-        },
-      },
-      {
-        label: "Recheck",
-        cls: "btn",
-        onClick: async () => {
-          await invoke("recheck_tools");
-          openToolsModal();
-        },
-      },
+      { label: "Select tools folder…", cls: "btn", onClick: async () => { const dir = await dialog.open({ directory: true }); if (dir) { await invoke("locate_ffmpeg_tools", { toolsDir: dir }); openToolsModal(); } } },
+      { label: "Recheck", cls: "btn", onClick: async () => { await invoke("recheck_tools"); openToolsModal(); } },
       { label: "Done", cls: "btn btn-primary", onClick: closeModal },
     ]);
   }
 
-  // Profiles Management Modal
   function openProfilesModal() {
     const q = activeQueue();
     if (!q) return;
     const wrap = document.createElement("div");
-    wrap.innerHTML = `<p class="muted">Save or manage reusable batch workflow profiles. Deleting a profile leaves existing queues and jobs intact.</p>`;
-    const list = document.createElement("div");
-    list.style.display = "flex";
-    list.style.flexDirection = "column";
-    list.style.gap = "8px";
+    wrap.className = "sidebar-panel-stack";
+    wrap.innerHTML = `<p class="muted" style="margin:0;font-size:12px;">Save or manage reusable batch workflow profiles.</p>`;
     for (const p of snapshot.profiles) {
       const row = document.createElement("div");
-      row.style.display = "flex";
-      row.style.justifyContent = "space-between";
-      row.style.alignItems = "center";
-      row.style.padding = "6px 8px";
-      row.style.border = "1px solid var(--border)";
-      row.style.borderRadius = "6px";
-      row.innerHTML = `<span><strong>${escapeHtml(p.name)}</strong> <span class="muted">(${p.recipe.family === "remux" ? "Remux" : `${p.recipe.codec.toUpperCase()} CRF ${p.recipe.crf}`} · ${p.cleanup_policy})</span></span>`;
-      const btns = document.createElement("div");
-      btns.style.display = "flex";
-      btns.style.gap = "4px";
-      const upd = document.createElement("button");
-      upd.className = "btn btn-sm";
-      upd.textContent = "Update from queue";
-      upd.onclick = async () => {
-        await invoke("save_profile_from_queue", { queueId: q.id, name: p.name, existingProfileId: p.id });
-        openProfilesModal();
-      };
-      const ren = document.createElement("button");
-      ren.className = "btn btn-sm";
-      ren.textContent = "Rename";
-      ren.onclick = () => {
-        openPromptModal("Rename Profile", "Profile name:", p.name, async (nm) => {
-          await invoke("rename_profile", { profileId: p.id, newName: nm });
-          await refreshSnapshot();
-          openProfilesModal();
-        });
-      };
-      const dup = document.createElement("button");
-      dup.className = "btn btn-sm";
-      dup.textContent = "Duplicate";
-      dup.onclick = () => {
-        openPromptModal("Duplicate Profile", "New profile name:", `${p.name} Copy`, async (nm) => {
-          await invoke("duplicate_profile", { profileId: p.id, newName: nm });
-          await refreshSnapshot();
-          openProfilesModal();
-        });
-      };
-      const del = document.createElement("button");
-      del.className = "btn btn-sm btn-danger-outline";
-      del.textContent = "Delete";
-      del.onclick = async () => {
-        await invoke("delete_profile", { profileId: p.id });
-        await refreshSnapshot();
-        openProfilesModal();
-      };
-      btns.append(upd, ren, dup, del);
-      row.appendChild(btns);
-      list.appendChild(row);
+      row.className = "setup-row-between";
+      row.style.cssText = "padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;";
+      row.innerHTML = `<span><strong>${escapeHtml(p.name)}</strong> <span class="muted">(${p.recipe.family === "remux" ? "Remux" : `${p.recipe.codec.toUpperCase()} CRF ${p.recipe.crf}`})</span></span>
+        <div class="inline-row" style="gap:4px;"><button type="button" class="btn btn-sm" data-upd>Update</button><button type="button" class="btn btn-sm btn-danger-outline" data-del>Delete</button></div>`;
+      row.querySelector("[data-upd]").onclick = async () => { await invoke("save_profile_from_queue", { queueId: q.id, name: p.name, existingProfileId: p.id }); openProfilesModal(); };
+      row.querySelector("[data-del]").onclick = async () => { await invoke("delete_profile", { profileId: p.id }); await refreshSnapshot(); openProfilesModal(); };
+      wrap.appendChild(row);
     }
-    wrap.appendChild(list);
-
     openModalEl("Manage Workflow Profiles", wrap, [
-      {
-        label: "Save current queue as new profile…",
-        cls: "btn btn-primary",
-        onClick: () => {
-          openPromptModal("Save Workflow Profile", "Profile name (e.g. Overnight archive):", "Overnight archive", async (nm) => {
-            await invoke("save_profile_from_queue", { queueId: q.id, name: nm, existingProfileId: null });
-            await refreshSnapshot();
-            openProfilesModal();
-          });
-        },
-      },
+      { label: "Save current as new profile…", cls: "btn btn-primary", onClick: () => openPromptModal("Save Workflow Profile", "Profile name:", "Overnight archive", async (nm) => { await invoke("save_profile_from_queue", { queueId: q.id, name: nm, existingProfileId: null }); await refreshSnapshot(); openProfilesModal(); }) },
       { label: "Close", cls: "btn", onClick: closeModal },
     ]);
   }
 
-  // Batch Consent Confirmation Dialog (Default to Keep!)
-  function openCleanupConsentModal(q, resp) {
-    let rowsHtml = "";
-    for (const j of resp.consent_jobs.slice(0, 50)) {
-      rowsHtml += `<li><span class="mono">${escapeHtml(j.source_rel_path)}</span> (${fmtBytes(j.input_bytes)})</li>`;
-    }
-    if (resp.consent_jobs.length > 50) {
-      rowsHtml += `<li>…and ${resp.consent_jobs.length - 50} more</li>`;
-    }
-    const html = `<p><strong>Automatic Trash is enabled for this queue.</strong></p>
-      <p>After each file passes full verification and A/V decode, the original will be moved to the OS Trash / Recycle Bin (never permanently deleted).</p>
-      <p><strong>Count:</strong> ${resp.consent_jobs.length} files · <strong>Total size:</strong> ${fmtBytes(resp.consent_total_bytes)}<br>
-      <strong>Destination:</strong> ${escapeHtml(resp.destination_root || "—")}</p>
-      <ul style="max-height:180px;overflow:auto">${rowsHtml}</ul>`;
-
-    openModal("Confirm Batch Source Cleanup", html, [
-      {
-        label: "Keep originals (recommended)",
-        cls: "btn btn-primary",
-        autofocus: true,
-        onClick: async () => {
-          await patchActiveQueueSettings((p) => {
-            p.cleanup_policy = "keep_originals";
-          });
-          closeModal();
-          await invoke("start_queue", { queueId: q.id, consentConfirmed: false });
-        },
-      },
-      {
-        label: `Move ${resp.consent_jobs.length} verified originals to Trash`,
-        cls: "btn btn-danger",
-        onClick: async () => {
-          closeModal();
-          await invoke("start_queue", { queueId: q.id, consentConfirmed: true });
-        },
-      },
-    ]);
+  function openCleanupConsentModal(q, resp, selectedJobIds = null) {
+    openModal(
+      "Confirm Batch Source Cleanup",
+      `<p><strong>Automatic Trash is enabled for this queue.</strong> Move ${resp.consent_jobs.length} verified originals (${fmtBytes(resp.consent_total_bytes)}) to OS Trash after full decode verification?</p>`,
+      [
+        { label: "Keep originals (recommended)", cls: "btn btn-primary", onClick: async () => { await patchActiveQueueSettings((p) => { p.cleanup_policy = "keep_originals"; }); closeModal(); await invoke("start_queue", { queueId: q.id, consentConfirmed: false, selectedJobIds }); } },
+        { label: `Trash ${resp.consent_jobs.length} verified originals`, cls: "btn btn-danger", onClick: async () => { closeModal(); await invoke("start_queue", { queueId: q.id, consentConfirmed: true, selectedJobIds }); } },
+      ]
+    );
   }
 
-  // Review Originals Modal (starts with NO items selected!)
   async function openReviewOriginalsModal(queueId) {
     const candidates = await invoke("get_cleanup_candidates", { queueId });
     const selectedIds = new Set();
-
     const draw = () => {
       const wrap = document.createElement("div");
-      const totalSelectedBytes = candidates
-        .filter((c) => selectedIds.has(c.job_id))
-        .reduce((acc, c) => acc + c.input_bytes, 0);
-
-      wrap.innerHTML = `<p>Review verified outputs before moving any original to the OS Trash / Recycle Bin. No files are selected by default.</p>`;
+      const totalSelectedBytes = candidates.filter((c) => selectedIds.has(c.job_id)).reduce((acc, c) => acc + c.input_bytes, 0);
+      wrap.innerHTML = `<p style="font-size:12px;">Move verified originals to recoverable OS Trash. Nothing is selected by default.</p>`;
       const tbl = document.createElement("table");
       tbl.className = "table-simple";
-      tbl.innerHTML = `<thead><tr><th>Trash</th><th>Source</th><th>Original → Output</th><th>Verification</th><th>Actions</th></tr></thead><tbody></tbody>`;
+      tbl.innerHTML = `<thead><tr><th>Trash</th><th>Source</th><th>Original → Output</th><th>Status</th></tr></thead><tbody></tbody>`;
       const tbody = tbl.querySelector("tbody");
-
       for (const c of candidates) {
+        const prot = isProtectedSource(c.source_path);
+        const canSelect = c.eligible && c.cleanup_outcome !== "trashed" && !prot;
         const tr = document.createElement("tr");
-        const canSelect = c.eligible && c.cleanup_outcome !== "trashed";
-        const verNote = c.cleanup_outcome === "trashed"
-          ? "Moved to Trash"
-          : c.eligible
-          ? `${c.codec_label}${c.full_decode_verified ? " · full decode OK" : " · will run full decode"}${c.has_approved_conversions ? " · approved conversions" : ""}`
-          : c.ineligibility_reason || "Ineligible";
-
-        tr.innerHTML = `<td><input type="checkbox" ${selectedIds.has(c.job_id) ? "checked" : ""} ${canSelect ? "" : "disabled"} /></td>
-          <td><div class="mono" style="max-width:220px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(c.source_path)}</div></td>
-          <td>${fmtBytes(c.input_bytes)} → ${fmtBytes(c.output_bytes)}</td>
-          <td>${escapeHtml(verNote)}</td>
-          <td></td>`;
-        const cb = tr.querySelector("input");
-        cb.addEventListener("change", () => {
-          if (cb.checked) selectedIds.add(c.job_id);
-          else selectedIds.delete(c.job_id);
-          draw();
-        });
-        const openBtn = document.createElement("button");
-        openBtn.type = "button";
-        openBtn.className = "btn btn-sm";
-        openBtn.textContent = "Open output";
-        openBtn.onclick = () => invoke("open_output_player", { path: c.output_path });
-        tr.lastElementChild.appendChild(openBtn);
+        tr.innerHTML = `<td><input type="checkbox" ${selectedIds.has(c.job_id) ? "checked" : ""} ${canSelect ? "" : "disabled"}/></td>
+          <td class="mono truncate" style="max-width:210px;">${escapeHtml(c.source_path)}</td>
+          <td class="tabular-nums">${fmtBytes(c.input_bytes)} → ${fmtBytes(c.output_bytes)}</td>
+          <td>${prot ? "Protected ★ Locked" : escapeHtml(c.cleanup_outcome === "trashed" ? "Moved to Trash" : c.eligible ? c.codec_label : (c.ineligibility_reason || "Ineligible"))}</td>`;
+        tr.querySelector("input").addEventListener("change", (e) => { if (e.target.checked) selectedIds.add(c.job_id); else selectedIds.delete(c.job_id); draw(); });
         tbody.appendChild(tr);
       }
       wrap.appendChild(tbl);
-
       openModalEl("Review Originals", wrap, [
         { label: "Keep remaining & Close", cls: "btn btn-primary", onClick: closeModal },
         {
@@ -1433,11 +2953,7 @@
           cls: "btn btn-danger",
           disabled: selectedIds.size === 0,
           onClick: async () => {
-            const res = await invoke("trash_selected_originals", { jobIds: Array.from(selectedIds) });
-            const errs = res.filter(([, r]) => r && r.Err).map(([, r]) => r.Err);
-            if (errs.length > 0) {
-              alert("Some files were kept:\n" + errs.join("\n"));
-            }
+            await invoke("trash_selected_originals", { jobIds: Array.from(selectedIds) });
             await refreshSnapshot();
             openReviewOriginalsModal(queueId);
           },
@@ -1447,96 +2963,54 @@
     draw();
   }
 
-  // 15-second Sample Preview & Comparison Modal
   async function openSamplePreviewModal(job) {
     const dur = job.probe?.format?.duration_secs || 60;
     const defaultStart = dur > 15 ? Math.min(dur * 0.25, Math.max(0, dur - 15)) : 0;
     let startInput = defaultStart;
-    let zoom100 = false;
     let seekOffset = 0;
+    let zoom100 = false;
     let usingFrameFallback = false;
 
     const draw = async () => {
       const sp = snapshot.sample_preview && snapshot.sample_preview.job_id === job.id ? snapshot.sample_preview : null;
       const wrap = document.createElement("div");
       wrap.innerHTML = `
-        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px">
-          <label>Start time (s):</label>
-          <input id="smp-start" type="number" min="0" max="${Math.max(0, dur - 1).toFixed(1)}" step="1" value="${startInput.toFixed(1)}" style="width:80px" />
+        <div class="inline-row" style="gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+          <label>Start (s):</label>
+          <input id="smp-start" type="number" min="0" max="${Math.max(0, dur - 1).toFixed(1)}" step="1" value="${startInput.toFixed(1)}" style="width:75px" />
           <input id="smp-scrub" type="range" min="0" max="${Math.max(0, dur - 1).toFixed(1)}" step="0.5" value="${startInput.toFixed(1)}" style="flex:1" />
           <button id="smp-run" class="btn btn-primary btn-sm" type="button">Encode 15s sample</button>
         </div>`;
-
       if (sp) {
-        if (sp.stale) {
-          wrap.innerHTML += `<div class="banner banner-warn" style="margin-bottom:8px">Sample is stale (settings changed). Re-run to preview current settings.</div>`;
-        }
         if (sp.status === "queued" || sp.status === "encoding") {
           wrap.innerHTML += `<p>${escapeHtml(sp.waiting_reason || "Encoding 15-second sample…")}</p>`;
         } else if (sp.status === "failed") {
-          wrap.innerHTML += `<div class="banner banner-warn">Sample encode failed: ${escapeHtml(sp.error || "")}</div>`;
+          wrap.innerHTML += `<div class="banner-card warn">${escapeHtml(sp.error || "Sample failed")}</div>`;
         } else if (sp.status === "ready") {
-          const proj = sp.projected_bytes
-            ? ` · Based on this scene: est. ${fmtBytes(sp.projected_bytes)} (${fmtDuration(sp.projected_secs)} runtime)`
-            : "";
+          const proj = sp.projected_bytes ? ` · Projected full file: ${fmtBytes(sp.projected_bytes)} (~${fmtDuration(sp.projected_secs)})` : "";
           wrap.innerHTML += `<p><strong>Sample ready:</strong> ${fmtBytes(sp.measured_bytes)} in ${sp.elapsed_secs?.toFixed(1)}s${proj}</p>
-            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px">
-              <button id="cmp-play" class="btn btn-sm" type="button">Play / Pause both</button>
-              <label>Seek (s): <span id="cmp-t-lbl">${seekOffset.toFixed(1)}</span></label>
+            <div class="inline-row" style="gap:8px;margin-bottom:8px;">
+              <button id="cmp-play" class="btn btn-sm" type="button">Play / Pause</button>
               <input id="cmp-seek" type="range" min="0" max="${sp.duration_secs.toFixed(1)}" step="0.2" value="${seekOffset}" style="flex:1" />
-              <button id="cmp-zoom" class="btn btn-sm" type="button">${zoom100 ? "Fit view" : "100% inspection"}</button>
-              <button id="cmp-frames" class="btn btn-sm" type="button">Decode exact frames</button>
+              <button id="cmp-zoom" class="btn btn-sm" type="button">${zoom100 ? "Fit" : "100%"}</button>
+              <button id="cmp-frames" class="btn btn-sm" type="button">Exact frames</button>
             </div>
             <div class="compare-grid">
-              <div class="compare-pane ${zoom100 ? "zoom-100" : ""}">
-                <div class="compare-label">Original</div>
-                <video id="vid-orig" controls muted playsinline></video>
-                <img id="img-orig" class="hidden" alt="Original frame" />
-              </div>
-              <div class="compare-pane ${zoom100 ? "zoom-100" : ""}">
-                <div class="compare-label">Encoded (${escapeHtml(sp.recipe_snapshot.codec.toUpperCase())} CRF ${sp.recipe_snapshot.crf})</div>
-                <video id="vid-enc" controls muted playsinline></video>
-                <img id="img-enc" class="hidden" alt="Encoded frame" />
-              </div>
+              <div class="compare-pane ${zoom100 ? "zoom-100" : ""}"><div class="compare-label">Original</div><video id="vid-orig" controls muted playsinline></video><img id="img-orig" class="hidden" /></div>
+              <div class="compare-pane ${zoom100 ? "zoom-100" : ""}"><div class="compare-label">Encoded (${escapeHtml(sp.recipe_snapshot.codec.toUpperCase())} CRF ${sp.recipe_snapshot.crf})</div><video id="vid-enc" controls muted playsinline></video><img id="img-enc" class="hidden" /></div>
             </div>`;
         }
       }
-
-      const buttons = [];
-      if (sp && sp.encoded_sample_path) {
-        buttons.push({
-          label: "Open sample in default player",
-          cls: "btn",
-          onClick: () => invoke("open_output_player", { path: sp.encoded_sample_path }),
-        });
-      }
-      buttons.push({ label: "Close", cls: "btn btn-primary", onClick: closeModal });
-
-      openModalEl(`15-Second Sample Preview — ${job.source_rel_path}`, wrap, buttons);
-
-      const startEl = wrap.querySelector("#smp-start");
-      const scrubEl = wrap.querySelector("#smp-scrub");
-      startEl.onchange = () => { startInput = Number(startEl.value); scrubEl.value = startInput; };
-      scrubEl.oninput = () => { startInput = Number(scrubEl.value); startEl.value = startInput; };
-      wrap.querySelector("#smp-run").onclick = async () => {
-        await invoke("request_sample_preview", { jobId: job.id, startSecs: startInput });
-        await refreshSnapshot();
-        draw();
-      };
+      openModalEl(`15-Second Sample — ${jobFileName(job)}`, wrap, [{ label: "Done", cls: "btn btn-primary", onClick: closeModal }]);
+      wrap.querySelector("#smp-start").onchange = (e) => { startInput = Number(e.target.value); wrap.querySelector("#smp-scrub").value = startInput; };
+      wrap.querySelector("#smp-scrub").oninput = (e) => { startInput = Number(e.target.value); wrap.querySelector("#smp-start").value = startInput; };
+      wrap.querySelector("#smp-run").onclick = async () => { await invoke("request_sample_preview", { jobId: job.id, startSecs: startInput }); await refreshSnapshot(); draw(); };
 
       if (sp && sp.status === "ready") {
-        const vo = wrap.querySelector("#vid-orig");
-        const ve = wrap.querySelector("#vid-enc");
-        const io = wrap.querySelector("#img-orig");
-        const ie = wrap.querySelector("#img-enc");
-        const relOrig = `${job.id}/original_sample.mp4`;
-        const relEnc = `${job.id}/encoded_sample.${sp.recipe_snapshot.container}`;
-        const protoBase = navigator.userAgent.includes("Windows")
-          ? "http://preview.localhost"
-          : "preview://localhost";
-        vo.src = `${protoBase}/${encodeURIComponent(relOrig)}`;
-        ve.src = `${protoBase}/${encodeURIComponent(relEnc)}`;
-
+        const vo = wrap.querySelector("#vid-orig"), ve = wrap.querySelector("#vid-enc"), io = wrap.querySelector("#img-orig"), ie = wrap.querySelector("#img-enc");
+        const protoBase = navigator.userAgent.includes("Windows") ? "http://preview.localhost" : "preview://localhost";
+        vo.src = `${protoBase}/${encodeURIComponent(`${job.id}/original_sample.mp4`)}`;
+        ve.src = `${protoBase}/${encodeURIComponent(`${job.id}/encoded_sample.${sp.recipe_snapshot.container}`)}`;
         const loadExactFrames = async (t) => {
           usingFrameFallback = true;
           const [b1, b2] = await Promise.all([
@@ -1545,45 +3019,13 @@
           ]);
           io.src = URL.createObjectURL(new Blob([new Uint8Array(b1)], { type: "image/jpeg" }));
           ie.src = URL.createObjectURL(new Blob([new Uint8Array(b2)], { type: "image/jpeg" }));
-          vo.classList.add("hidden");
-          ve.classList.add("hidden");
-          io.classList.remove("hidden");
-          ie.classList.remove("hidden");
+          vo.classList.add("hidden"); ve.classList.add("hidden"); io.classList.remove("hidden"); ie.classList.remove("hidden");
         };
-
-        // Fall back automatically if browser webview cannot decode AV1/HEVC video element
         ve.onerror = () => loadExactFrames(seekOffset).catch(() => {});
         vo.onerror = () => loadExactFrames(seekOffset).catch(() => {});
-        if (usingFrameFallback || zoom100) {
-          loadExactFrames(seekOffset).catch(() => {});
-        }
-
-        wrap.querySelector("#cmp-play").onclick = () => {
-          if (usingFrameFallback) {
-            loadExactFrames(seekOffset).catch(() => {});
-            return;
-          }
-          io.classList.add("hidden");
-          ie.classList.add("hidden");
-          vo.classList.remove("hidden");
-          ve.classList.remove("hidden");
-          if (vo.paused) { vo.play().catch(() => {}); ve.play().catch(() => {}); }
-          else { vo.pause(); ve.pause(); }
-        };
-        wrap.querySelector("#cmp-seek").oninput = (e) => {
-          seekOffset = Number(e.target.value);
-          wrap.querySelector("#cmp-t-lbl").textContent = seekOffset.toFixed(1);
-          vo.currentTime = seekOffset;
-          ve.currentTime = seekOffset;
-          if (usingFrameFallback || !io.classList.contains("hidden")) {
-            loadExactFrames(seekOffset).catch(() => {});
-          }
-        };
-        wrap.querySelector("#cmp-zoom").onclick = () => {
-          zoom100 = !zoom100;
-          usingFrameFallback = zoom100;
-          draw();
-        };
+        wrap.querySelector("#cmp-play").onclick = () => { if (vo.paused) { vo.play().catch(() => {}); ve.play().catch(() => {}); } else { vo.pause(); ve.pause(); } };
+        wrap.querySelector("#cmp-seek").oninput = (e) => { seekOffset = Number(e.target.value); vo.currentTime = seekOffset; ve.currentTime = seekOffset; if (usingFrameFallback) loadExactFrames(seekOffset).catch(() => {}); };
+        wrap.querySelector("#cmp-zoom").onclick = () => { zoom100 = !zoom100; usingFrameFallback = zoom100; draw(); };
         wrap.querySelector("#cmp-frames").onclick = () => loadExactFrames(seekOffset);
       }
     };
@@ -1591,71 +3033,236 @@
     draw();
   }
 
-  // Live Mid-Encode Preview Modal
   async function openLivePreviewModal(jobId) {
     currentLiveJobId = jobId;
     await invoke("start_live_preview", { jobId });
-    await refreshSnapshot();
-
     const wrap = document.createElement("div");
-    wrap.innerHTML = `
-      <div id="lp-meta" style="margin-bottom:8px">Waiting for first encoded frame…</div>
-      <img id="lp-img" class="live-preview-img" alt="Live encoded preview" />`;
-    openModalEl("Live Encoded Preview (Silent)", wrap, [
-      { label: "Hide preview (encode continues)", cls: "btn btn-primary", onClick: closeModal },
-    ]);
-
-    let prevBlobUrl = null;
+    wrap.innerHTML = `<div id="lp-meta" style="margin-bottom:8px">Waiting for first encoded frame…</div><img id="lp-img" class="live-preview-img" alt="Live encoded preview" />`;
+    openModalEl("Live Encoded Preview (Silent)", wrap, [{ label: "Hide preview", cls: "btn btn-primary", onClick: closeModal }]);
+    let prevUrl = null;
     livePreviewTimer = setInterval(async () => {
       try {
         const snap = await invoke("get_snapshot");
         const li = snap.live_preview;
         const bytes = await invoke("get_live_preview_frame");
-        const metaEl = document.getElementById("lp-meta");
-        const imgEl = document.getElementById("lp-img");
-        if (!metaEl || !imgEl) return;
-        if (li) {
-          if (li.limitation) {
-            metaEl.textContent = li.limitation;
-          } else if (li.waiting_first_frame) {
-            metaEl.textContent = `Waiting for first encoded frame… (encoder lookahead · ${li.mode})`;
-          } else {
-            const pidTxt = li.worker_pid ? ` · Worker PID ${li.worker_pid}` : "";
-            metaEl.textContent = `Media timestamp: ${fmtDuration(li.media_time_secs)} · Frame #${li.frame_seq} · ${li.mode}${pidTxt}`;
-          }
-        }
-        if (bytes && bytes.byteLength > 0) {
+        if (li && $("lp-meta")) $("lp-meta").textContent = li.waiting_first_frame ? "Waiting for first encoded frame…" : `${fmtDuration(li.media_time_secs)} · Frame #${li.frame_seq} · ${li.mode}`;
+        if (bytes && bytes.byteLength > 0 && $("lp-img")) {
           const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }));
-          if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
-          prevBlobUrl = url;
-          imgEl.src = url;
+          if (prevUrl) URL.revokeObjectURL(prevUrl);
+          prevUrl = url;
+          $("lp-img").src = url;
         }
       } catch (_) {}
     }, 500);
   }
 
-  function escapeHtml(s) {
-    if (s === null || s === undefined) return "";
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+  function openTrashReviewModal(plan, onConfirm) {
+    const wrap = document.createElement("div");
+    const blockedNote = !plan.trash_supported && plan.trash_support_error
+      ? `<div class="setup-card" style="border-color:var(--danger,#e5484d);margin-bottom:10px;"><strong style="color:var(--danger,#e5484d);">Recoverable OS Trash Unavailable</strong><div class="muted" style="font-size:12px;margin-top:4px;">${escapeHtml(plan.trash_support_error)}</div></div>`
+      : "";
+    const rowsHtml = (plan.items || []).map((it) => `
+      <tr>
+        <td><strong>${escapeHtml(it.filename)}</strong></td>
+        <td class="mono muted" style="max-width:240px;word-break:break-all;">${escapeHtml(it.parent_dir)}</td>
+        <td class="tabular-nums">${fmtBytes(it.size_bytes)}</td>
+        <td>${it.eligible ? `<span class="badge badge-ok">Ready</span>` : `<span class="badge badge-warn">${escapeHtml(it.reason || "Blocked")}</span>`}</td>
+      </tr>
+    `).join("");
+
+    wrap.innerHTML = `
+      ${blockedNote}
+      <p style="margin:0 0 8px;"><strong>Scope:</strong> ${escapeHtml(plan.queue_name || "Library Duplicate Selection")} · <strong>${plan.eligible_count}</strong> file${plan.eligible_count === 1 ? "" : "s"} (${fmtBytes(plan.total_bytes)}) will move to recoverable OS Trash${plan.blocked_count > 0 ? ` · <strong>${plan.blocked_count}</strong> protected/blocked` : ""}.</p>
+      <div style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table class="table-simple" style="margin:0;">
+          <thead><tr><th>Filename</th><th>Folder</th><th>Size</th><th>Status</th></tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+    `;
+    const btns = [{ label: "Cancel", cls: "btn", onClick: closeModal }];
+    if (plan.eligible_count > 0 && (plan.trash_supported || plan.eligible_count > 0)) {
+      btns.push({
+        label: `Move ${plan.eligible_count} (${fmtBytes(plan.total_bytes)}) to OS Trash`,
+        cls: "btn btn-danger",
+        onClick: async () => {
+          closeModal();
+          await onConfirm();
+        },
+      });
+    }
+    openModalEl("Review Files Before Moving to OS Trash", wrap, btns);
   }
 
-  // Wire Event Listeners
-  $("btn-new-queue").onclick = () => invoke("create_queue_tab", { name: null });
+  async function trashOrgSelected(q) {
+    const selSet = getOrgSelectedSet(q.id);
+    const ids = Array.from(selSet);
+    if (ids.length === 0) return;
+    try {
+      const reason = organizeSideTab === "duplicates" ? "queue_duplicate_group" : "queue_specific_items";
+      const plan = await invoke("preview_tab_trash", {
+        queueId: q.id,
+        itemIds: ids,
+        removalReason: reason,
+      });
+      openTrashReviewModal(plan, async () => {
+        try {
+          const res = await invoke("execute_tab_trash_plan", { planId: plan.plan_id });
+          for (const o of res.outcomes || []) {
+            if (o.moved) selSet.delete(o.item_id);
+          }
+          const firstErr = (res.outcomes || []).find((o) => !o.moved && o.error)?.error;
+          if (res.moved_count > 0) {
+            showToast(
+              `Moved ${res.moved_count} file${res.moved_count === 1 ? "" : "s"} to recoverable OS Trash${res.failed_count > 0 ? ` (${res.failed_count} kept: ${firstErr || "blocked"})` : ""}.`,
+              res.failed_count > 0 ? "warn" : "success"
+            );
+          } else {
+            showToast(firstErr || "No files were moved to Trash.", "warn");
+          }
+          await refreshSnapshot();
+        } catch (err) {
+          showToast(String(err), "warn");
+        }
+      });
+    } catch (err) {
+      showToast(String(err), "warn");
+    }
+  }
+
+  async function triggerTabWatermarkScan(q) {
+    if (!q || ocrScanning) return;
+    ocrScanning = true;
+    renderAll();
+    try {
+      const count = await invoke("tab_extract_watermarks", { queueId: q.id });
+      showToast(`Extracted ${count} watermark / text hit${count === 1 ? "" : "s"}.`, count > 0 ? "success" : "info");
+      await loadOrganizeOverview(q.id, true);
+    } catch (err) {
+      showToast(String(err), "warn");
+    } finally {
+      ocrScanning = false;
+      renderAll();
+    }
+  }
+
+  async function triggerTabFaceScan(q) {
+    if (!q || faceScanning) return;
+    faceScanning = true;
+    renderAll();
+    try {
+      const count = await invoke("tab_run_face_grouping", { queueId: q.id });
+      showToast(`Detected ${count} face observation${count === 1 ? "" : "s"}.`, count > 0 ? "success" : "info");
+      await loadOrganizeOverview(q.id, true);
+    } catch (err) {
+      showToast(String(err), "warn");
+    } finally {
+      faceScanning = false;
+      renderAll();
+    }
+  }
+
+  async function runMoveByTag(q, dryRun) {
+    const tagName = moveSelectedTag.trim();
+    const destDir = moveFolderTargetDir.trim();
+    if (!tagName || !destDir) return showToast("Pick both a tag and a destination folder.", "warn");
+    try {
+      const planId = dryRun ? null : movePreviewResult?.plan_id || null;
+      if (!dryRun && !planId) {
+        return showToast("Click Preview Matching Files first to review the exact destinations.", "warn");
+      }
+      const res = await invoke("tab_move_by_tag", {
+        queueId: q.id,
+        tagName,
+        destDir,
+        copyOnly: moveCopyOnly,
+        dryRun,
+        preserveSubfolders: movePreserveSubfolders,
+        collisionPolicy: moveCollisionPolicy,
+        planId,
+      });
+      res._queueId = q.id;
+      movePreviewResult = res;
+      if (!dryRun) {
+        const retNote = res.retained_count > 0 ? ` · ${res.retained_count} copied; original retained` : "";
+        showToast(
+          `${moveCopyOnly ? "Copied" : "Moved"} ${res.moved_count} file(s) tagged "${tagName}"${retNote}.`,
+          res.moved_count > 0 && res.errors.length === 0 ? "success" : "warn"
+        );
+        await refreshSnapshot();
+      } else {
+        renderOrganizeView(q, activeQueueJobs());
+      }
+    } catch (err) {
+      showToast(String(err), "warn");
+    }
+  }
+
+  async function triggerTabDedupeScan(q) {
+    if (!q || dedupeScanning) return;
+    dedupeScanning = true;
+    renderAll();
+    try {
+      const res = await invoke("run_tab_dedupe_scan", {
+        queueId: q.id,
+        alsoSha256: dedupeAlsoSha256,
+        includePerceptual: dedupePerceptual,
+      });
+      showToast(
+        `Scan finished: ${res.length} exact / similar group${res.length === 1 ? "" : "s"} found.`,
+        res.length > 0 ? "success" : "info"
+      );
+      await loadOrganizeOverview(q.id, true);
+    } catch (err) {
+      showToast(String(err), "warn");
+    } finally {
+      dedupeScanning = false;
+      await refreshSnapshot();
+    }
+  }
+
+  // =========================================================================
+  // 7. EVENT LISTENERS & BACKEND SUBSCRIPTIONS
+  // =========================================================================
+  $("open-icon-modal-btn").onclick = openIconShowcaseModal;
+  $("footer-icon-btn").onclick = openIconShowcaseModal;
   $("btn-tools-status").onclick = openToolsModal;
+  $("btn-new-queue").onclick = async () => {
+    await invoke("create_queue_tab", { name: null, tabType: "explore" });
+    if (currentPlatformView !== "transcode") {
+      window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "transcode" } }));
+    }
+  };
+
+  window.addEventListener("ms-open-settings-tab", () => {
+    settingsTabOpen = true;
+    renderTabs();
+  });
+  window.addEventListener("ms-view-changed", (e) => {
+    currentPlatformView = e.detail?.view || "transcode";
+    if (currentPlatformView === "settings") settingsTabOpen = true;
+    renderTabs();
+  });
+  window.addEventListener("ms-open-tools-modal", openToolsModal);
+
   $("btn-toggle-inspector").onclick = () => {
-    const sp = $("side-panel");
-    const collapsed = sp.classList.toggle("collapsed");
-    $("btn-toggle-inspector").setAttribute("aria-expanded", String(!collapsed));
+    sidebarOpen = !sidebarOpen;
+    renderSidebar();
   };
-  $("btn-toggle-advanced").onclick = () => {
-    const adv = $("advanced-drawer");
-    const hidden = adv.classList.toggle("hidden");
-    $("btn-toggle-advanced").setAttribute("aria-expanded", String(!hidden));
-  };
+  $("sidebar-tab-setup").onclick = () => { sidebarMode = "setup"; renderSidebar(); };
+  $("sidebar-tab-job").onclick = () => { sidebarMode = "job"; renderSidebar(); };
+
+  document.querySelectorAll("#tab-mode-switcher .tab-mode-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const q = activeQueue();
+      if (!q) return;
+      const nextMode = btn.getAttribute("data-tab-mode");
+      if (activeMode(q) === nextMode) return;
+      sidebarMode = nextMode === "explore" || nextMode === "repair" ? "job" : "setup";
+      await invoke("set_queue_tab_type", { queueId: q.id, tabType: nextMode });
+      showToast(`Switched "${q.name}" to ${(MODE_META[nextMode] || MODE_META.encode).fullLabel} mode`, "info");
+    });
+  });
 
   const pickFiles = async () => {
     const res = await dialog.open({ multiple: true });
@@ -1670,448 +3277,446 @@
   $("btn-add-folder").onclick = pickFolder;
   $("btn-empty-folder").onclick = pickFolder;
 
-  $("chk-recursive").onchange = (e) => patchActiveQueueSettings((p) => { p.recursive_import = e.target.checked; });
-  $("btn-choose-dest").onclick = async () => {
-    const dir = await dialog.open({ directory: true });
-    if (dir) patchActiveQueueSettings((p) => { p.destination_root = dir; });
-  };
-
-  $("btn-volume-reserve").onclick = () => {
-    const q = activeQueue();
-    const vol = findQueueVolumeInfo(q);
-    if (!vol) return alert("Choose a destination folder first to configure its volume reserve.");
-    const curGib = (vol.reserve_bytes / (1024 * 1024 * 1024)).toFixed(1);
-    openPromptModal("Configure Volume Reserve", `Free-space reserve (GiB) for ${vol.mount_point}:`, curGib, async (val) => {
-      const gib = Math.max(0, Number(val) || 0);
-      await invoke("set_volume_reserve", {
-        volumeId: vol.volume_id,
-        mountHint: vol.mount_point,
-        reserveBytes: Math.round(gib * 1024 * 1024 * 1024),
-      });
-    });
-  };
-
-  $("btn-counts-filter").onclick = () => {
-    filterNeedsReview = !filterNeedsReview;
-    renderQueueList();
-    renderToolbar();
-  };
-
-  $("btn-start-queue").onclick = async () => {
-    const q = activeQueue();
-    if (!q) return;
-    const jobs = activeQueueJobs();
-    const isResume = q.is_paused || jobs.some((j) => j.status === "interrupted");
-    const resp = await invoke(isResume ? "resume_queue" : "start_queue", {
-      queueId: q.id,
-      consentConfirmed: null,
-    });
-    if (resp && resp.requires_cleanup_consent) {
-      openCleanupConsentModal(q, resp);
-    }
-  };
-  $("btn-pause-after").onclick = () => invoke("pause_after_current", { queueId: activeQueue().id });
-  $("btn-cancel-current").onclick = () => invoke("cancel_current_file", { jobId: null });
-  $("btn-retry-failed").onclick = async () => {
-    const jobs = activeQueueJobs();
-    const checkedRetry = jobs
-      .filter((j) => checkedJobIds.has(j.id) && ["failed", "canceled", "interrupted", "needs_attention"].includes(j.status))
-      .map((j) => j.id);
-    const ids = checkedRetry.length > 0
-      ? checkedRetry
-      : jobs.filter((j) => ["failed", "canceled", "interrupted", "needs_attention"].includes(j.status)).map((j) => j.id);
-    try {
-      await invoke("retry_jobs", { jobIds: ids });
-    } catch (err) {
-      alert(err);
-    }
-  };
-  $("btn-clear-completed").onclick = () => {
-    const ids = activeQueueJobs()
-      .filter((j) => ["completed", "below_savings_target", "canceled"].includes(j.status))
-      .map((j) => j.id);
-    invoke("remove_pending_jobs", { jobIds: ids });
-  };
-
-  // Config Controls
-  $("sel-profile").onchange = (e) => {
-    if (e.target.value) {
-      invoke("select_profile_for_queue", { queueId: activeQueue().id, profileId: e.target.value });
-    }
-  };
-  $("btn-profile-menu").onclick = openProfilesModal;
-  $("btn-apply-waiting").onclick = () => {
-    const q = activeQueue();
-    const checkedWaiting = activeQueueJobs()
-      .filter((j) => checkedJobIds.has(j.id) && ["queued", "ready", "needs_attention", "interrupted", "failed", "canceled"].includes(j.status))
-      .map((j) => j.id);
-    invoke("apply_queue_settings_to_waiting", {
-      queueId: q.id,
-      jobIds: checkedWaiting.length > 0 ? checkedWaiting : null,
-    });
-  };
-
-  $("sel-family").onchange = (e) => patchActiveQueueSettings((p) => { p.recipe.family = e.target.value; applyCodecDefaults(p.recipe); });
-  $("sel-variant").onchange = (e) => patchActiveQueueSettings((p) => { p.recipe.variant = e.target.value; applyCodecDefaults(p.recipe); });
-  $("sel-codec").onchange = (e) => patchActiveQueueSettings((p) => { p.recipe.codec = e.target.value; applyCodecDefaults(p.recipe); });
-  $("sel-container").onchange = (e) => patchActiveQueueSettings((p) => { p.recipe.container = e.target.value; });
-  $("btn-reset-preset").onclick = () => patchActiveQueueSettings((p) => applyCodecDefaults(p.recipe));
-
-  $("inp-crf").onchange = (e) => patchActiveQueueSettings((p) => { p.recipe.crf = Number(e.target.value); });
-  $("sel-effort").onchange = (e) => patchActiveQueueSettings((p) => { p.recipe.effort = e.target.value; });
-  $("sel-priority").onchange = (e) => patchActiveQueueSettings((p) => { p.priority = e.target.value; });
-  $("sel-error-policy").onchange = (e) => patchActiveQueueSettings((p) => { p.error_policy = e.target.value; });
-  $("sel-cleanup-policy").onchange = (e) => patchActiveQueueSettings((p) => { p.cleanup_policy = e.target.value; });
-  $("chk-keep-awake").onchange = (e) => patchActiveQueueSettings((p) => { p.keep_awake = e.target.checked; });
-  $("chk-full-decode").onchange = (e) => patchActiveQueueSettings((p) => { p.full_decode_verify = e.target.checked; });
-  $("chk-min-savings").onchange = (e) => patchActiveQueueSettings((p) => { p.min_savings_enabled = e.target.checked; });
-  $("inp-min-savings-pct").onchange = (e) => patchActiveQueueSettings((p) => { p.min_savings_pct = Number(e.target.value); });
-
-  $("btn-save-named-preset").onclick = () => {
-    openPromptModal("Save Encode Preset", "Preset name:", "", async (nm) => {
-      await invoke("save_named_preset", { name: nm, recipe: activeQueue().recipe });
-    });
-  };
-  $("btn-delete-named-preset").onclick = async () => {
-    const id = $("sel-named-preset").value;
-    if (id) {
-      await invoke("delete_named_preset", { id });
-    }
-  };
-  $("sel-named-preset").onchange = (e) => {
-    const np = snapshot.named_presets.find((x) => x.id === e.target.value);
-    $("btn-delete-named-preset").classList.toggle("hidden", !e.target.value);
-    if (np) patchActiveQueueSettings((p) => { p.recipe = { ...np.recipe }; });
-  };
   $("btn-preview-15s").onclick = () => {
     const jobs = activeQueueJobs();
     const job = jobs.find((j) => j.id === selectedJobId) || jobs[0];
     if (job) openSamplePreviewModal(job);
   };
 
-  // Tauri Native Drag & Drop
-  tauriWindow.getCurrentWindow().onDragDropEvent((ev) => {
-    if (ev.payload.type === "over") {
-      $("empty-drop-state").classList.add("drag-over");
-    } else if (ev.payload.type === "leave") {
-      $("empty-drop-state").classList.remove("drag-over");
-    } else if (ev.payload.type === "drop") {
-      $("empty-drop-state").classList.remove("drag-over");
-      const q = activeQueue();
-      if (q && q.tab_type === "repair" && ev.payload.paths && ev.payload.paths.length > 0) {
-        const s = activeRepairSession();
-        saveRepairConfig({ input_path: ev.payload.paths[0], reference_paths: s.reference_paths, output_path: s.output_path });
-      } else {
-        startImportFlow(ev.payload.paths);
-      }
-    }
-  });
+  $("btn-forward-tab").onclick = () => openForwardModal();
 
-  // Closing window during active work offers Keep running (minimize) or Stop and quit
-  tauriWindow.getCurrentWindow().onCloseRequested(async (ev) => {
-    const busy = await invoke("check_close_status");
-    if (!busy) return;
-    ev.preventDefault();
-    openModal("Encoding Queue Is Active", "<p>A batch is currently running. Do you want to minimize the window and keep running in the background, or stop active work and quit?</p>", [
-      {
-        label: "Keep running (minimize)",
-        cls: "btn btn-primary",
-        autofocus: true,
-        onClick: async () => {
-          closeModal();
-          await tauriWindow.getCurrentWindow().minimize();
-        },
-      },
-      {
-        label: "Stop and quit",
-        cls: "btn btn-danger",
-        onClick: async () => {
-          closeModal();
-          await invoke("stop_and_quit");
-        },
-      },
-    ]);
-  });
-
-  // Recheck volumes on focus / wake from sleep
-  window.addEventListener("focus", () => {
-    invoke("recheck_volumes").catch(() => {});
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) {
-      invoke("recheck_volumes").catch(() => {});
-    }
-  });
-
-  // Listen to backend compact events
-  event.listen("snapshot_changed", () => refreshSnapshot());
-  event.listen("repair_progress", (ev) => {
-    const q = activeQueue();
-    if (!q || !ev.payload || ev.payload.queue_id !== q.id) return;
-    renderRepairProgress(ev.payload.progress);
-  });
-  event.listen("job_progress", (ev) => {
-    if (!snapshot) return;
-    snapshot.active_progress = ev.payload;
-    renderQueueList();
-  });
-  event.listen("sample_preview_updated", (ev) => {
-    if (!snapshot) return;
-    snapshot.sample_preview = ev.payload;
-    if (openSampleRefresh) openSampleRefresh();
-  });
-
-  function activeRepairSession() {
-    const q = activeQueue();
-    const empty = {
-      queue_id: q ? q.id : "",
-      input_path: "",
-      reference_paths: [],
-      output_path: null,
-      video_only: false,
-      deep_scan: true,
-      timeout_secs: 300,
-      status: "idle",
-      diagnosis: null,
-      report: null,
-      error: null,
-      preview_sheet_filename: null,
-    };
-    if (!q || !snapshot || !snapshot.repair_sessions) return empty;
-    return snapshot.repair_sessions.find((s) => s.queue_id === q.id) || empty;
-  }
-
-  async function saveRepairConfig(overrides) {
+  $("btn-start-queue").onclick = async () => {
     const q = activeQueue();
     if (!q) return;
-    const cur = activeRepairSession();
-    const merged = {
-      queueId: q.id,
-      inputPath: overrides.input_path !== undefined ? overrides.input_path : cur.input_path,
-      referencePaths: overrides.reference_paths !== undefined ? overrides.reference_paths : cur.reference_paths,
-      outputPath: overrides.output_path !== undefined ? overrides.output_path : cur.output_path,
-      videoOnly: $("chk-repair-video-only").checked,
-      deepScan: $("chk-repair-deep").checked,
-      timeoutSecs: Math.max(15, Number($("inp-repair-timeout").value) || 300),
-    };
-    await invoke("update_repair_session", merged);
-  }
+    const mode = activeMode(q);
+    const jobs = activeQueueJobs();
 
-  function renderRepairProgress(p) {
-    const box = $("repair-progress-box");
-    if (!p) {
-      box.classList.add("hidden");
+    if (mode === "explore") {
+      const comp = jobs.filter((j) => ["compress_balanced", "compress_compact"].includes(jobDecision(j)));
+      return openForwardModal(comp.map((j) => j.id), "encode", "clips tagged for compression", false);
+    }
+    if (mode === "organize") {
+      if (organizeSideTab === "watermarks") return triggerTabWatermarkScan(q);
+      if (organizeSideTab === "faces") return triggerTabFaceScan(q);
+      if (organizeSideTab === "folder") return runMoveByTag(q, true);
+      if (getOrgSelectedSet(q.id).size > 0) return trashOrgSelected(q);
+      return triggerTabDedupeScan(q);
+    }
+    if (mode === "repair") {
+      const unrepaired = jobs.filter((j) => !["recovered", "partial_recovery"].includes(snapshot.tab_repair_items?.[j.id]?.status)).map((j) => j.id);
+      if (unrepaired.length > 0) await invoke("run_tab_repair_execute", { queueId: q.id, jobIds: unrepaired });
       return;
     }
-    box.classList.remove("hidden");
-    const pct = p.total_bytes > 0 ? Math.min(100, (p.bytes_scanned / p.total_bytes) * 100) : 0;
-    $("lbl-repair-stage").textContent = `${p.current_strategy}`;
-    $("lbl-repair-metrics").textContent = `${pct.toFixed(1)}% · ${fmtBytes(p.bytes_scanned)}/${fmtBytes(p.total_bytes)} · ${p.recovered_frames} frames · ${p.elapsed_secs.toFixed(1)}s`;
-    $("bar-repair-progress").style.width = `${pct.toFixed(1)}%`;
-  }
 
-  function esc(s) {
-    return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
+    const isResume = q.is_paused || jobs.some((j) => j.status === "interrupted");
+    if (isResume) {
+      const resp = await invoke("resume_queue", { queueId: q.id, consentConfirmed: null });
+      if (resp && resp.requires_cleanup_consent) openCleanupConsentModal(q, resp, null);
+      return;
+    }
+    const selectedIds = jobs.filter((j) => checkedJobIds.has(j.id) && isEncodeSelectableJob(j) && j.plan?.is_ready).map((j) => j.id);
+    if (selectedIds.length === 0) {
+      return showToast("Check at least one file in the table (or use Criteria Select) before encoding.", "warn");
+    }
+    const resp = await invoke("start_queue", { queueId: q.id, consentConfirmed: null, selectedJobIds: selectedIds });
+    if (resp && resp.requires_cleanup_consent) openCleanupConsentModal(q, resp, selectedIds);
+  };
 
-  function renderRepairWorkspace() {
-    const s = activeRepairSession();
-    const busy = s.status === "diagnosing" || s.status === "recovering";
-    $("inp-repair-input").value = s.input_path || "";
-    $("inp-repair-output").value = s.output_path || "";
-    $("inp-repair-timeout").value = s.timeout_secs || 300;
-    $("chk-repair-deep").checked = !!s.deep_scan;
-    $("chk-repair-video-only").checked = !!s.video_only;
-    $("btn-repair-diagnose").disabled = busy || !s.input_path;
-    $("btn-repair-start").disabled = busy || !s.input_path;
+  $("btn-pause-after").onclick = () => invoke("pause_after_current", { queueId: activeQueue().id });
+  $("btn-cancel-current").onclick = () => invoke("cancel_current_file", { jobId: null });
+  $("btn-live-monitor").onclick = () => {
+    const enc = activeQueueJobs().find((j) => j.status === "encoding");
+    if (enc) openLivePreviewModal(enc.id);
+  };
+  $("sel-queue-sort").onchange = (e) => {
+    sortMode = e.target.value;
+    renderQueueList(activeQueue(), activeQueueJobs());
+  };
+  $("btn-sel-non-modern").onclick = () => {
+    const jobs = activeQueueJobs();
+    checkedJobIds.clear();
+    let count = 0;
+    for (const j of jobs) {
+      const info = jobVideoInfo(j);
+      if (isEncodeSelectableJob(j) && j.probe && !isModernCodec(info.codec)) {
+        checkedJobIds.add(j.id);
+        count++;
+      }
+    }
+    renderQueueList(activeQueue(), jobs);
+    renderActionBar();
+    renderSidebar();
+    showToast(`Selected ${count} non-HEVC/AV1 file${count === 1 ? "" : "s"}.`, "info");
+  };
+  $("btn-desel-modern").onclick = () => {
+    const jobs = activeQueueJobs();
+    let removed = 0;
+    for (const j of jobs) {
+      if (checkedJobIds.has(j.id) && isModernCodec(jobVideoInfo(j).codec)) {
+        checkedJobIds.delete(j.id);
+        removed++;
+      }
+    }
+    renderQueueList(activeQueue(), jobs);
+    renderActionBar();
+    renderSidebar();
+    showToast(`Deselected ${removed} HEVC/AV1 file${removed === 1 ? "" : "s"}.`, "info");
+  };
+  $("btn-sel-all-ready").onclick = () => {
+    const jobs = activeQueueJobs();
+    jobs.filter(isEncodeSelectableJob).forEach((j) => checkedJobIds.add(j.id));
+    renderQueueList(activeQueue(), jobs);
+    renderActionBar();
+    renderSidebar();
+  };
+  $("btn-desel-all").onclick = () => {
+    checkedJobIds.clear();
+    renderQueueList(activeQueue(), activeQueueJobs());
+    renderActionBar();
+    renderSidebar();
+  };
+  $("btn-toggle-criteria")?.addEventListener("click", () => {
+    const dr = $("encode-criteria-drawer");
+    if (!dr) return;
+    const isHidden = dr.classList.toggle("hidden");
+    $("btn-toggle-criteria").setAttribute("aria-expanded", String(!isHidden));
+  });
+  $("btn-apply-criteria").onclick = () => {
+    const jobs = activeQueueJobs();
+    const codecRule = $("crit-codec").value;
+    const minBytes = Number($("crit-min-mb").value || 0) * 1000 * 1000;
+    const minMbps = Number($("crit-min-mbps").value || 0);
+    checkedJobIds.clear();
+    let count = 0;
+    for (const j of jobs) {
+      if (!isEncodeSelectableJob(j)) continue;
+      const info = jobVideoInfo(j);
+      const codec = (info.codec || "").toUpperCase();
+      if (codecRule === "non_modern" && (!j.probe || isModernCodec(codec))) continue;
+      if (codecRule === "only_h264" && !["H264", "AVC", "AVC1"].includes(codec)) continue;
+      if (codecRule === "only_legacy" && (isModernCodec(codec) || ["H264", "AVC", "AVC1", "VIDEO", "STATS…"].includes(codec))) continue;
+      if (minBytes > 0 && (j.input_bytes || 0) < minBytes) continue;
+      if (minMbps > 0 && (info.mbps || 0) < minMbps) continue;
+      checkedJobIds.add(j.id);
+      count++;
+    }
+    renderQueueList(activeQueue(), jobs);
+    renderActionBar();
+    renderSidebar();
+    showToast(`Criteria matched & selected ${count} file${count === 1 ? "" : "s"}.`, count > 0 ? "success" : "info");
+  };
+  $("btn-triage-skip-hevc").onclick = async () => {
+    const ids = activeQueueJobs().filter((j) => ["queued", "ready"].includes(j.status) && isModernCodec(jobVideoInfo(j).codec)).map((j) => j.id);
+    if (ids.length > 0) {
+      ids.forEach((id) => checkedJobIds.delete(id));
+      await invoke("remove_pending_jobs", { jobIds: ids });
+      showToast(`Removed ${ids.length} already HEVC/AV1 file${ids.length === 1 ? "" : "s"} from tab`, "info");
+    }
+  };
+  $("btn-retry-failed").onclick = () => {
+    const ids = activeQueueJobs().filter((j) => ["failed", "canceled", "interrupted", "needs_attention"].includes(j.status)).map((j) => j.id);
+    if (ids.length > 0) invoke("retry_jobs", { jobIds: ids });
+  };
+  $("btn-clear-completed").onclick = () => {
+    const ids = activeQueueJobs().filter((j) => ["completed", "below_savings_target", "canceled"].includes(j.status)).map((j) => j.id);
+    if (ids.length > 0) invoke("remove_pending_jobs", { jobIds: ids });
+  };
 
-    const chips = $("repair-refs-chips");
-    chips.innerHTML = "";
-    if (!s.reference_paths || s.reference_paths.length === 0) {
-      const hint = document.createElement("span");
-      hint.className = "muted";
-      hint.textContent = "No reference files attached (add healthy files from same camera/series if moov is missing).";
-      chips.appendChild(hint);
-    } else {
-      for (const rp of s.reference_paths) {
-        const chip = document.createElement("span");
-        chip.className = "chip";
-        const name = rp.split(/[/\\]/).pop();
-        chip.innerHTML = `<span title="${esc(rp)}">${esc(name)}</span>`;
-        const rm = document.createElement("button");
-        rm.type = "button";
-        rm.textContent = "×";
-        rm.title = "Remove reference";
-        rm.onclick = () => saveRepairConfig({ reference_paths: s.reference_paths.filter((x) => x !== rp) });
-        chip.appendChild(rm);
-        chips.appendChild(chip);
+  // Segmented setup controls in sidebar
+  document.querySelectorAll("[data-seg]").forEach((grp) => {
+    const key = grp.getAttribute("data-seg");
+    grp.querySelectorAll(".seg-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const val = btn.getAttribute("data-val");
+        patchActiveQueueSettings((p) => {
+          p.recipe[key] = val;
+          if (key === "family" || key === "codec" || key === "variant") applyCodecDefaults(p.recipe);
+        });
+      });
+    });
+  });
+
+  $("sel-profile").onchange = (e) => { if (e.target.value) invoke("select_profile_for_queue", { queueId: activeQueue().id, profileId: e.target.value }); };
+  $("btn-profile-menu").onclick = openProfilesModal;
+  $("btn-apply-waiting").onclick = () => {
+    const q = activeQueue();
+    const checkedWaiting = activeQueueJobs().filter((j) => checkedJobIds.has(j.id) && ["queued", "ready", "needs_attention", "interrupted", "failed", "canceled"].includes(j.status)).map((j) => j.id);
+    invoke("apply_queue_settings_to_waiting", { queueId: q.id, jobIds: checkedWaiting.length > 0 ? checkedWaiting : null });
+  };
+
+  $("rng-crf").oninput = (e) => { $("inp-crf").value = e.target.value; };
+  $("rng-crf").onchange = (e) => patchActiveQueueSettings((p) => { p.recipe.crf = Number(e.target.value); });
+  $("inp-crf").onchange = (e) => { $("rng-crf").value = e.target.value; patchActiveQueueSettings((p) => { p.recipe.crf = Number(e.target.value); }); };
+  $("btn-reset-preset").onclick = () => patchActiveQueueSettings((p) => {
+    p.recipe.tune = null;
+    p.recipe.ten_bit = p.recipe.family !== "remux";
+    p.recipe.aq_mode = null;
+    applyCodecDefaults(p.recipe);
+  });
+  $("sel-tune")?.addEventListener("change", (e) => patchActiveQueueSettings((p) => {
+    p.recipe.tune = e.target.value || null;
+  }));
+  $("sel-aq-mode")?.addEventListener("change", (e) => patchActiveQueueSettings((p) => {
+    p.recipe.aq_mode = e.target.value ? Number(e.target.value) : null;
+  }));
+  $("chk-ten-bit")?.addEventListener("change", (e) => patchActiveQueueSettings((p) => {
+    p.recipe.ten_bit = e.target.checked;
+  }));
+  $("btn-anime-preset-quick")?.addEventListener("click", () => {
+    patchActiveQueueSettings((p) => {
+      p.recipe.codec = "hevc";
+      p.recipe.tune = "animation";
+      p.recipe.ten_bit = true;
+      p.recipe.aq_mode = 3;
+      if (Number(p.recipe.crf) > 21) p.recipe.crf = 19;
+    });
+    showToast("Applied Anime 10-bit HEVC tuning (animation + 10-bit + AQ 3).", "success");
+  });
+  document.querySelectorAll("[data-help-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const box = $(btn.getAttribute("data-help-toggle"));
+      if (!box) return;
+      const open = !box.classList.toggle("hidden");
+      btn.classList.toggle("active", open);
+    });
+  });
+  $("btn-choose-dest").onclick = async () => { const dir = await dialog.open({ directory: true }); if (dir) patchActiveQueueSettings((p) => { p.destination_root = dir; }); };
+  $("btn-volume-reserve").onclick = () => {
+    const vol = findQueueVolumeInfo(activeQueue());
+    if (!vol) return showToast("Choose a destination folder first.", "info");
+    openPromptModal("Configure Volume Reserve", `Reserve (GiB) for ${vol.mount_point}:`, (vol.reserve_bytes / (1024 ** 3)).toFixed(1), (val) => {
+      invoke("set_volume_reserve", { volumeId: vol.volume_id, mountHint: vol.mount_point, reserveBytes: Math.round((Number(val) || 0) * 1024 ** 3) });
+    });
+  };
+  $("sel-cleanup-policy").onchange = (e) => patchActiveQueueSettings((p) => { p.cleanup_policy = e.target.value; });
+  $("chk-min-savings").onchange = (e) => patchActiveQueueSettings((p) => { p.min_savings_enabled = e.target.checked; });
+  $("inp-min-savings-pct").onchange = (e) => patchActiveQueueSettings((p) => { p.min_savings_pct = Number(e.target.value); });
+  $("sel-priority").onchange = (e) => patchActiveQueueSettings((p) => { p.priority = e.target.value; });
+  $("sel-error-policy").onchange = (e) => patchActiveQueueSettings((p) => { p.error_policy = e.target.value; });
+  $("chk-recursive").onchange = (e) => patchActiveQueueSettings((p) => { p.recursive_import = e.target.checked; });
+  $("chk-keep-awake").onchange = (e) => patchActiveQueueSettings((p) => { p.keep_awake = e.target.checked; });
+  $("chk-full-decode").onchange = (e) => patchActiveQueueSettings((p) => { p.full_decode_verify = e.target.checked; });
+  $("btn-toggle-advanced").onclick = () => {
+    const body = $("advanced-drawer");
+    const isHidden = body.classList.toggle("hidden");
+    $("btn-toggle-advanced").setAttribute("aria-expanded", String(!isHidden));
+  };
+  $("btn-save-named-preset").onclick = () => openPromptModal("Save Encode Preset", "Preset name:", "", (nm) => invoke("save_named_preset", { name: nm, recipe: activeQueue().recipe }));
+  $("btn-delete-named-preset").onclick = () => { const id = $("sel-named-preset").value; if (id) invoke("delete_named_preset", { id }); };
+  $("sel-named-preset").onchange = (e) => {
+    const np = snapshot.named_presets.find((x) => x.id === e.target.value);
+    $("btn-delete-named-preset").classList.toggle("hidden", !e.target.value);
+    if (np) patchActiveQueueSettings((p) => { p.recipe = { ...np.recipe }; });
+  };
+
+  // Drag & Drop into active Resource Tab
+  tauriWindow.getCurrentWindow().onDragDropEvent((ev) => {
+    if (ev.payload.type === "over") $("empty-drop-state").classList.add("drag-over");
+    else if (ev.payload.type === "leave") $("empty-drop-state").classList.remove("drag-over");
+    else if (ev.payload.type === "drop") {
+      $("empty-drop-state").classList.remove("drag-over");
+      startImportFlow(ev.payload.paths);
+    }
+  });
+
+  // Safe Close Guard
+  let forceAllowClose = false;
+  tauriWindow.getCurrentWindow().onCloseRequested(async (ev) => {
+    if (forceAllowClose) return;
+    ev.preventDefault();
+    try {
+      const busy = await invoke("check_close_status");
+      if (!busy) { forceAllowClose = true; return tauriWindow.getCurrentWindow().close(); }
+      openModal("Encoding Still in Progress", `<p><strong>Media Shack</strong> is currently processing jobs.</p>`, [
+        { label: "Keep Running (Minimize)", cls: "btn btn-primary", onClick: async () => { closeModal(); await tauriWindow.getCurrentWindow().minimize(); } },
+        { label: "Stop and Quit", cls: "btn btn-danger", onClick: () => invoke("stop_and_quit") },
+        { label: "Stay Here", cls: "btn", onClick: closeModal },
+      ]);
+    } catch (_) {
+      forceAllowClose = true;
+      tauriWindow.getCurrentWindow().close();
+    }
+  });
+
+  event.listen("import_scan_progress", (e) => {
+    latestImportProgress = e.payload;
+    updateScanProgressDom();
+  });
+  event.listen("probe_stats_progress", (e) => {
+    const p = e.payload;
+    if (!p || !p.queue_id) return;
+    if (p.done >= p.total) statsProgressByQueue.delete(p.queue_id);
+    else statsProgressByQueue.set(p.queue_id, p);
+    renderLineageBar();
+  });
+  event.listen("snapshot_changed", refreshSnapshot);
+  event.listen("job_progress", (e) => {
+    if (!snapshot) return;
+    snapshot.active_progress = e.payload;
+    if (activeMode(activeQueue()) === "encode") renderQueueList(activeQueue(), activeQueueJobs());
+    renderFooter();
+  });
+  event.listen("sample_preview_progress", async () => {
+    snapshot = await invoke("get_snapshot");
+    if (openSampleRefresh) openSampleRefresh();
+  });
+  event.listen("repair_progress", (e) => {
+    if (e.payload?.job_id && e.payload?.progress) {
+      repairLiveProgress.set(e.payload.job_id, e.payload.progress);
+      if (activeMode(activeQueue()) === "repair") renderRepairView(activeQueue(), activeQueueJobs());
+    }
+  });
+
+  // Custom themed dropdowns replacing macOS WKWebView native NSMenu popups
+  function initCustomSelects() {
+    let openMenu = null;
+    let openTriggerBtn = null;
+
+    const closeOpenMenu = () => {
+      if (openMenu) {
+        openMenu.remove();
+        openMenu = null;
+      }
+      if (openTriggerBtn) {
+        openTriggerBtn.classList.remove("open");
+        openTriggerBtn.setAttribute("aria-expanded", "false");
+        openTriggerBtn = null;
+      }
+    };
+
+    const nativeValDesc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
+    if (nativeValDesc && !HTMLSelectElement.prototype._msPatched) {
+      HTMLSelectElement.prototype._msPatched = true;
+      Object.defineProperty(HTMLSelectElement.prototype, "value", {
+        configurable: true,
+        get() { return nativeValDesc.get.call(this); },
+        set(v) {
+          nativeValDesc.set.call(this, v);
+          if (typeof this._msSync === "function") this._msSync();
+        },
+      });
+      const nativeIdxDesc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "selectedIndex");
+      if (nativeIdxDesc) {
+        Object.defineProperty(HTMLSelectElement.prototype, "selectedIndex", {
+          configurable: true,
+          get() { return nativeIdxDesc.get.call(this); },
+          set(v) {
+            nativeIdxDesc.set.call(this, v);
+            if (typeof this._msSync === "function") this._msSync();
+          },
+        });
       }
     }
 
-    if (!busy) {
-      $("repair-progress-box").classList.add("hidden");
-    } else {
-      $("repair-progress-box").classList.remove("hidden");
-    }
+    const enhance = (sel) => {
+      if (!sel || sel.dataset.msEnhanced === "1" || sel.multiple || (sel.size && sel.size > 1)) return;
+      if (sel.classList.contains("hidden")) return;
+      sel.dataset.msEnhanced = "1";
 
-    const resEl = $("repair-results");
-    if (!s.diagnosis && !s.report && !s.error) {
-      resEl.classList.add("hidden");
-      resEl.innerHTML = "";
-      return;
-    }
-    resEl.classList.remove("hidden");
+      const isFull = sel.classList.contains("full-input") || sel.style.width === "100%";
+      const wrap = document.createElement("div");
+      wrap.className = "ms-select-wrap" + (isFull ? " ms-full" : "");
+      if (sel.style.width && !isFull) wrap.style.width = sel.style.width;
+      if (sel.style.minWidth) wrap.style.minWidth = sel.style.minWidth;
 
-    let html = "";
-    if (s.error) {
-      html += `<div class="repair-card"><strong style="color:var(--err)">Error:</strong> ${esc(s.error)}</div>`;
-    }
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ms-select-btn";
+      btn.setAttribute("aria-haspopup", "listbox");
+      btn.setAttribute("aria-expanded", "false");
+      if (sel.title) btn.title = sel.title;
 
-    const rep = s.report;
-    const diag = rep ? rep.diagnosis : s.diagnosis;
+      const lbl = document.createElement("span");
+      lbl.className = "ms-select-label";
+      btn.appendChild(lbl);
+      btn.insertAdjacentHTML("beforeend", `<svg class="ms-select-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`);
 
-    if (rep) {
-      const badgeCls = rep.overall_status === "recovered" ? "ok" : rep.overall_status === "partial" ? "warn" : "err";
-      html += `
-        <div class="repair-card">
-          <div class="inline-row" style="justify-content:space-between; flex-wrap:wrap; gap:8px;">
-            <div>
-              <span class="dot ${badgeCls}" style="display:inline-block;margin-right:6px;"></span>
-              <strong>Status: ${esc(rep.overall_status.toUpperCase())}</strong>
-              <span class="muted"> · Original input SHA-256 ${rep.input_untouched_verified ? "Verified Unchanged ✓" : "CHECK FAILED"} · Elapsed ${rep.elapsed_secs.toFixed(1)}s</span>
-              <p style="margin:6px 0 0;">${esc(rep.honest_summary)}</p>
-            </div>
-            <div class="inline-row">
-              ${rep.output_path ? `<button class="btn btn-secondary btn-sm" id="btn-repair-reveal" type="button">Reveal output</button>` : ""}
-              ${rep.output_path ? `<button class="btn btn-primary btn-sm" id="btn-repair-open" type="button">Open in player</button>` : ""}
-              <button class="btn btn-ghost btn-sm" id="btn-repair-export-txt" type="button">Export TXT</button>
-              <button class="btn btn-ghost btn-sm" id="btn-repair-export-json" type="button">Export JSON</button>
-            </div>
-          </div>
-        </div>
-      `;
-    }
+      const sync = () => {
+        const chosen = sel.options[sel.selectedIndex] || sel.options[0];
+        lbl.textContent = chosen ? chosen.textContent : "—";
+        btn.disabled = Boolean(sel.disabled);
+        wrap.classList.toggle("hidden", sel.classList.contains("hidden"));
+      };
+      sel._msSync = sync;
 
-    if (diag) {
-      const atomsRows = (diag.atoms || []).map((a) => `
-        <tr>
-          <td class="mono">${esc(a.tag)}</td>
-          <td class="mono">${a.offset}</td>
-          <td class="mono">${fmtBytes(a.declared_size)}</td>
-          <td class="mono">${a.physical_end}</td>
-          <td>${a.truncated ? `<span style="color:var(--warn)">Truncated</span>` : "Intact"}</td>
-        </tr>
-      `).join("");
-      html += `
-        <div class="repair-card">
-          <h3 style="margin:0 0 8px;">Structure Diagnosis (${esc(diag.container_kind)})</h3>
-          <div class="mono muted" style="margin-bottom:8px;">SHA-256: ${esc(diag.sha256)} · ${fmtBytes(diag.file_size)}</div>
-          <ul class="provenance-list">
-            ${(diag.summary_lines || []).map((l) => `<li>${esc(l)}</li>`).join("")}
-            ${(diag.anomalies || []).map((a) => `<li style="color:var(--warn)">${esc(a)}</li>`).join("")}
-          </ul>
-          ${atomsRows ? `<table class="table-simple"><thead><tr><th>Atom</th><th>Offset</th><th>Declared</th><th>Physical End</th><th>State</th></tr></thead><tbody>${atomsRows}</tbody></table>` : ""}
-        </div>
-      `;
-    }
+      sel.parentNode.insertBefore(wrap, sel);
+      wrap.appendChild(btn);
+      wrap.appendChild(sel);
+      sel.classList.add("ms-select-native-hidden");
+      sync();
 
-    if (rep) {
-      const candRows = (rep.candidates || []).map((c) => `
-        <tr>
-          <td><strong>${esc(c.strategy_name)}</strong>${c.rejection_reason ? `<div class="muted" style="font-size:11px">${esc(c.rejection_reason)}</div>` : ""}</td>
-          <td>${c.succeeded ? `<span style="color:var(--ok);font-weight:600">PASS</span>` : `<span style="color:var(--err)">FAIL</span>`}</td>
-          <td class="mono">${c.score.toFixed(1)}</td>
-          <td class="mono">${c.decoded_video_frames}</td>
-          <td class="mono">${c.idr_frames}</td>
-          <td class="mono">${c.decode_error_count}</td>
-          <td class="mono">${c.recovered_duration_secs != null ? c.recovered_duration_secs.toFixed(2) + "s" : "—"}</td>
-          <td class="mono">${c.audio_duration_secs != null ? c.audio_duration_secs.toFixed(2) + "s" : "Video-only"}</td>
-        </tr>
-      `).join("");
+      sel.addEventListener("change", sync);
+      const optObs = new MutationObserver(sync);
+      optObs.observe(sel, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["disabled", "class"] });
 
-      html += `
-        <div class="repair-card">
-          <h3 style="margin:0 0 8px;">Recovery Candidates Evaluated (${(rep.candidates || []).length})</h3>
-          <table class="table-simple">
-            <thead><tr><th>Strategy</th><th>Valid</th><th>Score</th><th>Frames</th><th>IDRs</th><th>Decode Errs</th><th>Video Dur</th><th>Audio</th></tr></thead>
-            <tbody>${candRows}</tbody>
-          </table>
-        </div>
-        <div class="repair-two-col">
-          <div class="repair-card">
-            <h3 style="margin:0 0 8px;">Data Provenance &amp; VR Notes</h3>
-            <strong>Recovered Data</strong>
-            <ul class="provenance-list">${(rep.provenance.recovered_data || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
-            <strong>Inferred Metadata</strong>
-            <ul class="provenance-list">${(rep.provenance.inferred_metadata || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
-            <strong>Irrecoverable / Omitted</strong>
-            <ul class="provenance-list">${(rep.provenance.irrecoverable_or_omitted || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
-            ${rep.vr_status && rep.vr_status.limitation_note ? `<p style="color:var(--warn);font-size:12px;"><strong>VR Note:</strong> ${esc(rep.vr_status.limitation_note)}</p>` : ""}
-          </div>
-          <div class="repair-card">
-            <h3 style="margin:0 0 8px;">Contact Sheet Thumbnail Verification</h3>
-            ${s.preview_sheet_filename ? `<img class="contact-sheet-img" src="preview://${encodeURIComponent(s.preview_sheet_filename)}?t=${s.updated_at}" alt="Recovered frames contact sheet" />` : `<p class="muted">No contact sheet generated.</p>`}
-          </div>
-        </div>
-      `;
-    }
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (btn.disabled) return;
+        const wasSame = openTriggerBtn === btn;
+        closeOpenMenu();
+        if (wasSame) return;
 
-    resEl.innerHTML = html;
+        const rect = btn.getBoundingClientRect();
+        const menu = document.createElement("div");
+        menu.className = "ms-select-menu";
+        menu.setAttribute("role", "listbox");
 
-    if (rep && rep.output_path) {
-      const btnRev = $("btn-repair-reveal");
-      const btnOpen = $("btn-repair-open");
-      if (btnRev) btnRev.onclick = () => invoke("reveal_output", { path: rep.output_path });
-      if (btnOpen) btnOpen.onclick = () => invoke("open_output_player", { path: rep.output_path });
-    }
-    const btnTxt = $("btn-repair-export-txt");
-    const btnJson = $("btn-repair-export-json");
-    if (btnTxt) btnTxt.onclick = async () => {
-      const dst = await dialog.save({ defaultPath: "recovery_report.txt" });
-      if (dst) await invoke("export_repair_report", { queueId: activeQueue().id, destPath: dst, format: "txt" });
+        Array.from(sel.options).forEach((opt) => {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "ms-select-opt" + (opt.value === sel.value ? " active" : "");
+          item.disabled = Boolean(opt.disabled);
+          item.setAttribute("role", "option");
+          item.setAttribute("aria-selected", opt.value === sel.value ? "true" : "false");
+          item.innerHTML = `<span class="truncate">${escapeHtml(opt.textContent)}</span>${opt.value === sel.value ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ""}`;
+          item.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (opt.disabled) return;
+            const changed = sel.value !== opt.value;
+            sel.value = opt.value;
+            closeOpenMenu();
+            if (changed) sel.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+          menu.appendChild(item);
+        });
+
+        document.body.appendChild(menu);
+        menu.style.minWidth = `${Math.max(rect.width, 150)}px`;
+        const mRect = menu.getBoundingClientRect();
+        const spaceBelow = window.innerHeight - rect.bottom - 8;
+        const top = (spaceBelow >= mRect.height || spaceBelow >= rect.top)
+          ? Math.min(window.innerHeight - mRect.height - 8, rect.bottom + 4)
+          : Math.max(8, rect.top - mRect.height - 4);
+        const left = Math.min(Math.max(8, rect.left), window.innerWidth - mRect.width - 8);
+        menu.style.top = `${top}px`;
+        menu.style.left = `${left}px`;
+
+        btn.classList.add("open");
+        btn.setAttribute("aria-expanded", "true");
+        openMenu = menu;
+        openTriggerBtn = btn;
+      });
     };
-    if (btnJson) btnJson.onclick = async () => {
-      const dst = await dialog.save({ defaultPath: "recovery_report.json" });
-      if (dst) await invoke("export_repair_report", { queueId: activeQueue().id, destPath: dst, format: "json" });
-    };
+
+    document.addEventListener("click", closeOpenMenu);
+    window.addEventListener("resize", closeOpenMenu);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeOpenMenu();
+    });
+
+    document.querySelectorAll("select").forEach(enhance);
+    const rootObs = new MutationObserver((muts) => {
+      for (const m of muts) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType !== 1) continue;
+          if (node.tagName === "SELECT") enhance(node);
+          else if (node.querySelectorAll) node.querySelectorAll("select").forEach(enhance);
+        }
+      }
+    });
+    rootObs.observe(document.body, { childList: true, subtree: true });
   }
 
-  // Repair Tab Actions
-  $("btn-repair-pick-input").onclick = async () => {
-    const picked = await dialog.open({ multiple: false, filters: [{ name: "Video", extensions: ["mp4", "mov", "m4v"] }] });
-    if (picked) await saveRepairConfig({ input_path: picked });
-  };
-  $("btn-repair-add-refs").onclick = async () => {
-    const picked = await dialog.open({ multiple: true, filters: [{ name: "Video", extensions: ["mp4", "mov", "m4v", "mkv"] }] });
-    if (picked) {
-      const list = Array.isArray(picked) ? picked : [picked];
-      const cur = activeRepairSession().reference_paths || [];
-      const merged = Array.from(new Set([...cur, ...list]));
-      await saveRepairConfig({ reference_paths: merged });
-    }
-  };
-  $("btn-repair-pick-output").onclick = async () => {
-    const cur = activeRepairSession();
-    const picked = await dialog.save({ defaultPath: cur.output_path || "recovered.mp4" });
-    if (picked) await saveRepairConfig({ output_path: picked });
-  };
-  $("chk-repair-deep").onchange = () => saveRepairConfig({});
-  $("chk-repair-video-only").onchange = () => saveRepairConfig({});
-  $("inp-repair-timeout").onchange = () => saveRepairConfig({});
-  $("btn-repair-diagnose").onclick = async () => {
-    try {
-      await invoke("run_repair_diagnosis", { queueId: activeQueue().id });
-    } catch (err) {
-      alert(err);
-    }
-  };
-  $("btn-repair-start").onclick = async () => {
-    try {
-      await invoke("start_video_repair", { queueId: activeQueue().id });
-    } catch (err) {
-      alert(err);
-    }
-  };
-
+  initCustomSelects();
   refreshSnapshot();
 })();

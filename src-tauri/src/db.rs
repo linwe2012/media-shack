@@ -599,6 +599,44 @@ impl Database {
                  queue_id TEXT PRIMARY KEY REFERENCES queues(id) ON DELETE CASCADE,
                  session_json TEXT NOT NULL,
                  updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS tab_hash_cache (
+                 path TEXT PRIMARY KEY,
+                 size_bytes INTEGER NOT NULL,
+                 mtime_ns INTEGER NOT NULL,
+                 blake3_hex TEXT NOT NULL,
+                 sha256_hex TEXT,
+                 perceptual_json TEXT,
+                 updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS reviewed_action_plans (
+                 plan_id TEXT PRIMARY KEY,
+                 plan_kind TEXT NOT NULL,
+                 queue_id TEXT,
+                 payload_json TEXT NOT NULL,
+                 state TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 consumed_at INTEGER
+             );
+             CREATE TABLE IF NOT EXISTS file_op_journal (
+                 op_id TEXT NOT NULL,
+                 item_idx INTEGER NOT NULL,
+                 item_id TEXT NOT NULL,
+                 op_kind TEXT NOT NULL,
+                 phase TEXT NOT NULL,
+                 from_path TEXT NOT NULL,
+                 staging_path TEXT,
+                 to_path TEXT NOT NULL,
+                 src_volume_id TEXT,
+                 src_file_id TEXT,
+                 src_size INTEGER,
+                 src_head_hash TEXT,
+                 dst_file_id TEXT,
+                 blake3_hash TEXT,
+                 cross_volume INTEGER NOT NULL DEFAULT 0,
+                 error_message TEXT,
+                 updated_at INTEGER NOT NULL,
+                 PRIMARY KEY (op_id, item_idx)
              );",
         )
         .map_err(|e| format!("Schema reconcile repair_sessions failed: {e}"))?;
@@ -1517,6 +1555,299 @@ impl Database {
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
+
+    pub fn get_workspace_json<T: serde::de::DeserializeOwned + Default>(&self, key: &str) -> Result<T, String> {
+        match self.get_setting::<String>(key)? {
+            Some(raw) if !raw.trim().is_empty() => {
+                Ok(serde_json::from_str(&raw).unwrap_or_default())
+            }
+            _ => Ok(T::default()),
+        }
+    }
+
+    pub fn get_workspace_json_strict<T: serde::de::DeserializeOwned + Default>(&self, key: &str) -> Result<T, String> {
+        match self.get_setting::<String>(key)? {
+            Some(raw) if !raw.trim().is_empty() => serde_json::from_str(&raw)
+                .map_err(|e| format!("Corrupted safety state in '{key}': {e}")),
+            _ => Ok(T::default()),
+        }
+    }
+
+    pub fn set_workspace_json<T: serde::Serialize>(&self, key: &str, val: &T) -> Result<(), String> {
+        let raw = serde_json::to_string(val).map_err(|e| e.to_string())?;
+        self.set_setting(key, &raw)
+    }
+
+    pub fn get_cached_file_hash(
+        &self,
+        path: &str,
+        size_bytes: u64,
+        mtime_ns: i64,
+    ) -> Result<Option<(String, Option<String>, Option<String>)>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT blake3_hex, sha256_hex, perceptual_json
+             FROM tab_hash_cache
+             WHERE path = ?1 AND size_bytes = ?2 AND mtime_ns = ?3",
+            params![path, size_bytes as i64, mtime_ns],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub fn upsert_cached_file_hash(
+        &self,
+        path: &str,
+        size_bytes: u64,
+        mtime_ns: i64,
+        blake3_hex: &str,
+        sha256_hex: Option<&str>,
+        perceptual_json: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO tab_hash_cache (path, size_bytes, mtime_ns, blake3_hex, sha256_hex, perceptual_json, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(path) DO UPDATE SET
+                 size_bytes = excluded.size_bytes,
+                 mtime_ns = excluded.mtime_ns,
+                 blake3_hex = excluded.blake3_hex,
+                 sha256_hex = COALESCE(excluded.sha256_hex, tab_hash_cache.sha256_hex),
+                 perceptual_json = COALESCE(excluded.perceptual_json, tab_hash_cache.perceptual_json),
+                 updated_at = excluded.updated_at",
+            params![
+                path,
+                size_bytes as i64,
+                mtime_ns,
+                blake3_hex,
+                sha256_hex,
+                perceptual_json,
+                Utc::now().timestamp()
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn get_hash_cache_stats(&self) -> Result<HashCacheStats, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let (cnt, sum_bytes, est_cache): (i64, i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0),
+                        COALESCE(SUM(LENGTH(path) + LENGTH(blake3_hex) + COALESCE(LENGTH(sha256_hex),0) + COALESCE(LENGTH(perceptual_json),0) + 64), 0)
+                 FROM tab_hash_cache",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap_or((0, 0, 0));
+        Ok(HashCacheStats {
+            entry_count: cnt.max(0) as usize,
+            total_hashed_bytes: sum_bytes.max(0) as u64,
+            cache_bytes_estimate: est_cache.max(0) as u64,
+        })
+    }
+
+    pub fn clear_hash_cache(&self) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let deleted = conn
+            .execute("DELETE FROM tab_hash_cache", [])
+            .map_err(|e| e.to_string())?;
+        let _ = conn.execute("DELETE FROM fingerprints", []);
+        Ok(deleted)
+    }
+
+    pub fn save_reviewed_plan(
+        &self,
+        plan_id: &str,
+        plan_kind: &str,
+        queue_id: Option<&str>,
+        payload_json: &str,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT OR REPLACE INTO reviewed_action_plans
+             (plan_id, plan_kind, queue_id, payload_json, state, created_at, consumed_at)
+             VALUES (?1, ?2, ?3, ?4, 'reviewed', ?5, NULL)",
+            params![plan_id, plan_kind, queue_id, payload_json, now],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn take_reviewed_plan(
+        &self,
+        plan_id: &str,
+        expected_kind: &str,
+    ) -> Result<(Option<String>, String), String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let row: Option<(String, Option<String>, String, String)> = tx
+            .query_row(
+                "SELECT plan_kind, queue_id, payload_json, state
+                 FROM reviewed_action_plans WHERE plan_id = ?1",
+                params![plan_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some((kind, qid, payload, state)) = row else {
+            return Err("Reviewed action plan not found or expired. Run a fresh preview first.".to_string());
+        };
+        if kind != expected_kind {
+            return Err(format!("Plan type mismatch (expected {expected_kind}, got {kind})."));
+        }
+        if state != "reviewed" {
+            return Err(format!("Action plan is no longer valid ({state}); run a fresh preview."));
+        }
+        tx.execute(
+            "UPDATE reviewed_action_plans SET state = 'consumed', consumed_at = ?1 WHERE plan_id = ?2",
+            params![Utc::now().timestamp(), plan_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok((qid, payload))
+    }
+
+    pub fn invalidate_reviewed_plans_for_queue(&self, queue_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE reviewed_action_plans SET state = 'stale'
+             WHERE queue_id = ?1 AND state = 'reviewed'",
+            params![queue_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn insert_file_op_journal_batch(&self, rows: &[FileOpJournalRecord]) -> Result<(), String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        for r in rows {
+            tx.execute(
+                "INSERT INTO file_op_journal (
+                    op_id, item_idx, item_id, op_kind, phase, from_path, staging_path, to_path,
+                    src_volume_id, src_file_id, src_size, src_head_hash, dst_file_id,
+                    blake3_hash, cross_volume, error_message, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                params![
+                    r.op_id,
+                    r.item_idx as i64,
+                    r.item_id,
+                    r.op_kind,
+                    r.phase,
+                    r.from_path,
+                    r.staging_path,
+                    r.to_path,
+                    r.src_volume_id,
+                    r.src_file_id,
+                    r.src_size.map(|v| v as i64),
+                    r.src_head_hash,
+                    r.dst_file_id,
+                    r.blake3_hash,
+                    if r.cross_volume { 1 } else { 0 },
+                    r.error_message,
+                    Utc::now().timestamp(),
+                ],
+            )
+            .map_err(|e| format!("Journal write failed: {e}"))?;
+        }
+        tx.commit().map_err(|e| format!("Journal commit failed: {e}"))?;
+        Ok(())
+    }
+
+    pub fn update_file_op_journal_phase(
+        &self,
+        op_id: &str,
+        item_idx: usize,
+        phase: &str,
+        staging_path: Option<&str>,
+        dst_file_id: Option<&str>,
+        blake3_hash: Option<&str>,
+        error_message: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE file_op_journal
+             SET phase = ?1,
+                 staging_path = COALESCE(?2, staging_path),
+                 dst_file_id = COALESCE(?3, dst_file_id),
+                 blake3_hash = COALESCE(?4, blake3_hash),
+                 error_message = ?5,
+                 updated_at = ?6
+             WHERE op_id = ?7 AND item_idx = ?8",
+            params![
+                phase,
+                staging_path,
+                dst_file_id,
+                blake3_hash,
+                error_message,
+                Utc::now().timestamp(),
+                op_id,
+                item_idx as i64
+            ],
+        )
+        .map_err(|e| format!("Journal transition failed: {e}"))?;
+        Ok(())
+    }
+
+    pub fn list_pending_file_op_journal(&self) -> Result<Vec<FileOpJournalRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT op_id, item_idx, item_id, op_kind, phase, from_path, staging_path, to_path,
+                        src_volume_id, src_file_id, src_size, src_head_hash, dst_file_id,
+                        blake3_hash, cross_volume, error_message
+                 FROM file_op_journal
+                 WHERE phase IN ('planned', 'staged', 'copied_verified', 'undo_staged')
+                 ORDER BY updated_at ASC, item_idx ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(FileOpJournalRecord {
+                    op_id: r.get(0)?,
+                    item_idx: r.get::<_, i64>(1)? as usize,
+                    item_id: r.get(2)?,
+                    op_kind: r.get(3)?,
+                    phase: r.get(4)?,
+                    from_path: r.get(5)?,
+                    staging_path: r.get(6)?,
+                    to_path: r.get(7)?,
+                    src_volume_id: r.get(8)?,
+                    src_file_id: r.get(9)?,
+                    src_size: r.get::<_, Option<i64>>(10)?.map(|v| v.max(0) as u64),
+                    src_head_hash: r.get(11)?,
+                    dst_file_id: r.get(12)?,
+                    blake3_hash: r.get(13)?,
+                    cross_volume: r.get::<_, i64>(14)? != 0,
+                    error_message: r.get(15)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FileOpJournalRecord {
+    pub op_id: String,
+    pub item_idx: usize,
+    pub item_id: String,
+    pub op_kind: String,
+    pub phase: String,
+    pub from_path: String,
+    pub staging_path: Option<String>,
+    pub to_path: String,
+    pub src_volume_id: Option<String>,
+    pub src_file_id: Option<String>,
+    pub src_size: Option<u64>,
+    pub src_head_hash: Option<String>,
+    pub dst_file_id: Option<String>,
+    pub blake3_hash: Option<String>,
+    pub cross_volume: bool,
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Clone)]

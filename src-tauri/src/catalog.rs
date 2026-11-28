@@ -1578,6 +1578,79 @@ pub fn refresh_fts_for_asset(db: &Database, asset_id: &str) -> Result<(), String
     Ok(())
 }
 
+pub fn ensure_path_in_catalog(
+    db: &Database,
+    path: &Path,
+    ffprobe_path: Option<&Path>,
+) -> Result<(String, String), String> {
+    let norm_path = normalize_display_path(path);
+    {
+        let conn = db.lock_conn()?;
+        if let Some((fk, aid)) = conn
+            .query_row(
+                "SELECT fl.file_key, mf.asset_id FROM file_locations fl
+                 JOIN media_files mf ON mf.file_key = fl.file_key
+                 WHERE fl.path = ?1 AND fl.is_current = 1
+                 LIMIT 1",
+                params![norm_path],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+        {
+            return Ok((fk, aid));
+        }
+    }
+
+    let fp = capture_file_identity(path)?;
+    let now = Utc::now().timestamp();
+    let filename = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "media".to_string());
+    let parent_dir = path
+        .parent()
+        .map(normalize_display_path)
+        .unwrap_or_default();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    let media_type = classify_media_type(path).to_string();
+    let (mut a, mut u, mut m, mut mo, mut c) = (0, 0, 0, 0, 0);
+    let (file_key, needs_probe) = upsert_scanned_file(
+        db,
+        None,
+        &norm_path,
+        &filename,
+        &parent_dir,
+        &ext,
+        &media_type,
+        &fp,
+        now,
+        &mut a,
+        &mut u,
+        &mut m,
+        &mut mo,
+        &mut c,
+    )?;
+    if needs_probe {
+        if let Some(fp_bin) = ffprobe_path {
+            let _ = enrich_file_with_ffprobe(db, fp_bin, &file_key, path);
+        }
+    }
+    let conn = db.lock_conn()?;
+    let asset_id: String = conn
+        .query_row(
+            "SELECT asset_id FROM media_files WHERE file_key = ?1",
+            params![file_key],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok((file_key, asset_id))
+}
+
 /// Register a newly produced derivative file (transcoded, remuxed, or recovered) into the catalog
 /// and link it to its original asset with `media_relationships`.
 pub fn register_derived_file(

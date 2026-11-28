@@ -20,6 +20,15 @@ pub fn is_app_staging_or_partial(path: &Path) -> bool {
     false
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportScanProgress {
+    pub phase: String,
+    pub discovered: usize,
+    pub probed: usize,
+    pub total: usize,
+    pub current_file: String,
+}
+
 pub fn scan_import_paths(
     ffprobe_path: Option<&Path>,
     queue: &QueueTab,
@@ -29,6 +38,33 @@ pub fn scan_import_paths(
     destination_root_override: Option<&str>,
     cancel_flag: &Arc<AtomicBool>,
 ) -> ImportScanResult {
+    scan_import_paths_with_progress(
+        ffprobe_path,
+        queue,
+        existing_queue_jobs,
+        input_paths,
+        recursive,
+        destination_root_override,
+        cancel_flag,
+        false,
+        |_| {},
+    )
+}
+
+pub fn scan_import_paths_with_progress<F>(
+    ffprobe_path: Option<&Path>,
+    queue: &QueueTab,
+    existing_queue_jobs: &[JobRecord],
+    input_paths: &[PathBuf],
+    recursive: bool,
+    destination_root_override: Option<&str>,
+    cancel_flag: &Arc<AtomicBool>,
+    defer_probe: bool,
+    mut on_progress: F,
+) -> ImportScanResult
+where
+    F: FnMut(ImportScanProgress),
+{
     let scan_id = Uuid::new_v4().to_string();
     let dest_root_str = destination_root_override
         .map(str::to_string)
@@ -72,10 +108,12 @@ pub fn scan_import_paths(
                 &root_name,
                 dest_root_canon.as_deref(),
                 recursive,
+                queue.tab_type != TabType::Encode,
                 cancel_flag,
                 &mut visited_dirs,
                 &mut discovered,
                 &mut skipped_count,
+                &mut on_progress,
             );
         } else if meta.is_file() {
             if is_app_staging_or_partial(raw) {
@@ -94,7 +132,15 @@ pub fn scan_import_paths(
                 .file_name()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("video"));
+            let cur_name = rel.to_string_lossy().to_string();
             discovered.push((raw.clone(), rel, None));
+            on_progress(ImportScanProgress {
+                phase: "discovering".to_string(),
+                discovered: discovered.len(),
+                probed: 0,
+                total: 0,
+                current_file: cur_name,
+            });
         }
     }
 
@@ -129,12 +175,31 @@ pub fn scan_import_paths(
     }
 
     let recipe_json = serde_json::to_string(&queue.recipe).unwrap_or_default();
+    let total_discovered = discovered.len();
     let mut items = Vec::new();
     let mut unreadable_count = 0usize;
 
-    for (abs_path, rel_path, source_root) in discovered {
+    on_progress(ImportScanProgress {
+        phase: if defer_probe { "loading" } else { "probing" }.to_string(),
+        discovered: total_discovered,
+        probed: 0,
+        total: total_discovered,
+        current_file: String::new(),
+    });
+
+    for (idx, (abs_path, rel_path, source_root)) in discovered.into_iter().enumerate() {
         if cancel_flag.load(Ordering::Relaxed) {
             break;
+        }
+        let rel_display = rel_path.to_string_lossy().to_string();
+        if idx == 0 || (idx + 1) % 3 == 0 || !defer_probe {
+            on_progress(ImportScanProgress {
+                phase: if defer_probe { "loading" } else { "probing" }.to_string(),
+                discovered: total_discovered,
+                probed: idx + 1,
+                total: total_discovered,
+                current_file: rel_display.clone(),
+            });
         }
         if let Some(blocked) = is_blocked_input_path(&abs_path) {
             unreadable_count += 1;
@@ -197,27 +262,31 @@ pub fn scan_import_paths(
             &mut reserved_dests,
         );
 
-        let (probe, plan, unreadable_error) = match ffprobe_path {
-            Some(fp_bin) => match probe_file(fp_bin, &abs_path) {
-                Ok(pr) => {
-                    let pl = build_track_plan(
-                        &abs_path,
-                        &pr,
-                        &queue.recipe,
-                        &CompatOverrides::default(),
-                    );
-                    (Some(pr), Some(pl), None)
-                }
-                Err(err) => {
-                    unreadable_count += 1;
-                    (None, None, Some(err))
-                }
-            },
-            None => (
-                None,
-                None,
-                Some("ffprobe not configured yet; locate FFmpeg tools to inspect.".to_string()),
-            ),
+        let (probe, plan, unreadable_error) = if defer_probe {
+            (None, None, None)
+        } else {
+            match ffprobe_path {
+                Some(fp_bin) => match probe_file(fp_bin, &abs_path) {
+                    Ok(pr) => {
+                        let pl = build_track_plan(
+                            &abs_path,
+                            &pr,
+                            &queue.recipe,
+                            &CompatOverrides::default(),
+                        );
+                        (Some(pr), Some(pl), None)
+                    }
+                    Err(err) => {
+                        unreadable_count += 1;
+                        (None, None, Some(err))
+                    }
+                },
+                None => (
+                    None,
+                    None,
+                    Some("ffprobe not configured yet; locate FFmpeg tools to inspect.".to_string()),
+                ),
+            }
         };
 
         let bit_rate = probe.as_ref().and_then(|p| p.format.bit_rate);
@@ -263,17 +332,21 @@ pub fn scan_import_paths(
     }
 }
 
-fn walk_dir_incremental(
+fn walk_dir_incremental<F>(
     base_dir: &Path,
     cur_dir: &Path,
     base_name: &Path,
     dest_root_canon: Option<&Path>,
     recursive: bool,
+    include_images: bool,
     cancel_flag: &Arc<AtomicBool>,
     visited_dirs: &mut HashSet<PathBuf>,
     out: &mut Vec<(PathBuf, PathBuf, Option<String>)>,
     skipped_count: &mut usize,
-) {
+    on_progress: &mut F,
+) where
+    F: FnMut(ImportScanProgress),
+{
     if cancel_flag.load(Ordering::Relaxed) {
         return;
     }
@@ -321,24 +394,37 @@ fn walk_dir_incremental(
                     base_name,
                     dest_root_canon,
                     recursive,
+                    include_images,
                     cancel_flag,
                     visited_dirs,
                     out,
                     skipped_count,
+                    on_progress,
                 );
             }
         } else if meta.is_file() {
             if is_app_staging_or_partial(&path) {
                 continue;
             }
-            if is_video_hint_ext(&path) {
+            let is_img = include_images && crate::catalog::classify_media_type(&path) == "image";
+            if is_video_hint_ext(&path) || is_img {
                 let rel_inner = path.strip_prefix(base_dir).unwrap_or(&path);
                 let rel = base_name.join(rel_inner);
+                let rel_disp = rel.to_string_lossy().to_string();
                 out.push((
                     path,
                     rel,
                     Some(base_dir.to_string_lossy().to_string()),
                 ));
+                if out.len() <= 5 || out.len() % 5 == 0 {
+                    on_progress(ImportScanProgress {
+                        phase: "discovering".to_string(),
+                        discovered: out.len(),
+                        probed: 0,
+                        total: 0,
+                        current_file: rel_disp,
+                    });
+                }
             }
         }
     }

@@ -451,8 +451,16 @@ pub fn check_trash_support(path: &Path) -> Result<bool, String> {
 }
 
 /// Identity-checked, recoverable-only OS Trash move on macOS.
-/// Rechecks ancestor symlinks, opens with O_NOFOLLOW, verifies fstat + F_GETPATH + fingerprint,
-/// then invokes NSFileManager trashItemAtURL (never permanently deletes).
+/// Platform guarantee documented:
+/// - Rejects read-only volumes, non-local/network shares (`MNT_LOCAL == 0`), and non-APFS/HFS+ filesystems.
+/// - Pins both parent directory (`O_DIRECTORY | O_NOFOLLOW`) and target (`openat(..., O_NOFOLLOW)`)
+///   before verifying canonical `F_GETPATH`, `fstat` (`S_IFREG`, `nlink == 1`, `dev:ino`, `size`, `mtime`),
+///   `head_hash`, and optional `full_blake3` while holding `file` open across `NSFileManager trashItemAtURL:`,
+///   then verifies `resultingItemURL` inode matches the pinned open descriptor before closing.
+/// - Darwin has no kernel `trashat(fd)` syscall (`NSFileManager trashItemAtURL:` takes `NSURL` to preserve
+///   Finder Put-Back records in `.Trash`), so keeping `dir_fd` + `file` open and re-resolving `F_GETPATH`
+///   plus verifying `resultingItemURL` is the strictest recoverable-Trash guarantee macOS supports without
+///   reimplementing Finder's private Put-Back protocol or permanently deleting.
 pub fn move_to_recoverable_trash_verified(
     source_path: &Path,
     expected: &SourceFingerprint,
@@ -465,17 +473,42 @@ pub fn move_to_recoverable_trash_verified(
     }
     verify_no_symlink_ancestors_impl(source_path)?;
 
-    let c_path = CString::new(source_path.as_os_str().as_encoded_bytes())
-        .map_err(|_| "Path contains NUL".to_string())?;
-    let fd = unsafe {
+    let parent = source_path
+        .parent()
+        .ok_or_else(|| "Source path has no parent directory.".to_string())?;
+    let basename = source_path
+        .file_name()
+        .ok_or_else(|| "Source path has no filename.".to_string())?;
+    let c_parent = CString::new(parent.as_os_str().as_encoded_bytes())
+        .map_err(|_| "Parent path contains NUL".to_string())?;
+    let c_base = CString::new(basename.as_encoded_bytes())
+        .map_err(|_| "Filename contains NUL".to_string())?;
+
+    let dir_fd = unsafe {
         libc::open(
-            c_path.as_ptr(),
+            c_parent.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if dir_fd < 0 {
+        return Err(format!(
+            "Failed safe parent open (O_NOFOLLOW) on {}: {}",
+            parent.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    let _dir_guard = unsafe { File::from_raw_fd(dir_fd) };
+
+    let fd = unsafe {
+        libc::openat(
+            dir_fd,
+            c_base.as_ptr(),
             libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         )
     };
     if fd < 0 {
         return Err(format!(
-            "Failed safe open (O_NOFOLLOW) on {}: {}",
+            "Failed safe openat (O_NOFOLLOW) on {}: {}",
             source_path.display(),
             std::io::Error::last_os_error()
         ));
@@ -530,10 +563,28 @@ pub fn move_to_recoverable_trash_verified(
     if hash != expected.head_hash {
         return Err("Source file content fingerprint changed.".to_string());
     }
-    drop(file);
+    if let Some(ref exp_b3) = expected.full_blake3 {
+        let actual_b3 = crate::platform::common::compute_full_blake3(&mut file)?;
+        if &actual_b3 != exp_b3 {
+            return Err("Source full BLAKE3 content hash changed before Trash.".to_string());
+        }
+    }
 
-    // Invoke NSFileManager defaultManager trashItemAtURL:resultingItemURL:error:
-    ns_file_manager_trash(source_path, &actual_file_id)
+    // Re-resolve canonical path from still-open descriptor immediately before invoking NSFileManager
+    let mut final_buf = [0u8; libc::PATH_MAX as usize];
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, final_buf.as_mut_ptr()) } != 0 {
+        return Err("Post-hash F_GETPATH verification failed".to_string());
+    }
+    let final_resolved = unsafe { CStr::from_ptr(final_buf.as_ptr() as *const libc::c_char) }
+        .to_string_lossy()
+        .to_string();
+    if final_resolved != resolved_path {
+        return Err("Concurrent move/rename detected before Trash; keeping original.".to_string());
+    }
+
+    // Hold `file` and `_dir_guard` open across trashItemAtURL so the verified inode cannot be recycled
+    // and we can compare the trashed item's inode directly against our pinned file descriptor.
+    ns_file_manager_trash(Path::new(&final_resolved), &actual_file_id)
 }
 
 fn ns_file_manager_trash(path: &Path, expected_file_id: &str) -> Result<(), String> {

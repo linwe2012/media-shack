@@ -196,11 +196,29 @@ impl PreviewManager {
             args.push(job.recipe.effort.clone());
             args.push("-crf:v:0".to_string());
             args.push(job.recipe.crf.to_string());
-            if job.recipe.codec == VideoCodec::Hevc && job.recipe.container == ContainerFormat::Mp4 {
-                args.push("-tag:v:0".to_string());
-                args.push("hvc1".to_string());
+            if job.recipe.codec == VideoCodec::Hevc {
+                if let Some(ref tune) = job.recipe.tune {
+                    let t = tune.trim();
+                    if !t.is_empty() {
+                        args.push("-tune:v:0".to_string());
+                        args.push(t.to_string());
+                    }
+                }
+                if let Some(aq) = job.recipe.aq_mode {
+                    args.push("-x265-params".to_string());
+                    args.push(format!("aq-mode={aq}"));
+                }
+                if job.recipe.container == ContainerFormat::Mp4 {
+                    args.push("-tag:v:0".to_string());
+                    args.push("hvc1".to_string());
+                }
             }
-            if let Some(ref pf) = job.plan.as_ref().and_then(|p| p.target_pix_fmt.clone()) {
+            let effective_pix = if job.recipe.ten_bit {
+                Some("yuv420p10le".to_string())
+            } else {
+                job.plan.as_ref().and_then(|p| p.target_pix_fmt.clone())
+            };
+            if let Some(ref pf) = effective_pix {
                 args.push("-pix_fmt:v:0".to_string());
                 args.push(pf.clone());
             }

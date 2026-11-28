@@ -512,7 +512,11 @@ pub fn build_track_plan(
                 });
             }
 
-            target_pix_fmt = certified_pix;
+            target_pix_fmt = if recipe.family == PresetFamily::Archive && recipe.ten_bit && certified_pix.is_some() {
+                Some("yuv420p10le".to_string())
+            } else {
+                certified_pix
+            };
             if s.rotation.unwrap_or(0) != 0 {
                 preserve_rotation = true;
             }
@@ -918,6 +922,17 @@ fn assemble_ffmpeg_argv(
                 args.push(recipe.effort.clone());
                 args.push(format!("-crf:{v_spec}"));
                 args.push(recipe.crf.to_string());
+                if let Some(ref tune) = recipe.tune {
+                    let t = tune.trim();
+                    if !t.is_empty() {
+                        args.push(format!("-tune:{v_spec}"));
+                        args.push(t.to_string());
+                    }
+                }
+                if let Some(aq) = recipe.aq_mode {
+                    args.push("-x265-params".to_string());
+                    args.push(format!("aq-mode={aq}"));
+                }
                 if recipe.container == ContainerFormat::Mp4 {
                     args.push(format!("-tag:{v_spec}"));
                     args.push("hvc1".to_string());

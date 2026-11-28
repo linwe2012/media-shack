@@ -3,8 +3,8 @@ use crate::db::Database;
 use crate::models::*;
 use crate::planner::{build_track_plan, probe_file, resolve_destination_path};
 use crate::platform::{
-    atomic_publish_no_replace, capture_file_identity, disk_space_for_path, PowerAssertion,
-    PublishOutcome,
+    atomic_publish_no_replace, capture_file_identity, capture_file_identity_with_blake3,
+    disk_space_for_path, PowerAssertion, PublishOutcome,
 };
 use crate::preview::PreviewManager;
 use crate::runner::{run_ffmpeg_attempt, EncodeRunOutcome, PreviewPacketBuffer, RunEncodeParams};
@@ -147,7 +147,7 @@ impl Scheduler {
                                 if let Ok(Some(mut job)) = self.db.get_job(&intent.job_id) {
                                     job.status = JobStatus::Completed;
                                     job.output_bytes = Some(intent.staged_size);
-                                    job.output_fingerprint = capture_file_identity(final_p).ok();
+                                    job.output_fingerprint = capture_file_identity_with_blake3(final_p).ok();
                                     job.completed_at = Some(Utc::now().timestamp());
                                     job.updated_at = Utc::now().timestamp();
                                     let _ = self.db.upsert_job(&job);
@@ -193,18 +193,20 @@ impl Scheduler {
             }
         }
 
-        // 2. Reconcile stale active attempts & remove orphaned staging files
+        // 2. Reconcile stale active attempts & remove ONLY tracked orphaned staging files
         for (attempt_id, job_id, staging_dir, partial_path) in self.db.list_stale_attempts()? {
             let _ = self
                 .db
                 .record_attempt_finish(&attempt_id, None, "interrupted");
             let p = Path::new(&partial_path);
-            if p.exists() && partial_path.contains(".ffq-staging") {
+            if p.is_file() && partial_path.contains(".ffq-staging") {
                 let _ = std::fs::remove_file(p);
             }
             let sd = Path::new(&staging_dir);
-            if sd.exists() && staging_dir.contains(".ffq-staging") {
-                let _ = std::fs::remove_dir_all(sd);
+            // Non-recursive remove_dir only deletes the staging folder when empty,
+            // preserving any unexpected user files inside it for inspection.
+            if sd.is_dir() && staging_dir.contains(".ffq-staging") {
+                let _ = std::fs::remove_dir(sd);
             }
             if let Ok(Some(mut job)) = self.db.get_job(&job_id) {
                 if matches!(
@@ -243,8 +245,9 @@ impl Scheduler {
             }
         }
 
-        // 5. Reconcile cleanup intents
+        // 5. Reconcile cleanup intents & organizer operations
         reconcile_cleanup_intents_on_launch(&self.db)?;
+        crate::organize::reconcile_organizer_on_launch(&self.db)?;
         Ok(())
     }
 
@@ -902,7 +905,7 @@ impl Scheduler {
                 let _ = std::fs::remove_dir_all(staging_dir);
                 job.status = JobStatus::Completed;
                 job.output_bytes = Some(report.output_bytes);
-                job.output_fingerprint = capture_file_identity(&final_dest).ok();
+                job.output_fingerprint = capture_file_identity_with_blake3(&final_dest).ok();
                 job.full_decode_verified = report.full_decode_verified;
                 job.status_reason = Some(report.summary);
                 job.diagnostics = Some(diagnostics.to_string());
@@ -1252,12 +1255,26 @@ impl Scheduler {
         let scheduler_busy_reason = self.busy_reason.lock().ok().and_then(|b| b.clone());
 
         let repair_sessions = self.db.list_repair_sessions()?;
+        let tab_meta: HashMap<String, TabWorkspaceMeta> = self.db.get_workspace_json("ws_tab_meta")?;
+        let job_decisions: HashMap<String, String> = self.db.get_workspace_json("ws_job_decisions")?;
+        let protected_sources: Vec<String> = self.db.get_workspace_json("ws_protected_sources")?;
+        let tab_dedupe_groups: HashMap<String, Vec<TabDedupeGroup>> =
+            self.db.get_workspace_json("ws_tab_dedupe_groups")?;
+        let tab_repair_items: HashMap<String, TabRepairItemState> =
+            self.db.get_workspace_json("ws_tab_repair_items")?;
+        let hash_cache_stats = self.db.get_hash_cache_stats().unwrap_or_default();
 
         Ok(AppSnapshot {
             queues,
             active_queue_id,
             jobs,
             repair_sessions,
+            tab_meta,
+            job_decisions,
+            protected_sources,
+            tab_dedupe_groups,
+            tab_repair_items,
+            hash_cache_stats,
             profiles,
             named_presets,
             tools,

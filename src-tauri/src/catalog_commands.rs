@@ -38,7 +38,7 @@ use crate::organize::{
     FileOpPreviewResult, OperationHistoryRecord, RenameOptions, TagRecord,
 };
 use crate::planner::{build_track_plan, probe_file, resolve_destination_path};
-use crate::platform::{capture_file_identity, disk_space_for_path, move_to_recoverable_trash_verified};
+use crate::platform::{capture_file_identity, disk_space_for_path};
 use crate::repair::{diagnose_media_file, repair_damaged_video, RepairDiagnosis, RepairResult};
 use crate::tasks::{ResourceBudgets, TaskRecord};
 use chrono::Utc;
@@ -320,10 +320,19 @@ pub fn organize_preview_move_copy(
 #[tauri::command]
 pub fn organize_execute_batch(
     state: State<'_, AppState>,
-    items: Vec<FileOpPreviewItem>,
+    items: Option<Vec<FileOpPreviewItem>>,
     summary: String,
+    plan_id: Option<String>,
 ) -> Result<BatchOpExecResult, String> {
-    execute_batch_file_operations(&state.scheduler.db, &items, &summary)
+    let _guard = state.scheduler.cleanup_lock.lock();
+    let res = if let Some(pid) = plan_id.filter(|s| !s.trim().is_empty()) {
+        crate::organize::execute_batch_plan_by_id(&state.scheduler.db, &pid, &summary)?
+    } else {
+        let list = items.unwrap_or_default();
+        execute_batch_file_operations(&state.scheduler.db, &list, &summary)?
+    };
+    state.scheduler.emit_snapshot_changed();
+    Ok(res)
 }
 
 #[tauri::command]
@@ -333,7 +342,10 @@ pub fn organize_list_history(state: State<'_, AppState>) -> Result<Vec<Operation
 
 #[tauri::command]
 pub fn organize_undo(state: State<'_, AppState>, operation_id: String) -> Result<BatchOpExecResult, String> {
-    undo_operation(&state.scheduler.db, &operation_id)
+    let _guard = state.scheduler.cleanup_lock.lock();
+    let res = undo_operation(&state.scheduler.db, &operation_id)?;
+    state.scheduler.emit_snapshot_changed();
+    Ok(res)
 }
 
 // ============================================================================
@@ -424,45 +436,34 @@ pub fn duplicates_trash_copies(
     state: State<'_, AppState>,
     file_keys: Vec<String>,
 ) -> Result<Vec<(String, Result<String, String>)>, String> {
-    let entries = crate::catalog::load_entries_by_file_keys(&state.scheduler.db, &file_keys)?;
-    let map: HashMap<String, _> = entries
-        .into_iter()
-        .map(|e| (e.file_key.clone(), e))
-        .collect();
-    let mut results = Vec::new();
-    for fk in file_keys {
-        let Some(entry) = map.get(&fk) else {
-            results.push((fk, Err("Catalog entry not found".to_string())));
-            continue;
-        };
-        let p = Path::new(&entry.path);
-        match capture_file_identity(p) {
-            Ok(fp) if fp.file_id == entry.os_file_id && fp.link_count <= 1 => {
-                let res = move_to_recoverable_trash_verified(p, &fp);
-                if res.is_ok() {
-                    let conn = state.scheduler.db.lock_conn()?;
-                    let _ = conn.execute(
-                        "UPDATE file_locations SET is_online = 0, is_current = 0 WHERE file_key = ?1",
-                        rusqlite::params![fk],
-                    );
-                    let _ = conn.execute(
-                        "UPDATE media_files SET is_online = 0 WHERE file_key = ?1",
-                        rusqlite::params![fk],
-                    );
-                    let _ = conn.execute(
-                        "DELETE FROM similarity_edges WHERE file_key_a = ?1 OR file_key_b = ?1",
-                        rusqlite::params![fk],
-                    );
-                }
-                results.push((fk, res.map(|_| "Moved to Trash".to_string())));
-            }
-            Ok(fp) if fp.link_count > 1 => {
-                results.push((fk, Err("File has multiple hard links; skipped for safety".to_string())));
-            }
-            _ => results.push((fk, Err("Identity verification failed before Trash".to_string()))),
+    let _guard = state.scheduler.cleanup_lock.lock();
+    let plan = crate::cleanup::preview_guarded_trash(
+        &state.scheduler.db,
+        None,
+        &file_keys,
+        crate::models::RemovalReason::LibraryDuplicateCopy,
+    )?;
+    if !plan.trash_supported && plan.eligible_count == 0 {
+        if let Some(err) = plan.trash_support_error {
+            return Err(err);
         }
     }
-    Ok(results)
+    let res = crate::cleanup::execute_guarded_trash_plan(&state.scheduler.db, &plan.plan_id)?;
+    state.scheduler.emit_snapshot_changed();
+    Ok(res
+        .outcomes
+        .into_iter()
+        .map(|o| {
+            if o.moved {
+                (o.item_id, Ok("Moved to Trash".to_string()))
+            } else {
+                (
+                    o.item_id,
+                    Err(o.error.unwrap_or_else(|| "Trash failed".to_string())),
+                )
+            }
+        })
+        .collect())
 }
 
 // ============================================================================

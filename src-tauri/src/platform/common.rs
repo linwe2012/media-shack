@@ -58,6 +58,37 @@ pub fn compute_head_tail_hash(file: &mut File, size: u64) -> Result<String, Stri
     Ok(format!("{size:016x}:{hash:016x}"))
 }
 
+pub fn compute_full_blake3(file: &mut File) -> Result<String, String> {
+    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = vec![0u8; 256 * 1024];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+pub fn capture_file_identity_with_blake3_impl(path: &Path) -> Result<SourceFingerprint, String> {
+    let mut fp = capture_file_identity_impl(path)?;
+    let mut flags_open = std::fs::OpenOptions::new();
+    flags_open.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        flags_open.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = flags_open
+        .open(path)
+        .map_err(|e| format!("Failed opening file for BLAKE3 hash: {e}"))?;
+    let b3 = compute_full_blake3(&mut file)?;
+    fp.full_blake3 = Some(b3);
+    Ok(fp)
+}
+
 #[cfg(unix)]
 pub fn capture_file_identity_impl(path: &Path) -> Result<SourceFingerprint, String> {
     use std::os::unix::fs::MetadataExt;
@@ -118,6 +149,7 @@ pub fn capture_file_identity_impl(path: &Path) -> Result<SourceFingerprint, Stri
         mtime_ns,
         head_hash,
         link_count: meta.nlink(),
+        full_blake3: None,
     })
 }
 
@@ -169,5 +201,6 @@ pub fn capture_file_identity_impl(path: &Path) -> Result<SourceFingerprint, Stri
         mtime_ns,
         head_hash,
         link_count: info.nNumberOfLinks as u64,
+        full_blake3: None,
     })
 }
