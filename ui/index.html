@@ -597,13 +597,76 @@
               </div>
 
               <div class="setup-card">
-                <span class="setup-kicker">Storage &amp; Safety</span>
-                <div class="setup-row-between">
-                  <div class="min-w-0" style="flex:1;">
-                    <div class="field-label">Destination</div>
-                    <div id="lbl-dest-root" class="truncate" style="font-size:12px;font-weight:500;">Same folder as source</div>
+                <span class="setup-kicker">Output &amp; Storage</span>
+
+                <div class="field-block">
+                  <span class="field-label">Output Mode</span>
+                  <div class="seg-grid-2" id="seg-output-mode">
+                    <button type="button" data-out-mode="template_folder" class="seg-btn active">Save to Folder</button>
+                    <button type="button" data-out-mode="replace_original" class="seg-btn">Replace Original</button>
                   </div>
-                  <button id="btn-choose-dest" class="btn btn-secondary btn-sm" type="button">Change</button>
+                </div>
+
+                <div id="wrap-out-folder" class="sidebar-panel-stack">
+                  <div class="setup-row-between">
+                    <div class="min-w-0" style="flex:1;">
+                      <div class="inline-row" style="gap:6px;">
+                        <span class="field-label">Base Folder</span>
+                        <button id="btn-reset-dest-root" class="btn-link hidden" type="button" style="font-size:10.5px;">Reset</button>
+                      </div>
+                      <div id="lbl-dest-root" class="truncate" style="font-size:12px;font-weight:500;">Same folder as source</div>
+                    </div>
+                    <button id="btn-choose-dest" class="btn btn-secondary btn-sm" type="button">Change</button>
+                  </div>
+
+                  <div class="field-block">
+                    <div class="setup-row-between">
+                      <span class="field-label" style="display:inline-flex;align-items:center;">
+                        <label for="inp-out-template" style="cursor:pointer;">Path &amp; Name Template</label>
+                        <button type="button" class="help-q-btn" data-help-toggle="help-tmpl-box" title="Available template variables">?</button>
+                      </span>
+                    </div>
+                    <input id="inp-out-template" type="text" class="full-input mono" style="font-size:11px;" placeholder="Default: {stem}.{tag}.{ext}" />
+                    <div class="out-preset-chips">
+                      <button type="button" class="out-chip-btn" data-out-tmpl="" title="Default naming in Base Folder">Default</button>
+                      <button type="button" class="out-chip-btn" data-out-tmpl="$sourceFolder/encoded/$sourceFileName" title="Put in encoded subfolder">$sourceFolder/encoded</button>
+                      <button type="button" class="out-chip-btn" data-out-tmpl="$sourceFilePath/../${sourceFileNameStem}.encoded.${ext}" title="Adjacent .encoded file">../*.encoded</button>
+                    </div>
+                    <div id="help-tmpl-box" class="help-tip-box hidden">
+                      <strong>Variables (<code>$var</code> or <code>${var}</code>):</strong><br>
+                      <code>$sourceFolder</code> · <code>$sourceFilePath</code> · <code>$sourceFileName</code><br>
+                      <code>$sourceFileNameStem</code> · <code>$sourceExt</code> · <code>$ext</code> · <code>$tag</code> · <code>$codec</code> · <code>$crf</code> · <code>$destRoot</code> · <code>$relDir</code>
+                    </div>
+                  </div>
+
+                  <div class="field-block">
+                    <span class="field-label">Regex Rename on Filename Stem (Optional)</span>
+                    <div class="out-regex-row">
+                      <input id="inp-out-regex-find" type="text" class="full-input mono" style="font-size:11px;" placeholder="Find regex (e.g. _RAW$)" />
+                      <input id="inp-out-regex-replace" type="text" class="full-input mono" style="font-size:11px;" placeholder="Replace ($1)" />
+                    </div>
+                  </div>
+                </div>
+
+                <div id="wrap-out-replace" class="sidebar-panel-stack hidden">
+                  <div class="field-block">
+                    <label class="field-label" for="sel-replace-behavior">Original File Handling</label>
+                    <select id="sel-replace-behavior" class="full-input">
+                      <option value="keep_for_comparison">Compare before deleting original (safest)</option>
+                      <option value="auto_delete_original">Replace &amp; remove original after verify</option>
+                    </select>
+                  </div>
+                  <div class="muted" style="font-size:11px;line-height:1.4;">
+                    Uses fault-tolerant staged replacement: verifies new output first, backs up original before swap, and preserves staged output if anything fails.
+                  </div>
+                </div>
+
+                <div id="out-preflight-box" class="out-preflight-box">
+                  <div class="setup-row-between" style="gap:6px;">
+                    <span id="lbl-preflight-status" class="badge" style="font-size:10px;">Preflight ready</span>
+                    <button id="btn-preflight-preview" class="btn-link" type="button" style="font-size:11px;">Preview paths…</button>
+                  </div>
+                  <div id="lbl-out-preview-sample" class="mono muted truncate" style="font-size:10.5px;margin-top:4px;">—</div>
                 </div>
 
                 <div class="field-block">
@@ -616,7 +679,7 @@
 
                 <div class="hairline-h"></div>
 
-                <div class="field-block">
+                <div id="wrap-cleanup-policy" class="field-block">
                   <label class="field-label" for="sel-cleanup-policy">Original Files Policy</label>
                   <select id="sel-cleanup-policy" class="full-input">
                     <option value="keep_originals">Keep originals (default)</option>

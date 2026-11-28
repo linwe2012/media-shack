@@ -1,6 +1,6 @@
 [package]
 name = "media-shack"
-version = "0.3.2"
+version = "0.3.3"
 description = "Media Shack — overnight local video archiving and remuxing desktop app"
 authors = ["Media Shack Contributors"]
 edition = "2021"

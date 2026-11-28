@@ -37,7 +37,7 @@ use crate::organize::{
     suggest_tags, undo_operation, BatchOpExecResult, CollectionRecord, FileOpPreviewItem,
     FileOpPreviewResult, OperationHistoryRecord, RenameOptions, TagRecord,
 };
-use crate::planner::{build_track_plan, probe_file, resolve_destination_path};
+use crate::planner::{build_track_plan, probe_file, resolve_destination_path_with_config};
 use crate::platform::{capture_file_identity, disk_space_for_path};
 use crate::repair::{diagnose_media_file, repair_damaged_video, RepairDiagnosis, RepairResult};
 use crate::tasks::{ResourceBudgets, TaskRecord};
@@ -727,7 +727,14 @@ pub fn transcode_enqueue_from_catalog(
             .map(PathBuf::from)
             .unwrap_or_else(|| src_p.parent().unwrap_or_else(|| Path::new(".")).to_path_buf());
         let rel = PathBuf::from(&entry.filename);
-        let dest = resolve_destination_path(src_p, &rel, &dest_root, &q.recipe, &mut reserved);
+        let dest = resolve_destination_path_with_config(
+            src_p,
+            &rel,
+            &dest_root,
+            &q.recipe,
+            &q.output_config,
+            &mut reserved,
+        )?;
         let dest_vol = dest
             .parent()
             .and_then(|p| disk_space_for_path(p).ok())
@@ -760,6 +767,10 @@ pub fn transcode_enqueue_from_catalog(
             source_fingerprint: capture_file_identity(src_p).ok(),
             destination_path: dest.to_string_lossy().to_string(),
             dest_volume_id: dest_vol,
+            output_mode: q.output_config.mode,
+            replace_behavior: q.output_config.replace_behavior,
+            staged_path: None,
+            staged_bytes: None,
             recipe: q.recipe.clone(),
             compat_overrides: CompatOverrides::default(),
             status,

@@ -6,10 +6,11 @@ use media_shack_lib::db::{CleanupIntentRecord, Database};
 use media_shack_lib::models::*;
 use media_shack_lib::planner::{
     build_track_plan, derive_destination_root_from_job, materialize_argv, probe_file,
-    resolve_destination_path, sanitize_path_segment,
+    resolve_destination_path, resolve_destination_path_with_config, sanitize_path_segment,
 };
 use media_shack_lib::platform::{
-    atomic_publish_no_replace, capture_file_identity, disk_space_for_path, PublishOutcome,
+    atomic_publish_no_replace, capture_file_identity, disk_space_for_path,
+    fault_tolerant_replace_file, publish_staged_file, PublishOutcome,
 };
 use media_shack_lib::preview::PreviewManager;
 use media_shack_lib::runner::{run_ffmpeg_attempt, EncodeRunOutcome, PreviewPacketBuffer, RunEncodeParams};
@@ -284,6 +285,59 @@ fn unit_planner_reserved_names_and_stem_preservation() {
         derive_destination_root_from_job(&out1, Path::new("Trip/day1.walk.mov")),
         PathBuf::from("/dest")
     );
+
+    // OutputConfig template & regex checks: $sourceFolder/encoded/$sourceFileName, $sourceFilePath/../..., & regex
+    let cfg_encoded_sub = OutputConfig {
+        mode: OutputMode::TemplateFolder,
+        replace_behavior: ReplaceBehavior::AutoDeleteOriginal,
+        path_template: Some("$sourceFolder/encoded/$sourceFileName".to_string()),
+        regex_find: Some("_RAW$".to_string()),
+        regex_replace: Some("".to_string()),
+    };
+    let out_tmpl = resolve_destination_path_with_config(
+        Path::new("/src/Trip/clip_RAW.mov"),
+        Path::new("Trip/clip_RAW.mov"),
+        Path::new("/dest"),
+        &recipe,
+        &cfg_encoded_sub,
+        &mut reserved,
+    )
+    .unwrap();
+    assert_eq!(out_tmpl, PathBuf::from("/src/Trip/encoded/clip.mkv"));
+
+    let cfg_rel_up = OutputConfig {
+        mode: OutputMode::TemplateFolder,
+        replace_behavior: ReplaceBehavior::AutoDeleteOriginal,
+        path_template: Some("$sourceFilePath/../${sourceFileNameStem}.encoded.mkv".to_string()),
+        regex_find: None,
+        regex_replace: None,
+    };
+    let out_rel = resolve_destination_path_with_config(
+        Path::new("/src/Trip/clip.mov"),
+        Path::new("Trip/clip.mov"),
+        Path::new("/dest"),
+        &recipe,
+        &cfg_rel_up,
+        &mut reserved,
+    )
+    .unwrap();
+    assert_eq!(out_rel, PathBuf::from("/src/Trip/clip.encoded.mkv"));
+
+    // Fault-tolerant replace & publish fallback check
+    let td = TempDir::new().unwrap();
+    let src_vid = td.path().join("orig.mp4");
+    let stg_vid = td.path().join("staged.mp4");
+    std::fs::write(&src_vid, b"old-video-bytes").unwrap();
+    std::fs::write(&stg_vid, b"new-encoded-bytes").unwrap();
+    let bak = fault_tolerant_replace_file(&stg_vid, &src_vid, &src_vid, 17, None, false, true).unwrap();
+    assert_eq!(std::fs::read(&src_vid).unwrap(), b"new-encoded-bytes");
+    assert_eq!(std::fs::read(bak.unwrap()).unwrap(), b"old-video-bytes");
+
+    let stg2 = td.path().join("staged2.mkv");
+    let out2_ft = td.path().join("sub/final2.mkv");
+    std::fs::write(&stg2, b"abc123").unwrap();
+    assert_eq!(publish_staged_file(&stg2, &out2_ft, true), PublishOutcome::Published);
+    assert_eq!(std::fs::read(&out2_ft).unwrap(), b"abc123");
 }
 
 #[test]
@@ -424,6 +478,10 @@ fn integration_sample_preview_and_live_preview() {
         source_fingerprint: None,
         destination_path: app_data.path().join("out.mkv").to_string_lossy().to_string(),
         dest_volume_id: None,
+        output_mode: OutputMode::default(),
+        replace_behavior: ReplaceBehavior::default(),
+        staged_path: None,
+        staged_bytes: None,
         recipe: recipe.clone(),
         compat_overrides: CompatOverrides::default(),
         status: JobStatus::Ready,
@@ -517,6 +575,7 @@ fn integration_multi_queue_profile_deletion_and_recovery_transitions() {
         priority: ProcessPriority::Background,
         recursive_import: true,
         destination_root: Some(app_dir.path().join("dest").to_string_lossy().to_string()),
+        output_config: OutputConfig::default(),
         keep_awake: true,
         error_policy: ErrorPolicy::Continue,
         min_savings_enabled: false,
@@ -545,6 +604,7 @@ fn integration_multi_queue_profile_deletion_and_recovery_transitions() {
         priority: profile.priority,
         recursive_import: profile.recursive_import,
         destination_root: profile.destination_root.clone(),
+        output_config: OutputConfig::default(),
         keep_awake: true,
         error_policy: ErrorPolicy::Continue,
         min_savings_enabled: false,
@@ -593,6 +653,10 @@ fn integration_multi_queue_profile_deletion_and_recovery_transitions() {
         source_fingerprint: None,
         destination_path: final_file.to_string_lossy().to_string(),
         dest_volume_id: None,
+        output_mode: OutputMode::default(),
+        replace_behavior: ReplaceBehavior::default(),
+        staged_path: None,
+        staged_bytes: None,
         recipe: EncodeRecipe::archive_balanced_default(),
         compat_overrides: CompatOverrides::default(),
         status: JobStatus::Publishing,
@@ -715,6 +779,10 @@ fn integration_source_cleanup_contract_and_safety_cases() {
         source_fingerprint: Some(src_fp.clone()),
         destination_path: out_file.to_string_lossy().to_string(),
         dest_volume_id: None,
+        output_mode: OutputMode::default(),
+        replace_behavior: ReplaceBehavior::default(),
+        staged_path: None,
+        staged_bytes: None,
         recipe: recipe.clone(),
         compat_overrides: CompatOverrides::default(),
         status: JobStatus::Completed,
@@ -874,6 +942,10 @@ fn integration_min_savings_reserve_crossing_and_failure_then_success() {
         source_fingerprint: Some(fp.clone()),
         destination_path: impossible_dest.to_string_lossy().to_string(),
         dest_volume_id: Some(disk_space_for_path(&dest_dir).unwrap().volume_id),
+        output_mode: OutputMode::default(),
+        replace_behavior: ReplaceBehavior::default(),
+        staged_path: None,
+        staged_bytes: None,
         recipe: recipe.clone(),
         compat_overrides: CompatOverrides::default(),
         status: JobStatus::Ready,

@@ -5148,3 +5148,65 @@ body.os-windows .window-controls-slot:empty {
   font-weight: 600;
   white-space: nowrap;
 }
+
+.out-preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.out-chip-btn {
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-family: var(--mono, monospace);
+  cursor: pointer;
+}
+
+.out-chip-btn:hover,
+.out-chip-btn.active {
+  color: var(--text);
+  border-color: var(--accent-solid, #3b82f6);
+  background: color-mix(in srgb, var(--accent-solid, #3b82f6) 12%, transparent);
+}
+
+.out-regex-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.out-preflight-box {
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.out-preflight-box.has-err {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.out-preflight-box.has-warn {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.07);
+}
+
+.resolve-card {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+
+.resolve-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+}

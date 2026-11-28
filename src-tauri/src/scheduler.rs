@@ -1,10 +1,14 @@
 use crate::cleanup::{execute_cleanup_for_job, reconcile_cleanup_intents_on_launch};
 use crate::db::Database;
 use crate::models::*;
-use crate::planner::{build_track_plan, probe_file, resolve_destination_path};
+use crate::planner::{
+    apply_output_regex_to_stem, build_track_plan, probe_file,
+    resolve_destination_path_with_config,
+};
 use crate::platform::{
-    atomic_publish_no_replace, capture_file_identity, capture_file_identity_with_blake3,
-    disk_space_for_path, PowerAssertion, PublishOutcome,
+    capture_file_identity, capture_file_identity_with_blake3, destination_capabilities,
+    disk_space_for_path, fault_tolerant_replace_file, publish_staged_file, PowerAssertion,
+    PublishOutcome,
 };
 use crate::preview::PreviewManager;
 use crate::runner::{run_ffmpeg_attempt, EncodeRunOutcome, PreviewPacketBuffer, RunEncodeParams};
@@ -139,7 +143,22 @@ impl Scheduler {
             if !handled && staged_p.exists() {
                 if let Ok(fp) = capture_file_identity(staged_p) {
                     if fp.file_id == intent.staged_file_id && fp.size_bytes == intent.staged_size {
-                        match atomic_publish_no_replace(staged_p, final_p) {
+                        if intent.state == "awaiting_confirmation" {
+                            if let Ok(Some(mut job)) = self.db.get_job(&intent.job_id) {
+                                job.status = JobStatus::NeedsAttention;
+                                job.output_bytes = Some(intent.staged_size);
+                                job.error_stage = Some("confirm_replace".to_string());
+                                job.error_message = Some(
+                                    "Encoded & verified before restart. Compare and confirm how to finalize."
+                                        .to_string(),
+                                );
+                                job.updated_at = Utc::now().timestamp();
+                                let _ = self.db.upsert_job(&job);
+                            }
+                            handled = true;
+                            continue;
+                        }
+                        match publish_staged_file(staged_p, final_p, true) {
                             PublishOutcome::Published => {
                                 let _ = self.db.update_publish_intent_state(
                                     &intent.intent_id,
@@ -499,6 +518,43 @@ impl Scheduler {
             }
         }
 
+        // Check destination regex, aliasing, writability, and volume identity BEFORE encoding
+        if let Err(e) = apply_output_regex_to_stem("check", &queue.output_config) {
+            job.status = JobStatus::NeedsAttention;
+            job.error_stage = Some("preflight".to_string());
+            job.error_message = Some(e);
+            job.updated_at = Utc::now().timestamp();
+            let _ = self.db.upsert_job(&job);
+            self.emit_snapshot_changed();
+            return;
+        }
+        if job.output_mode == OutputMode::TemplateFolder && dest_path == src_path {
+            job.status = JobStatus::NeedsAttention;
+            job.error_stage = Some("preflight".to_string());
+            job.error_message = Some(
+                "Destination path matches source path. Switch to Replace Original mode or adjust output template."
+                    .to_string(),
+            );
+            job.updated_at = Utc::now().timestamp();
+            let _ = self.db.upsert_job(&job);
+            self.emit_snapshot_changed();
+            return;
+        }
+        if let Ok(caps) = destination_capabilities(dest_parent) {
+            if caps.is_read_only || !caps.is_writable {
+                job.status = JobStatus::NeedsAttention;
+                job.error_stage = Some("preflight".to_string());
+                job.error_message = Some(format!(
+                    "Destination filesystem ({}, {}) is read-only or not writable.",
+                    caps.fs_type, caps.mount_point
+                ));
+                job.updated_at = Utc::now().timestamp();
+                let _ = self.db.upsert_job(&job);
+                self.emit_snapshot_changed();
+                return;
+            }
+        }
+
         // Create destination dir only if volume identity matches!
         // Check nearest existing ancestor's volume_id against recorded dest_volume_id
         let vol_stats = match disk_space_for_path(dest_parent) {
@@ -577,11 +633,26 @@ impl Scheduler {
 
         // 2. Record attempt before spawning FFmpeg
         let attempt_id = Uuid::new_v4().to_string();
-        let dest_root_for_staging = queue
-            .destination_root
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| dest_parent.to_path_buf());
+        let has_custom_dest = job.output_mode == OutputMode::ReplaceOriginal
+            || queue
+                .output_config
+                .path_template
+                .as_deref()
+                .map(|t| !t.trim().is_empty())
+                .unwrap_or(false);
+        let dest_root_for_staging = if has_custom_dest {
+            dest_parent
+                .ancestors()
+                .find(|p| !p.as_os_str().is_empty() && p.is_dir())
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| dest_parent.to_path_buf())
+        } else {
+            queue
+                .destination_root
+                .as_deref()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| dest_parent.to_path_buf())
+        };
         let staging_dir = dest_root_for_staging.join(".ffq-staging").join(&attempt_id);
         let partial_path = staging_dir.join(format!(
             "part.{}.{}.ffq-part",
@@ -857,44 +928,7 @@ impl Scheduler {
             }
         }
 
-        // Final free-space & volume identity recheck before publication
-        let dest_path = PathBuf::from(&job.destination_path);
-        let dest_parent = dest_path.parent().unwrap_or_else(|| Path::new("."));
-        if let Ok(vs) = disk_space_for_path(dest_parent) {
-            if vs.volume_id != dest_volume_id {
-                let reason = "Destination drive changed before publication; staged output held for review.".to_string();
-                if let Ok(mut bv) = self.blocked_volumes.lock() {
-                    bv.insert(dest_volume_id.to_string(), reason.clone());
-                }
-                job.status = JobStatus::NeedsAttention;
-                job.error_stage = Some("publishing".to_string());
-                job.error_message = Some(reason);
-                job.updated_at = Utc::now().timestamp();
-                let _ = self.db.upsert_job(job);
-                return;
-            }
-            if reserve_bytes > 0 && vs.free_bytes < reserve_bytes {
-                let reason = "Destination free space below reserve before publication.".to_string();
-                if let Ok(mut bv) = self.blocked_volumes.lock() {
-                    bv.insert(dest_volume_id.to_string(), reason.clone());
-                }
-                let _ = std::fs::remove_file(partial_path);
-                let _ = std::fs::remove_dir_all(staging_dir);
-                job.status = JobStatus::NeedsAttention;
-                job.error_stage = Some("disk_space".to_string());
-                job.error_message = Some(reason);
-                job.updated_at = Utc::now().timestamp();
-                let _ = self.db.upsert_job(job);
-                return;
-            }
-        }
-
-        // Durable publication with intent persisted first
-        job.status = JobStatus::Publishing;
-        job.updated_at = Utc::now().timestamp();
-        let _ = self.db.upsert_job(job);
-        self.emit_snapshot_changed();
-
+        // Persist staged output intent immediately after verification so staged file is always recoverable
         let staged_fp = match capture_file_identity(partial_path) {
             Ok(fp) => fp,
             Err(e) => {
@@ -904,7 +938,7 @@ impl Scheduler {
         };
 
         let intent_id = Uuid::new_v4().to_string();
-        let mut final_dest = dest_path;
+        let mut final_dest = PathBuf::from(&job.destination_path);
         let _ = self.db.save_publish_intent(
             &intent_id,
             &job.id,
@@ -916,7 +950,135 @@ impl Scheduler {
             &final_dest.to_string_lossy(),
         );
 
-        let mut publish_res = atomic_publish_no_replace(partial_path, &final_dest);
+        // Final free-space & volume identity recheck before publication (preserve staged file on trouble!)
+        let dest_parent = final_dest.parent().unwrap_or_else(|| Path::new("."));
+        if let Ok(vs) = disk_space_for_path(dest_parent) {
+            if vs.volume_id != dest_volume_id {
+                let reason = "Destination drive changed before publication; staged output preserved for review.".to_string();
+                if let Ok(mut bv) = self.blocked_volumes.lock() {
+                    bv.insert(dest_volume_id.to_string(), reason.clone());
+                }
+                let _ = self.db.update_publish_intent_state(&intent_id, "needs_attention", None);
+                job.status = JobStatus::NeedsAttention;
+                job.output_bytes = Some(report.output_bytes);
+                job.error_stage = Some("publishing".to_string());
+                job.error_message = Some(reason);
+                job.diagnostics = Some(diagnostics.to_string());
+                job.updated_at = Utc::now().timestamp();
+                let _ = self.db.upsert_job(job);
+                return;
+            }
+            if reserve_bytes > 0 && vs.free_bytes < reserve_bytes {
+                let reason = "Destination free space below reserve before publication; staged output preserved.".to_string();
+                if let Ok(mut bv) = self.blocked_volumes.lock() {
+                    bv.insert(dest_volume_id.to_string(), reason.clone());
+                }
+                let _ = self.db.update_publish_intent_state(&intent_id, "needs_attention", None);
+                job.status = JobStatus::NeedsAttention;
+                job.output_bytes = Some(report.output_bytes);
+                job.error_stage = Some("publishing".to_string());
+                job.error_message = Some(reason);
+                job.diagnostics = Some(diagnostics.to_string());
+                job.updated_at = Utc::now().timestamp();
+                let _ = self.db.upsert_job(job);
+                return;
+            }
+        }
+
+        // Durable publication
+        job.status = JobStatus::Publishing;
+        job.updated_at = Utc::now().timestamp();
+        let _ = self.db.upsert_job(job);
+        self.emit_snapshot_changed();
+
+        if job.output_mode == OutputMode::ReplaceOriginal {
+            let src_path = PathBuf::from(&job.source_path);
+            if job.replace_behavior == ReplaceBehavior::KeepForComparison {
+                if final_dest != src_path && !final_dest.exists() {
+                    match publish_staged_file(partial_path, &final_dest, true) {
+                        PublishOutcome::Published => {
+                            let _ = self.db.update_publish_intent_state(&intent_id, "published", None);
+                            let _ = std::fs::remove_dir_all(staging_dir);
+                            job.status = JobStatus::NeedsAttention;
+                            job.output_bytes = Some(report.output_bytes);
+                            job.output_fingerprint = capture_file_identity_with_blake3(&final_dest).ok();
+                            job.full_decode_verified = report.full_decode_verified;
+                            job.error_stage = Some("confirm_replace".to_string());
+                            job.error_message = Some(
+                                "Encoded output saved alongside original. Compare quality before removing original."
+                                    .to_string(),
+                            );
+                            job.cleanup_outcome = CleanupOutcome::Pending;
+                            job.diagnostics = Some(diagnostics.to_string());
+                            job.updated_at = Utc::now().timestamp();
+                            let _ = self.db.upsert_job(job);
+                            return;
+                        }
+                        PublishOutcome::DestinationExists | PublishOutcome::Error(_) => {}
+                    }
+                }
+                let _ = self
+                    .db
+                    .update_publish_intent_state(&intent_id, "awaiting_confirmation", None);
+                job.status = JobStatus::NeedsAttention;
+                job.output_bytes = Some(report.output_bytes);
+                job.full_decode_verified = report.full_decode_verified;
+                job.error_stage = Some("confirm_replace".to_string());
+                job.error_message = Some(
+                    "Encoded & verified. Compare Original vs Encoded before replacing (staged file preserved)."
+                        .to_string(),
+                );
+                job.diagnostics = Some(diagnostics.to_string());
+                job.updated_at = Utc::now().timestamp();
+                let _ = self.db.upsert_job(job);
+                return;
+            }
+
+            let prefer_trash = matches!(destination_capabilities(&final_dest), Ok(c) if c.supports_trash);
+            match fault_tolerant_replace_file(
+                partial_path,
+                &src_path,
+                &final_dest,
+                report.output_bytes,
+                job.source_fingerprint.as_ref(),
+                prefer_trash,
+                false,
+            ) {
+                Ok(_) => {
+                    let _ = self
+                        .db
+                        .update_publish_intent_state(&intent_id, "published", None);
+                    let _ = std::fs::remove_dir_all(staging_dir);
+                    self.complete_published_job(
+                        job,
+                        Some(ffprobe_path),
+                        Some(ffmpeg_path),
+                        &final_dest,
+                        report.output_bytes,
+                        report.full_decode_verified,
+                        report.summary,
+                        diagnostics,
+                        true,
+                    );
+                }
+                Err(e) => {
+                    let _ = self
+                        .db
+                        .update_publish_intent_state(&intent_id, "failed", None);
+                    job.status = JobStatus::NeedsAttention;
+                    job.output_bytes = Some(report.output_bytes);
+                    job.full_decode_verified = report.full_decode_verified;
+                    job.error_stage = Some("publishing".to_string());
+                    job.error_message = Some(e);
+                    job.diagnostics = Some(diagnostics.to_string());
+                    job.updated_at = Utc::now().timestamp();
+                    let _ = self.db.upsert_job(job);
+                }
+            }
+            return;
+        }
+
+        let mut publish_res = publish_staged_file(partial_path, &final_dest, true);
         if publish_res == PublishOutcome::DestinationExists {
             let mut reserved: HashSet<String> = self
                 .db
@@ -930,20 +1092,23 @@ impl Scheduler {
                 .as_deref()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| final_dest.parent().unwrap_or(Path::new(".")).to_path_buf());
-            final_dest = resolve_destination_path(
+            if let Ok(resolved) = resolve_destination_path_with_config(
                 Path::new(&job.source_path),
                 Path::new(&job.source_rel_path),
                 &dest_root,
                 &job.recipe,
+                &queue.output_config,
                 &mut reserved,
-            );
-            job.destination_path = final_dest.to_string_lossy().to_string();
-            let _ = self.db.update_publish_intent_state(
-                &intent_id,
-                "pending",
-                Some(&job.destination_path),
-            );
-            publish_res = atomic_publish_no_replace(partial_path, &final_dest);
+            ) {
+                final_dest = resolved;
+                job.destination_path = final_dest.to_string_lossy().to_string();
+                let _ = self.db.update_publish_intent_state(
+                    &intent_id,
+                    "pending",
+                    Some(&job.destination_path),
+                );
+                publish_res = publish_staged_file(partial_path, &final_dest, true);
+            }
         }
 
         match publish_res {
@@ -952,56 +1117,31 @@ impl Scheduler {
                     .db
                     .update_publish_intent_state(&intent_id, "published", None);
                 let _ = std::fs::remove_dir_all(staging_dir);
-                job.status = JobStatus::Completed;
-                job.output_bytes = Some(report.output_bytes);
-                job.output_fingerprint = capture_file_identity_with_blake3(&final_dest).ok();
-                job.full_decode_verified = report.full_decode_verified;
-                job.status_reason = Some(report.summary);
-                job.diagnostics = Some(diagnostics.to_string());
-                job.cleanup_outcome = match job.cleanup_policy {
-                    CleanupPolicy::KeepOriginals => CleanupOutcome::Kept,
-                    CleanupPolicy::ReviewAfterCompletion => CleanupOutcome::Pending,
-                    CleanupPolicy::TrashAfterEachFile => CleanupOutcome::Pending,
-                };
-                job.completed_at = Some(Utc::now().timestamp());
-                job.updated_at = Utc::now().timestamp();
-                let _ = self.db.upsert_job(job);
-
-                // Register transcoded/remuxed output in unified media catalog & inherit tags
-                let rel_type = if job.recipe.family == PresetFamily::Remux {
-                    "remuxed_from"
-                } else {
-                    "transcoded_from"
-                };
-                let details = serde_json::json!({
-                    "job_id": job.id,
-                    "recipe": job.recipe,
-                    "input_bytes": job.input_bytes,
-                    "output_bytes": report.output_bytes,
-                });
-                let _ = crate::catalog::register_derived_file(
-                    &self.db,
-                    &job.source_path,
-                    &final_dest,
-                    rel_type,
-                    details,
-                    true,
+                self.complete_published_job(
+                    job,
                     Some(ffprobe_path),
+                    Some(ffmpeg_path),
+                    &final_dest,
+                    report.output_bytes,
+                    report.full_decode_verified,
+                    report.summary,
+                    diagnostics,
+                    false,
                 );
-
-                // Perform unattended Trash ONLY if authorized and eligible; encode stays Completed either way
-                if job.cleanup_policy == CleanupPolicy::TrashAfterEachFile {
-                    let _guard = self.cleanup_lock.lock();
-                    let _ = execute_cleanup_for_job(&self.db, Some(ffmpeg_path), &job.id, true);
-                }
             }
             PublishOutcome::DestinationExists => {
                 let _ = self
                     .db
                     .update_publish_intent_state(&intent_id, "failed", None);
                 job.status = JobStatus::NeedsAttention;
+                job.output_bytes = Some(report.output_bytes);
+                job.full_decode_verified = report.full_decode_verified;
                 job.error_stage = Some("publishing".to_string());
-                job.error_message = Some("Destination collision persisted during publication; staged output preserved.".to_string());
+                job.error_message = Some(
+                    "Destination file already exists; staged output preserved for your decision."
+                        .to_string(),
+                );
+                job.diagnostics = Some(diagnostics.to_string());
                 job.updated_at = Utc::now().timestamp();
                 let _ = self.db.upsert_job(job);
             }
@@ -1010,11 +1150,78 @@ impl Scheduler {
                     .db
                     .update_publish_intent_state(&intent_id, "failed", None);
                 job.status = JobStatus::NeedsAttention;
+                job.output_bytes = Some(report.output_bytes);
+                job.full_decode_verified = report.full_decode_verified;
                 job.error_stage = Some("publishing".to_string());
                 job.error_message = Some(e);
+                job.diagnostics = Some(diagnostics.to_string());
                 job.updated_at = Utc::now().timestamp();
                 let _ = self.db.upsert_job(job);
             }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn complete_published_job(
+        &self,
+        job: &mut JobRecord,
+        ffprobe_path: Option<&Path>,
+        ffmpeg_path: Option<&Path>,
+        final_dest: &Path,
+        output_bytes: u64,
+        full_decode_verified: bool,
+        summary: String,
+        diagnostics: &str,
+        replaced_original: bool,
+    ) {
+        job.status = JobStatus::Completed;
+        job.destination_path = final_dest.to_string_lossy().to_string();
+        job.output_bytes = Some(output_bytes);
+        job.output_fingerprint = capture_file_identity_with_blake3(final_dest).ok();
+        job.full_decode_verified = full_decode_verified;
+        job.error_stage = None;
+        job.error_message = None;
+        job.status_reason = Some(summary);
+        if !diagnostics.is_empty() {
+            job.diagnostics = Some(diagnostics.to_string());
+        }
+        job.cleanup_outcome = if replaced_original {
+            CleanupOutcome::Trashed
+        } else {
+            match job.cleanup_policy {
+                CleanupPolicy::KeepOriginals => CleanupOutcome::Kept,
+                CleanupPolicy::ReviewAfterCompletion => CleanupOutcome::Pending,
+                CleanupPolicy::TrashAfterEachFile => CleanupOutcome::Pending,
+            }
+        };
+        job.completed_at = Some(Utc::now().timestamp());
+        job.updated_at = Utc::now().timestamp();
+        let _ = self.db.upsert_job(job);
+
+        let rel_type = if job.recipe.family == PresetFamily::Remux {
+            "remuxed_from"
+        } else {
+            "transcoded_from"
+        };
+        let details = serde_json::json!({
+            "job_id": job.id,
+            "recipe": job.recipe,
+            "input_bytes": job.input_bytes,
+            "output_bytes": output_bytes,
+        });
+        let _ = crate::catalog::register_derived_file(
+            &self.db,
+            &job.source_path,
+            final_dest,
+            rel_type,
+            details,
+            true,
+            ffprobe_path,
+        );
+
+        if !replaced_original && job.cleanup_policy == CleanupPolicy::TrashAfterEachFile {
+            let _guard = self.cleanup_lock.lock();
+            let _ = execute_cleanup_for_job(&self.db, ffmpeg_path, &job.id, true);
         }
     }
 

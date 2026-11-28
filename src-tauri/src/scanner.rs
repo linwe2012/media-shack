@@ -1,7 +1,7 @@
 use crate::models::*;
 use crate::planner::{
     build_track_plan, derive_destination_root_from_job, is_blocked_input_path, is_video_hint_ext,
-    probe_file, resolve_destination_path,
+    probe_file, resolve_destination_path_with_config,
 };
 use crate::platform::capture_file_identity;
 use std::collections::HashSet;
@@ -251,16 +251,22 @@ where
                 queue.recipe.container.ext()
             ))
         };
-        let would_collide = initial_dest.exists()
-            || reserved_dests.contains(&initial_dest.to_string_lossy().to_ascii_lowercase());
-
-        let dest_path = resolve_destination_path(
+        let dest_path = resolve_destination_path_with_config(
             &abs_path,
             &rel_path,
             &dest_root_path,
             &queue.recipe,
+            &queue.output_config,
             &mut reserved_dests,
-        );
+        )
+        .unwrap_or_else(|_| initial_dest.clone());
+        let would_collide = if queue.output_config.mode == OutputMode::ReplaceOriginal {
+            false
+        } else {
+            dest_path != initial_dest
+                || initial_dest.exists()
+                || reserved_dests.contains(&initial_dest.to_string_lossy().to_ascii_lowercase())
+        };
 
         let (probe, plan, unreadable_error) = if defer_probe {
             (None, None, None)

@@ -306,6 +306,11 @@ pub fn run() {
             commands::check_for_updates,
             commands::download_and_install_update,
             commands::open_external_url,
+            commands::check_queue_preflight,
+            commands::get_staged_output_info,
+            commands::reveal_staged_file,
+            commands::reveal_folder,
+            commands::resolve_staged_publish,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Media Shack");

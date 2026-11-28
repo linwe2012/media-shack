@@ -3,10 +3,13 @@ use crate::cleanup::{
 };
 use crate::models::*;
 use crate::planner::{
-    build_track_plan, derive_destination_root_from_job, probe_file, resolve_destination_path,
+    apply_output_regex_to_stem, build_track_plan, derive_destination_root_from_job, probe_file,
+    resolve_destination_path_with_config,
 };
 use crate::platform::{
-    capture_file_identity, disk_space_for_path, open_in_default_player, reveal_in_file_manager,
+    capture_file_identity, destination_capabilities, disk_space_for_path,
+    fault_tolerant_replace_file, open_in_default_player, publish_staged_file,
+    reveal_in_file_manager, PublishOutcome,
 };
 use crate::scanner::scan_import_paths_with_progress;
 use crate::scheduler::{PendingSampleRequest, Scheduler};
@@ -84,6 +87,7 @@ pub fn create_queue_tab(
         priority: ProcessPriority::Background,
         recursive_import: true,
         destination_root: None,
+        output_config: OutputConfig::default(),
         keep_awake: true,
         error_policy: ErrorPolicy::Continue,
         min_savings_enabled: false,
@@ -396,6 +400,8 @@ pub struct QueueSettingsPatch {
     pub priority: ProcessPriority,
     pub recursive_import: bool,
     pub destination_root: Option<String>,
+    #[serde(default)]
+    pub output_config: OutputConfig,
     pub keep_awake: bool,
     pub error_policy: ErrorPolicy,
     pub min_savings_enabled: bool,
@@ -410,6 +416,7 @@ pub fn update_queue_settings(
     queue_id: String,
     patch: QueueSettingsPatch,
 ) -> Result<QueueTab, String> {
+    apply_output_regex_to_stem("check", &patch.output_config)?;
     let mut q = state
         .scheduler
         .db
@@ -424,6 +431,7 @@ pub fn update_queue_settings(
     q.priority = patch.priority;
     q.recursive_import = patch.recursive_import;
     q.destination_root = patch.destination_root;
+    q.output_config = patch.output_config;
     q.keep_awake = patch.keep_awake;
     q.error_policy = patch.error_policy;
     q.min_savings_enabled = patch.min_savings_enabled;
@@ -446,6 +454,7 @@ pub fn apply_queue_settings_to_waiting(
         .db
         .get_queue(&queue_id)?
         .ok_or_else(|| "Queue not found".to_string())?;
+    apply_output_regex_to_stem("check", &q.output_config)?;
     let ffprobe_opt = state
         .scheduler
         .tool_status
@@ -472,6 +481,8 @@ pub fn apply_queue_settings_to_waiting(
         }
         reserved.remove(&job.destination_path.to_ascii_lowercase());
         job.recipe = q.recipe.clone();
+        job.output_mode = q.output_config.mode;
+        job.replace_behavior = q.output_config.replace_behavior;
         job.min_savings_enabled = q.min_savings_enabled;
         job.min_savings_pct = q.min_savings_pct;
         // Applying settings requires fresh cleanup consent if policy changed
@@ -488,13 +499,14 @@ pub fn apply_queue_settings_to_waiting(
                     Path::new(&job.source_rel_path),
                 )
             });
-        let new_dest = resolve_destination_path(
+        let new_dest = resolve_destination_path_with_config(
             Path::new(&job.source_path),
             Path::new(&job.source_rel_path),
             &dest_root,
             &job.recipe,
+            &q.output_config,
             &mut reserved,
-        );
+        )?;
         job.destination_path = new_dest.to_string_lossy().to_string();
         if let Some(dp) = Path::new(&job.destination_path).parent() {
             if let Ok(vs) = disk_space_for_path(dp) {
@@ -599,6 +611,7 @@ pub fn save_profile_from_queue(
         priority: q.priority,
         recursive_import: q.recursive_import,
         destination_root: q.destination_root.clone(),
+        output_config: q.output_config.clone(),
         keep_awake: q.keep_awake,
         error_policy: q.error_policy,
         min_savings_enabled: q.min_savings_enabled,
@@ -700,6 +713,7 @@ pub fn select_profile_for_queue(
     q.priority = profile.priority;
     q.recursive_import = profile.recursive_import;
     q.destination_root = profile.destination_root;
+    q.output_config = profile.output_config;
     q.keep_awake = profile.keep_awake;
     q.error_policy = profile.error_policy;
     q.min_savings_enabled = profile.min_savings_enabled;
@@ -835,13 +849,14 @@ pub fn commit_staged_import(
     for it in items {
         let src_path = PathBuf::from(&it.source_path);
         let fp = capture_file_identity(&src_path).ok();
-        let final_dest = resolve_destination_path(
+        let final_dest = resolve_destination_path_with_config(
             &src_path,
             Path::new(&it.source_rel_path),
             &dest_root_path,
             &recipe,
+            &queue.output_config,
             &mut reserved,
-        );
+        )?;
         let dest_vol_id = disk_space_for_path(final_dest.parent().unwrap_or(&dest_root_path))
             .ok()
             .map(|v| v.volume_id);
@@ -891,6 +906,10 @@ pub fn commit_staged_import(
             source_fingerprint: fp,
             destination_path: final_dest.to_string_lossy().to_string(),
             dest_volume_id: dest_vol_id,
+            output_mode: queue.output_config.mode,
+            replace_behavior: queue.output_config.replace_behavior,
+            staged_path: None,
+            staged_bytes: None,
             recipe: recipe.clone(),
             compat_overrides: CompatOverrides::default(),
             status,
@@ -1076,10 +1095,12 @@ pub fn update_pending_job(
                 .filter(|j| j.id != job.id)
                 .map(|j| j.destination_path.to_ascii_lowercase())
                 .collect();
-            let q_root = state
-                .scheduler
-                .db
-                .get_queue(&job.queue_id)?
+            let q_opt = state.scheduler.db.get_queue(&job.queue_id)?;
+            let out_cfg = q_opt
+                .as_ref()
+                .map(|q| q.output_config.clone())
+                .unwrap_or_default();
+            let q_root = q_opt
                 .and_then(|q| q.destination_root)
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
@@ -1088,13 +1109,14 @@ pub fn update_pending_job(
                         Path::new(&job.source_rel_path),
                     )
                 });
-            let new_dest = resolve_destination_path(
+            let new_dest = resolve_destination_path_with_config(
                 Path::new(&job.source_path),
                 Path::new(&job.source_rel_path),
                 &q_root,
                 &r,
+                &out_cfg,
                 &mut reserved,
-            );
+            )?;
             job.destination_path = new_dest.to_string_lossy().to_string();
         }
         job.recipe = r;
@@ -1105,8 +1127,8 @@ pub fn update_pending_job(
     }
     if let Some(dp) = patch.destination_path {
         let p = PathBuf::from(&dp);
-        if p == Path::new(&job.source_path) {
-            return Err("Destination cannot be the same as source file.".to_string());
+        if p == Path::new(&job.source_path) && job.output_mode != OutputMode::ReplaceOriginal {
+            return Err("Destination cannot be the same as source file unless Replace Original mode is enabled.".to_string());
         }
         job.destination_path = dp;
     }
@@ -1264,6 +1286,8 @@ pub fn start_queue(
         .filter(|j| matches!(j.status, JobStatus::Ready | JobStatus::Queued))
         .cloned()
         .collect();
+    let ready_refs: Vec<&JobRecord> = ready_jobs.iter().collect();
+    validate_preflight_before_run(&q, &ready_refs)?;
 
     if q.cleanup_policy == CleanupPolicy::TrashAfterEachFile && !ready_jobs.is_empty() {
         let unconsented: Vec<JobRecord> = ready_jobs
@@ -1399,6 +1423,12 @@ pub fn enqueue_jobs(
 
     let mut next_pos = state.scheduler.db.next_job_position(&queue_id)?;
     let now = Utc::now().timestamp();
+
+    let preflight_targets: Vec<&JobRecord> = jobs
+        .iter()
+        .filter(|j| candidate_ids.contains(&j.id) || matches!(j.status, JobStatus::Ready | JobStatus::Queued))
+        .collect();
+    validate_preflight_before_run(&q, &preflight_targets)?;
 
     // Preserve explicit selection order when appending to Queue
     for jid in &candidate_ids {
@@ -1563,6 +1593,10 @@ pub fn start_all_ready_queues(
 
     if candidate_queues.is_empty() {
         return Err("No items waiting in the Encode Queue.".to_string());
+    }
+    for (q, q_ready) in &candidate_queues {
+        let refs: Vec<&JobRecord> = q_ready.iter().collect();
+        validate_preflight_before_run(q, &refs)?;
     }
 
     let mut all_unconsented = Vec::new();
@@ -1930,7 +1964,12 @@ pub fn get_comparison_frame(
             .db
             .list_all_jobs()?
             .iter()
-            .any(|j| Path::new(&j.source_path) == target || Path::new(&j.destination_path) == target);
+            .any(|j| {
+                Path::new(&j.source_path) == target
+                    || Path::new(&j.destination_path) == target
+                    || j.staged_path.as_deref() == Some(media_path.as_str())
+                    || j.staged_path.as_deref().map(Path::new) == Some(target)
+            });
         if !allowed {
             return Err("Path is not an authorized preview or job media path.".to_string());
         }
@@ -2065,9 +2104,12 @@ pub fn get_sample_comparison_pair(
         let target = Path::new(raw);
         let canon = target.canonicalize().map_err(|e| e.to_string())?;
         if canon.starts_with(&preview_canon)
-            || jobs
-                .iter()
-                .any(|j| Path::new(&j.source_path) == target || Path::new(&j.destination_path) == target)
+            || jobs.iter().any(|j| {
+                Path::new(&j.source_path) == target
+                    || Path::new(&j.destination_path) == target
+                    || j.staged_path.as_deref() == Some(raw)
+                    || j.staged_path.as_deref().map(Path::new) == Some(target)
+            })
         {
             Ok(canon)
         } else {
@@ -2252,6 +2294,7 @@ pub fn forward_resources_to_tab(
             priority: ProcessPriority::Background,
             recursive_import: true,
             destination_root: from_q.destination_root.clone(),
+            output_config: OutputConfig::default(),
             keep_awake: true,
             error_policy: ErrorPolicy::Continue,
             min_savings_enabled: from_q.min_savings_enabled,
@@ -2354,13 +2397,14 @@ pub fn forward_resources_to_tab(
                     .unwrap_or_else(|| Path::new("."))
                     .to_path_buf()
             });
-        let final_dest = resolve_destination_path(
+        let final_dest = resolve_destination_path_with_config(
             &src_path,
             Path::new(&rel_path),
             &dest_root,
             &recipe,
+            &dest_tab.output_config,
             &mut reserved,
-        );
+        )?;
         let dest_vol_id = disk_space_for_path(final_dest.parent().unwrap_or(&dest_root))
             .ok()
             .map(|v| v.volume_id);
@@ -2403,6 +2447,10 @@ pub fn forward_resources_to_tab(
             source_fingerprint: fp,
             destination_path: final_dest.to_string_lossy().to_string(),
             dest_volume_id: dest_vol_id,
+            output_mode: dest_tab.output_config.mode,
+            replace_behavior: dest_tab.output_config.replace_behavior,
+            staged_path: None,
+            staged_bytes: None,
             recipe,
             compat_overrides: CompatOverrides::default(),
             status,
@@ -3452,4 +3500,616 @@ pub async fn download_and_install_update(
 #[tauri::command]
 pub fn open_external_url(url: String) -> Result<(), String> {
     crate::updater::open_github_url(&url)
+}
+
+fn validate_preflight_before_run(q: &QueueTab, jobs: &[&JobRecord]) -> Result<(), String> {
+    apply_output_regex_to_stem("check", &q.output_config)?;
+    let mut seen_dirs: HashMap<PathBuf, DestinationCapabilities> = HashMap::new();
+    for j in jobs {
+        let src = Path::new(&j.source_path);
+        if !src.is_file() {
+            return Err(format!("Source file missing before start: {}", j.source_path));
+        }
+        let dst = Path::new(&j.destination_path);
+        if j.output_mode == OutputMode::TemplateFolder && dst == src {
+            return Err(format!(
+                "Output path aliases source for '{}'. Switch to Replace Original mode or adjust template.",
+                j.source_rel_path
+            ));
+        }
+        let parent = dst.parent().unwrap_or_else(|| Path::new("."));
+        let caps = if let Some(c) = seen_dirs.get(parent) {
+            Some(c.clone())
+        } else if let Ok(c) = destination_capabilities(parent) {
+            seen_dirs.insert(parent.to_path_buf(), c.clone());
+            Some(c)
+        } else {
+            None
+        };
+        if let Some(c) = caps {
+            if c.is_read_only || !c.is_writable {
+                return Err(format!(
+                    "Destination '{}' on {} ({}) is read-only or not writable.",
+                    parent.display(),
+                    c.mount_point,
+                    c.fs_type
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn check_queue_preflight(
+    state: State<'_, AppState>,
+    queue_id: String,
+    output_config_override: Option<OutputConfig>,
+    destination_root_override: Option<String>,
+) -> Result<QueuePreflightReport, String> {
+    let q = state
+        .scheduler
+        .db
+        .get_queue(&queue_id)?
+        .ok_or_else(|| "Queue not found".to_string())?;
+    let cfg = output_config_override.unwrap_or_else(|| q.output_config.clone());
+    let dest_root_opt = destination_root_override.or_else(|| q.destination_root.clone());
+
+    if let Err(regex_err) = apply_output_regex_to_stem("check", &cfg) {
+        return Ok(QueuePreflightReport {
+            ok: false,
+            regex_error: Some(regex_err.clone()),
+            blocking_errors: vec![regex_err],
+            warnings: Vec::new(),
+            previews: Vec::new(),
+        });
+    }
+
+    let queue_jobs = state.scheduler.db.list_jobs_for_queue(&queue_id)?;
+    let pending: Vec<JobRecord> = queue_jobs
+        .into_iter()
+        .filter(|j| !matches!(j.status, JobStatus::Completed | JobStatus::BelowSavingsTarget))
+        .collect();
+    let mut reserved: HashSet<String> = HashSet::new();
+    let mut blocking_errors = Vec::new();
+    let mut warnings_set: HashSet<String> = HashSet::new();
+    let mut previews = Vec::new();
+    let mut dir_caps: HashMap<PathBuf, Result<DestinationCapabilities, String>> = HashMap::new();
+
+    for (idx, j) in pending.iter().enumerate() {
+        let src_path = Path::new(&j.source_path);
+        let root = dest_root_opt
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                src_path
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf()
+            });
+        let resolved_res = resolve_destination_path_with_config(
+            src_path,
+            Path::new(&j.source_rel_path),
+            &root,
+            &j.recipe,
+            &cfg,
+            &mut reserved,
+        );
+        let mut item_warnings = Vec::new();
+        let mut item_error: Option<String> = None;
+
+        let dest_path = match resolved_res {
+            Ok(p) => p,
+            Err(e) => {
+                item_error = Some(e.clone());
+                if !blocking_errors.contains(&e) {
+                    blocking_errors.push(e);
+                }
+                PathBuf::from(&j.destination_path)
+            }
+        };
+
+        let collides_with_source = cfg.mode == OutputMode::TemplateFolder && dest_path == src_path;
+        if collides_with_source {
+            let msg = "Output path matches source path in Folder/Template mode.".to_string();
+            item_error = Some(msg.clone());
+            if !blocking_errors.contains(&msg) {
+                blocking_errors.push(msg);
+            }
+        }
+        let target_exists = dest_path.exists();
+        if target_exists && cfg.mode == OutputMode::ReplaceOriginal {
+            item_warnings.push("Original will be replaced via fault-tolerant staging".to_string());
+        } else if target_exists {
+            item_warnings.push("Target file already exists; next free suffix will be used".to_string());
+        }
+
+        let parent = dest_path.parent().unwrap_or_else(|| Path::new("."));
+        let caps_res = dir_caps
+            .entry(parent.to_path_buf())
+            .or_insert_with(|| destination_capabilities(parent));
+
+        let (fs_type, atomic_no_replace_supported, trash_supported) = match caps_res {
+            Ok(c) => {
+                if c.is_read_only || !c.is_writable {
+                    let msg = format!(
+                        "Destination '{}' on {} ({}) is read-only or not writable.",
+                        parent.display(),
+                        c.mount_point,
+                        c.fs_type
+                    );
+                    item_error = Some(msg.clone());
+                    if !blocking_errors.contains(&msg) {
+                        blocking_errors.push(msg);
+                    }
+                }
+                if !c.supports_atomic_no_replace {
+                    let w = format!(
+                        "Filesystem '{}' ({}) does not support atomic no-replace rename — fault-tolerant safe publish will be used instead.",
+                        c.fs_type, c.mount_point
+                    );
+                    item_warnings.push(w.clone());
+                    warnings_set.insert(w);
+                }
+                if (cfg.mode == OutputMode::ReplaceOriginal
+                    || q.cleanup_policy == CleanupPolicy::TrashAfterEachFile)
+                    && !c.supports_trash
+                {
+                    let note = c
+                        .trash_note
+                        .clone()
+                        .unwrap_or_else(|| "OS Trash unavailable on destination filesystem.".to_string());
+                    let w = format!(
+                        "{note} Replacement will keep or permanently delete original only after verification."
+                    );
+                    item_warnings.push(w.clone());
+                    warnings_set.insert(w);
+                }
+                (
+                    Some(c.fs_type.clone()),
+                    Some(c.supports_atomic_no_replace),
+                    Some(c.supports_trash),
+                )
+            }
+            Err(e) => {
+                let w = format!("Destination check warning: {e}");
+                item_warnings.push(w.clone());
+                warnings_set.insert(w);
+                (None, None, None)
+            }
+        };
+
+        if idx < 25 {
+            previews.push(OutputPathPreviewItem {
+                job_id: j.id.clone(),
+                source_path: j.source_path.clone(),
+                destination_path: dest_path.to_string_lossy().to_string(),
+                collides_with_source,
+                target_exists,
+                fs_type,
+                atomic_no_replace_supported,
+                trash_supported,
+                warnings: item_warnings,
+                error: item_error,
+            });
+        }
+    }
+
+    let mut warnings: Vec<String> = warnings_set.into_iter().collect();
+    warnings.sort();
+
+    Ok(QueuePreflightReport {
+        ok: blocking_errors.is_empty(),
+        regex_error: None,
+        blocking_errors,
+        warnings,
+        previews,
+    })
+}
+
+#[tauri::command]
+pub fn get_staged_output_info(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> Result<StagedOutputInfo, String> {
+    let job = state
+        .scheduler
+        .db
+        .get_job(&job_id)?
+        .ok_or_else(|| "Job not found".to_string())?;
+    let intent = state
+        .scheduler
+        .db
+        .get_latest_publish_intent_for_job(&job_id)?;
+
+    let staged_path = job
+        .staged_path
+        .clone()
+        .or_else(|| intent.as_ref().map(|i| i.staged_path.clone()));
+    let staged_exists = staged_path
+        .as_deref()
+        .map(|p| Path::new(p).is_file())
+        .unwrap_or(false);
+    let staged_bytes = staged_path
+        .as_deref()
+        .and_then(|p| std::fs::metadata(p).ok().map(|m| m.len()))
+        .or(job.staged_bytes)
+        .or_else(|| intent.as_ref().map(|i| i.staged_size))
+        .unwrap_or(0);
+
+    let dest_p = Path::new(&job.destination_path);
+    let caps = destination_capabilities(dest_p.parent().unwrap_or(dest_p)).ok();
+
+    Ok(StagedOutputInfo {
+        job_id: job.id,
+        source_path: job.source_path.clone(),
+        destination_path: job.destination_path.clone(),
+        staged_path,
+        staged_exists,
+        staged_bytes,
+        target_exists: dest_p.exists(),
+        source_exists: Path::new(&job.source_path).exists(),
+        error_stage: job.error_stage,
+        error_message: job.error_message,
+        capabilities: caps,
+    })
+}
+
+#[tauri::command]
+pub fn reveal_staged_file(state: State<'_, AppState>, job_id: String) -> Result<(), String> {
+    let info = get_staged_output_info(state, job_id)?;
+    let Some(sp) = info.staged_path else {
+        return Err("No staged output file recorded for this job.".to_string());
+    };
+    let p = Path::new(&sp);
+    if p.exists() {
+        reveal_in_file_manager(p)
+    } else if let Some(parent) = p.parent().filter(|d| d.exists()) {
+        reveal_folder(parent.to_string_lossy().to_string())
+    } else {
+        Err(format!("Staged file no longer exists at {sp}"))
+    }
+}
+
+#[tauri::command]
+pub fn reveal_folder(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    let target = if p.is_dir() {
+        p.to_path_buf()
+    } else if let Some(parent) = p.parent().filter(|d| d.exists()) {
+        parent.to_path_buf()
+    } else {
+        return Err(format!("Folder does not exist: {path}"));
+    };
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| format!("Failed opening Finder: {e}"))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| format!("Failed opening Explorer: {e}"))?;
+        return Ok(());
+    }
+    #[allow(unreachable_code)]
+    Err("Unsupported platform".to_string())
+}
+
+#[tauri::command]
+pub fn resolve_staged_publish(
+    state: State<'_, AppState>,
+    job_id: String,
+    action: String,
+    target_path: Option<String>,
+    keep_original_backup: Option<bool>,
+) -> Result<JobRecord, String> {
+    let _guard = state.scheduler.cleanup_lock.lock();
+    let mut job = state
+        .scheduler
+        .db
+        .get_job(&job_id)?
+        .ok_or_else(|| "Job not found".to_string())?;
+    let intent = state
+        .scheduler
+        .db
+        .get_latest_publish_intent_for_job(&job_id)?;
+
+    let staged_str = job
+        .staged_path
+        .clone()
+        .or_else(|| intent.as_ref().map(|i| i.staged_path.clone()));
+    let ffprobe_opt = state
+        .scheduler
+        .tool_status
+        .lock()
+        .ok()
+        .and_then(|t| t.capabilities.as_ref().map(|c| PathBuf::from(&c.ffprobe_path)));
+    let ffmpeg_opt = state
+        .scheduler
+        .tool_status
+        .lock()
+        .ok()
+        .and_then(|t| t.capabilities.as_ref().map(|c| PathBuf::from(&c.ffmpeg_path)));
+
+    let final_dest = target_path
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(&job.destination_path));
+    let keep_backup = keep_original_backup.unwrap_or(false);
+
+    match action.as_str() {
+        "publish_no_replace" => {
+            let Some(sp_str) = staged_str else {
+                return Err("No staged output file found to move.".to_string());
+            };
+            let staged_p = Path::new(&sp_str);
+            if !staged_p.is_file() {
+                return Err(format!("Staged output file missing: {sp_str}"));
+            }
+            let out_bytes = std::fs::metadata(staged_p).map(|m| m.len()).unwrap_or(0);
+            match publish_staged_file(staged_p, &final_dest, true) {
+                PublishOutcome::Published => {
+                    if let Some(ref it) = intent {
+                        let _ = state.scheduler.db.update_publish_intent_state(
+                            &it.intent_id,
+                            "published",
+                            Some(&final_dest.to_string_lossy()),
+                        );
+                    }
+                    if let Some(sd) = staged_p.parent().filter(|p| p.to_string_lossy().contains(".ffq-staging")) {
+                        let _ = std::fs::remove_dir_all(sd);
+                    }
+                    state.scheduler.complete_published_job(
+                        &mut job,
+                        ffprobe_opt.as_deref(),
+                        ffmpeg_opt.as_deref(),
+                        &final_dest,
+                        out_bytes,
+                        job.full_decode_verified,
+                        format!("Saved to {}", final_dest.display()),
+                        "",
+                        false,
+                    );
+                    state.scheduler.emit_snapshot_changed();
+                    Ok(job)
+                }
+                PublishOutcome::DestinationExists => Err(format!(
+                    "Destination already exists at {}. Choose another filename or use Fault-Tolerant Replace.",
+                    final_dest.display()
+                )),
+                PublishOutcome::Error(e) => Err(e),
+            }
+        }
+        "fault_tolerant_replace" => {
+            let Some(sp_str) = staged_str else {
+                return Err("No staged output file found to replace with.".to_string());
+            };
+            let staged_p = Path::new(&sp_str);
+            if !staged_p.is_file() {
+                return Err(format!("Staged output file missing: {sp_str}"));
+            }
+            let out_bytes = std::fs::metadata(staged_p).map(|m| m.len()).unwrap_or(0);
+            let prefer_trash = matches!(destination_capabilities(&final_dest), Ok(c) if c.supports_trash);
+            let src_p = Path::new(&job.source_path);
+            let bak_opt = fault_tolerant_replace_file(
+                staged_p,
+                src_p,
+                &final_dest,
+                out_bytes,
+                job.source_fingerprint.as_ref(),
+                prefer_trash,
+                keep_backup,
+            )?;
+            if let Some(ref it) = intent {
+                let _ = state.scheduler.db.update_publish_intent_state(
+                    &it.intent_id,
+                    "published",
+                    Some(&final_dest.to_string_lossy()),
+                );
+            }
+            if let Some(sd) = staged_p.parent().filter(|p| p.to_string_lossy().contains(".ffq-staging")) {
+                let _ = std::fs::remove_dir_all(sd);
+            }
+            let summary = if let Some(ref bak) = bak_opt {
+                format!("Replaced output; original kept at {}", bak.display())
+            } else {
+                "Verified fault-tolerant replacement".to_string()
+            };
+            state.scheduler.complete_published_job(
+                &mut job,
+                ffprobe_opt.as_deref(),
+                ffmpeg_opt.as_deref(),
+                &final_dest,
+                out_bytes,
+                job.full_decode_verified,
+                summary,
+                "",
+                !keep_backup,
+            );
+            state.scheduler.emit_snapshot_changed();
+            Ok(job)
+        }
+        "confirm_delete_original" => {
+            if !final_dest.is_file() {
+                return Err(format!("Published output not found at {}", final_dest.display()));
+            }
+            let out_bytes = std::fs::metadata(&final_dest).map(|m| m.len()).unwrap_or(0);
+            let src_p = Path::new(&job.source_path);
+            let mut deleted = false;
+            if src_p != final_dest && src_p.exists() {
+                let prefer_trash = matches!(destination_capabilities(src_p), Ok(c) if c.supports_trash);
+                if prefer_trash {
+                    if let Some(ref fp) = job.source_fingerprint {
+                        if crate::platform::move_to_recoverable_trash_verified(src_p, fp).is_ok() {
+                            deleted = true;
+                        }
+                    }
+                }
+                if !deleted && !keep_backup {
+                    std::fs::remove_file(src_p)
+                        .map_err(|e| format!("Failed removing original file: {e}"))?;
+                    deleted = true;
+                }
+            }
+            state.scheduler.complete_published_job(
+                &mut job,
+                ffprobe_opt.as_deref(),
+                ffmpeg_opt.as_deref(),
+                &final_dest,
+                out_bytes,
+                job.full_decode_verified,
+                if deleted {
+                    "Verified & original removed after comparison".to_string()
+                } else {
+                    "Verified & kept original".to_string()
+                },
+                "",
+                deleted,
+            );
+            state.scheduler.emit_snapshot_changed();
+            Ok(job)
+        }
+        "keep_both" => {
+            if let Some(ref sp_str) = staged_str {
+                let staged_p = Path::new(sp_str);
+                if staged_p.is_file() {
+                    let out_bytes = std::fs::metadata(staged_p).map(|m| m.len()).unwrap_or(0);
+                    let mut chosen = final_dest.clone();
+                    if chosen == Path::new(&job.source_path) || chosen.exists() {
+                        let parent = chosen.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+                        let stem = chosen
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "video".to_string());
+                        let ext = chosen
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or(job.recipe.container.ext());
+                        for n in 1u32..1000 {
+                            let cand = if n == 1 {
+                                parent.join(format!("{stem}.encoded.{ext}"))
+                            } else {
+                                parent.join(format!("{stem}.encoded ({n}).{ext}"))
+                            };
+                            if !cand.exists() && cand != Path::new(&job.source_path) {
+                                chosen = cand;
+                                break;
+                            }
+                        }
+                    }
+                    match publish_staged_file(staged_p, &chosen, true) {
+                        PublishOutcome::Published => {
+                            if let Some(ref it) = intent {
+                                let _ = state.scheduler.db.update_publish_intent_state(
+                                    &it.intent_id,
+                                    "published",
+                                    Some(&chosen.to_string_lossy()),
+                                );
+                            }
+                            if let Some(sd) = staged_p.parent().filter(|p| p.to_string_lossy().contains(".ffq-staging")) {
+                                let _ = std::fs::remove_dir_all(sd);
+                            }
+                            state.scheduler.complete_published_job(
+                                &mut job,
+                                ffprobe_opt.as_deref(),
+                                ffmpeg_opt.as_deref(),
+                                &chosen,
+                                out_bytes,
+                                job.full_decode_verified,
+                                "Saved encoded copy alongside original".to_string(),
+                                "",
+                                false,
+                            );
+                            state.scheduler.emit_snapshot_changed();
+                            return Ok(job);
+                        }
+                        PublishOutcome::DestinationExists => {
+                            return Err("Could not find free filename; choose location manually.".to_string())
+                        }
+                        PublishOutcome::Error(e) => return Err(e),
+                    }
+                }
+            }
+            if final_dest.is_file() {
+                let out_bytes = std::fs::metadata(&final_dest).map(|m| m.len()).unwrap_or(0);
+                state.scheduler.complete_published_job(
+                    &mut job,
+                    ffprobe_opt.as_deref(),
+                    ffmpeg_opt.as_deref(),
+                    &final_dest,
+                    out_bytes,
+                    job.full_decode_verified,
+                    "Completed (kept both original & encoded)".to_string(),
+                    "",
+                    false,
+                );
+                state.scheduler.emit_snapshot_changed();
+                return Ok(job);
+            }
+            Err("Neither staged nor published output file was found.".to_string())
+        }
+        "mark_completed_manual" => {
+            if !final_dest.is_file() {
+                return Err(format!("No output file found at {}. Pick its path or place it there first.", final_dest.display()));
+            }
+            let out_bytes = std::fs::metadata(&final_dest).map(|m| m.len()).unwrap_or(0);
+            if let Some(ref it) = intent {
+                let _ = state.scheduler.db.update_publish_intent_state(
+                    &it.intent_id,
+                    "published",
+                    Some(&final_dest.to_string_lossy()),
+                );
+            }
+            state.scheduler.complete_published_job(
+                &mut job,
+                ffprobe_opt.as_deref(),
+                ffmpeg_opt.as_deref(),
+                &final_dest,
+                out_bytes,
+                job.full_decode_verified,
+                "Finalized manually by user".to_string(),
+                "",
+                false,
+            );
+            state.scheduler.emit_snapshot_changed();
+            Ok(job)
+        }
+        "discard_staged" => {
+            if let Some(ref sp_str) = staged_str {
+                let p = Path::new(sp_str);
+                if p.is_file() {
+                    let _ = std::fs::remove_file(p);
+                }
+                if let Some(sd) = p.parent().filter(|d| d.to_string_lossy().contains(".ffq-staging")) {
+                    let _ = std::fs::remove_dir_all(sd);
+                }
+            }
+            if let Some(ref it) = intent {
+                let _ = state
+                    .scheduler
+                    .db
+                    .update_publish_intent_state(&it.intent_id, "discarded", None);
+            }
+            job.status = JobStatus::Listed;
+            job.staged_path = None;
+            job.staged_bytes = None;
+            job.output_bytes = None;
+            job.error_stage = None;
+            job.error_message = None;
+            job.status_reason = Some("Staged output discarded; ready to re-encode".to_string());
+            job.updated_at = Utc::now().timestamp();
+            state.scheduler.db.upsert_job(&job)?;
+            state.scheduler.emit_snapshot_changed();
+            Ok(job)
+        }
+        other => Err(format!("Unknown resolution action: {other}")),
+    }
 }

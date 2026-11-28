@@ -1061,6 +1061,130 @@ pub fn resolve_destination_path(
     recipe: &EncodeRecipe,
     reserved_ci: &mut HashSet<String>,
 ) -> PathBuf {
+    resolve_destination_path_with_config(
+        input_path,
+        source_rel_path,
+        dest_root,
+        recipe,
+        &OutputConfig::default(),
+        reserved_ci,
+    )
+    .unwrap_or_else(|_| {
+        let parent = dest_root.to_path_buf();
+        parent.join(format!("video.{}.{}", recipe.filename_tag(), recipe.container.ext()))
+    })
+}
+
+/// Apply optional regex find/replace to a filename stem.
+pub fn apply_output_regex_to_stem(stem: &str, cfg: &OutputConfig) -> Result<String, String> {
+    let find = cfg.regex_find.as_deref().unwrap_or("").trim();
+    if find.is_empty() {
+        return Ok(stem.to_string());
+    }
+    let re = regex::Regex::new(find).map_err(|e| format!("Invalid output filename regex: {e}"))?;
+    let rep = cfg.regex_replace.as_deref().unwrap_or("");
+    let replaced = re.replace_all(stem, rep).to_string();
+    let trimmed = replaced.trim();
+    if trimmed.is_empty() {
+        Ok(stem.to_string())
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
+/// Lexically normalize `.` and `..` segments without hitting the filesystem,
+/// so expressions like `$sourceFilePath/../foo.mkv` or `$sourceFolder/../foo.mkv` resolve cleanly.
+fn normalize_lexical_path(raw: &str, anchor_if_relative: &Path) -> PathBuf {
+    let mut normalized = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        if ch == '\\' {
+            normalized.push('/');
+        } else {
+            normalized.push(ch);
+        }
+    }
+    let candidate = Path::new(&normalized);
+    let base = if candidate.is_absolute() || raw.starts_with("\\\\") {
+        PathBuf::from(raw)
+    } else {
+        anchor_if_relative.join(candidate)
+    };
+
+    let mut stack: Vec<std::ffi::OsString> = Vec::new();
+    let mut has_root = false;
+    let mut prefix_comp: Option<std::ffi::OsString> = None;
+    for comp in base.components() {
+        match comp {
+            Component::Prefix(p) => {
+                prefix_comp = Some(p.as_os_str().to_os_string());
+            }
+            Component::RootDir => {
+                has_root = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if let Some(last) = stack.last() {
+                    if last != ".." {
+                        stack.pop();
+                    } else if !has_root {
+                        stack.push(std::ffi::OsString::from(".."));
+                    }
+                } else if !has_root {
+                    stack.push(std::ffi::OsString::from(".."));
+                }
+            }
+            Component::Normal(seg) => {
+                stack.push(seg.to_os_string());
+            }
+        }
+    }
+
+    let mut out = PathBuf::new();
+    if let Some(p) = prefix_comp {
+        out.push(p);
+    }
+    if has_root {
+        out.push(std::path::MAIN_SEPARATOR_STR);
+    }
+    for seg in stack {
+        out.push(seg);
+    }
+    out
+}
+
+/// Evaluate raw target directory and base filename (before collision numbering) for the given config.
+pub fn evaluate_output_target(
+    input_path: &Path,
+    source_rel_path: &Path,
+    dest_root: &Path,
+    recipe: &EncodeRecipe,
+    output_config: &OutputConfig,
+) -> Result<(PathBuf, String, String), String> {
+    let raw_stem = input_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "video".to_string());
+    let transformed_stem = apply_output_regex_to_stem(&raw_stem, output_config)?;
+    let safe_stem = sanitize_path_segment(&transformed_stem);
+    let raw_safe_stem = sanitize_path_segment(&raw_stem);
+    let src_ext = input_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_string();
+    let ext = recipe.container.ext().to_string();
+    let tag = recipe.filename_tag();
+
+    if output_config.mode == OutputMode::ReplaceOriginal {
+        let src_dir = input_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        return Ok((src_dir, safe_stem, ext));
+    }
+
     let rel_parent = source_rel_path.parent().unwrap_or_else(|| Path::new(""));
     let mut sanitized_rel_dir = PathBuf::new();
     for comp in rel_parent.components() {
@@ -1069,26 +1193,109 @@ pub fn resolve_destination_path(
         }
     }
 
-    let raw_stem = input_path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "video".to_string());
-    let safe_stem = sanitize_path_segment(&raw_stem);
-    let tag = recipe.filename_tag();
-    let ext = recipe.container.ext();
+    let tmpl = output_config
+        .path_template
+        .as_deref()
+        .unwrap_or("")
+        .trim();
+
+    if !tmpl.is_empty() {
+        let src_folder = input_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_string_lossy()
+            .to_string();
+        let src_file_path = input_path.to_string_lossy().to_string();
+        let src_file_name = format!("{safe_stem}.{ext}");
+        let src_file_name_orig = if src_ext.is_empty() {
+            raw_safe_stem.clone()
+        } else {
+            format!("{raw_safe_stem}.{src_ext}")
+        };
+        let rel_dir_str = sanitized_rel_dir.to_string_lossy().to_string();
+        let dest_root_str = dest_root.to_string_lossy().to_string();
+        let crf_str = recipe.crf.to_string();
+        let codec_str = recipe.codec.short_tag().to_string();
+
+        // Replace longest tokens first, supporting both `${var}` and `$var` syntax.
+        let tokens: &[(&str, &str)] = &[
+            ("rawSourceFileNameStem", raw_safe_stem.as_str()),
+            ("sourceFileNameStem", safe_stem.as_str()),
+            ("sourceFileNameOrig", src_file_name_orig.as_str()),
+            ("sourceFileName", src_file_name.as_str()),
+            ("sourceFilePath", src_file_path.as_str()),
+            ("sourceFolder", src_folder.as_str()),
+            ("sourceExt", src_ext.as_str()),
+            ("destRoot", dest_root_str.as_str()),
+            ("relDir", rel_dir_str.as_str()),
+            ("container", ext.as_str()),
+            ("codec", codec_str.as_str()),
+            ("stem", safe_stem.as_str()),
+            ("crf", crf_str.as_str()),
+            ("tag", tag.as_str()),
+            ("ext", ext.as_str()),
+        ];
+
+        let mut expanded = tmpl.to_string();
+        for (name, val) in tokens {
+            let braced = format!("${{{name}}}");
+            let plain = format!("${name}");
+            expanded = expanded.replace(&braced, val).replace(&plain, val);
+        }
+
+        let norm = normalize_lexical_path(&expanded, dest_root);
+        let target_dir = norm
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(dest_root)
+            .to_path_buf();
+        let final_ext = norm
+            .extension()
+            .and_then(|e| e.to_str())
+            .filter(|s| !s.is_empty())
+            .map(sanitize_path_segment)
+            .unwrap_or_else(|| ext.clone());
+        let final_stem = norm
+            .file_stem()
+            .map(|s| sanitize_path_segment(&s.to_string_lossy()))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| safe_stem.clone());
+
+        return Ok((target_dir, final_stem, final_ext));
+    }
 
     let target_dir = dest_root.join(&sanitized_rel_dir);
+    let base_name = format!("{safe_stem}.{tag}");
+    Ok((target_dir, base_name, ext))
+}
+
+/// Resolve destination path supporting OutputMode (TemplateFolder vs ReplaceOriginal),
+/// custom path templates (`$sourceFolder/encoded/$sourceFileName`, etc.), and filename regex.
+pub fn resolve_destination_path_with_config(
+    input_path: &Path,
+    source_rel_path: &Path,
+    dest_root: &Path,
+    recipe: &EncodeRecipe,
+    output_config: &OutputConfig,
+    reserved_ci: &mut HashSet<String>,
+) -> Result<PathBuf, String> {
+    let (target_dir, mut base_name, ext) =
+        evaluate_output_target(input_path, source_rel_path, dest_root, recipe, output_config)?;
 
     // Enforce conservative component & Windows MAX_PATH margin (240 chars)
-    let mut base_name = format!("{safe_stem}.{tag}");
     let max_dir_len = target_dir.to_string_lossy().len();
     if max_dir_len + base_name.len() + ext.len() + 12 > 240 {
-        let allowed_stem = 240usize
-            .saturating_sub(max_dir_len + tag.len() + ext.len() + 16)
+        let allowed_base = 240usize
+            .saturating_sub(max_dir_len + ext.len() + 16)
             .max(12);
-        let truncated_stem: String = safe_stem.chars().take(allowed_stem).collect();
-        base_name = format!("{truncated_stem}.{tag}");
+        base_name = base_name.chars().take(allowed_base).collect();
+    }
+
+    if output_config.mode == OutputMode::ReplaceOriginal {
+        let candidate = target_dir.join(format!("{base_name}.{ext}"));
+        reserved_ci.insert(candidate.to_string_lossy().to_ascii_lowercase());
+        return Ok(candidate);
     }
 
     let input_canon = input_path.canonicalize().ok();
@@ -1117,12 +1324,12 @@ pub fn resolve_destination_path(
             }
         }
         reserved_ci.insert(ci_key);
-        return candidate;
+        return Ok(candidate);
     }
 
     let fallback = target_dir.join(format!("{base_name}.{}.{ext}", uuid::Uuid::new_v4()));
     reserved_ci.insert(fallback.to_string_lossy().to_ascii_lowercase());
-    fallback
+    Ok(fallback)
 }
 
 /// Derive destination root from an existing job's destination path by stripping

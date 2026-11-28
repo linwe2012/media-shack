@@ -594,6 +594,33 @@ impl Database {
             )
             .map_err(|e| format!("Schema reconcile tab_type failed: {e}"))?;
         }
+        let has_output_cfg: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('queues') WHERE name = 'output_config_json'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if has_output_cfg == 0 {
+            conn.execute_batch(
+                "ALTER TABLE queues ADD COLUMN output_config_json TEXT NOT NULL DEFAULT '{}';",
+            )
+            .map_err(|e| format!("Schema reconcile output_config_json failed: {e}"))?;
+        }
+        let has_job_out_mode: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'output_mode'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if has_job_out_mode == 0 {
+            conn.execute_batch(
+                "ALTER TABLE jobs ADD COLUMN output_mode TEXT NOT NULL DEFAULT 'template_folder';
+                 ALTER TABLE jobs ADD COLUMN replace_behavior TEXT NOT NULL DEFAULT 'auto_delete_original';",
+            )
+            .map_err(|e| format!("Schema reconcile job output_mode failed: {e}"))?;
+        }
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS repair_sessions (
                  queue_id TEXT PRIMARY KEY REFERENCES queues(id) ON DELETE CASCADE,
@@ -751,6 +778,34 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
+    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
+                    staged_file_id, staged_size, final_path, state
+             FROM publish_intents
+             WHERE job_id = ?1
+             ORDER BY updated_at DESC
+             LIMIT 1",
+            params![job_id],
+            |r| {
+                Ok(PublishIntentRecord {
+                    intent_id: r.get(0)?,
+                    job_id: r.get(1)?,
+                    attempt_id: r.get(2)?,
+                    staged_path: r.get(3)?,
+                    staged_volume_id: r.get(4)?,
+                    staged_file_id: r.get(5)?,
+                    staged_size: r.get::<_, i64>(6)? as u64,
+                    final_path: r.get(7)?,
+                    state: r.get(8)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
     pub fn save_named_preset(&self, name: &str, recipe: &EncodeRecipe) -> Result<NamedPreset, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let now = Utc::now().timestamp();
@@ -835,7 +890,7 @@ impl Database {
                         priority, recursive_import, destination_root, keep_awake,
                         error_policy, min_savings_enabled, min_savings_pct,
                         cleanup_policy, full_decode_verify, is_running, is_paused,
-                        pause_after_current, waiting_reason, tab_type
+                        pause_after_current, waiting_reason, tab_type, output_config_json
                  FROM queues ORDER BY tab_order ASC",
             )
             .map_err(|e| e.to_string())?;
@@ -846,6 +901,11 @@ impl Database {
                 let err_s: String = r.get(10)?;
                 let clean_s: String = r.get(13)?;
                 let tt_s: String = r.get(19)?;
+                let out_cfg_s: Option<String> = r.get(20)?;
+                let output_config: OutputConfig = out_cfg_s
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or_default();
                 Ok(QueueTab {
                     id: r.get(0)?,
                     name: r.get(1)?,
@@ -860,6 +920,7 @@ impl Database {
                         .unwrap_or(ProcessPriority::Background),
                     recursive_import: r.get::<_, i64>(7)? != 0,
                     destination_root: r.get(8)?,
+                    output_config,
                     keep_awake: r.get::<_, i64>(9)? != 0,
                     error_policy: serde_json::from_str(&format!("\"{err_s}\""))
                         .unwrap_or(ErrorPolicy::Continue),
@@ -878,6 +939,34 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
+    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
+                    staged_file_id, staged_size, final_path, state
+             FROM publish_intents
+             WHERE job_id = ?1
+             ORDER BY updated_at DESC
+             LIMIT 1",
+            params![job_id],
+            |r| {
+                Ok(PublishIntentRecord {
+                    intent_id: r.get(0)?,
+                    job_id: r.get(1)?,
+                    attempt_id: r.get(2)?,
+                    staged_path: r.get(3)?,
+                    staged_volume_id: r.get(4)?,
+                    staged_file_id: r.get(5)?,
+                    staged_size: r.get::<_, i64>(6)? as u64,
+                    final_path: r.get(7)?,
+                    state: r.get(8)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
     pub fn get_queue(&self, queue_id: &str) -> Result<Option<QueueTab>, String> {
         Ok(self.list_queues()?.into_iter().find(|q| q.id == queue_id))
     }
@@ -885,6 +974,7 @@ impl Database {
     pub fn upsert_queue(&self, q: &QueueTab) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let rjson = serde_json::to_string(&q.recipe).map_err(|e| e.to_string())?;
+        let out_cfg_json = serde_json::to_string(&q.output_config).map_err(|e| e.to_string())?;
         let prio_s = serde_json::to_string(&q.priority)
             .map_err(|e| e.to_string())?
             .trim_matches('"')
@@ -904,11 +994,11 @@ impl Database {
         conn.execute(
             "INSERT INTO queues (
                 id, name, tab_order, tab_type, profile_id, profile_name, recipe_json,
-                priority, recursive_import, destination_root, keep_awake,
+                priority, recursive_import, destination_root, output_config_json, keep_awake,
                 error_policy, min_savings_enabled, min_savings_pct,
                 cleanup_policy, full_decode_verify, is_running, is_paused,
                 pause_after_current, waiting_reason
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 tab_order = excluded.tab_order,
@@ -919,6 +1009,7 @@ impl Database {
                 priority = excluded.priority,
                 recursive_import = excluded.recursive_import,
                 destination_root = excluded.destination_root,
+                output_config_json = excluded.output_config_json,
                 keep_awake = excluded.keep_awake,
                 error_policy = excluded.error_policy,
                 min_savings_enabled = excluded.min_savings_enabled,
@@ -940,6 +1031,7 @@ impl Database {
                 prio_s,
                 q.recursive_import as i64,
                 q.destination_root,
+                out_cfg_json,
                 q.keep_awake as i64,
                 err_s,
                 q.min_savings_enabled as i64,
@@ -1021,7 +1113,16 @@ impl Database {
                         error_message, diagnostics, cleanup_policy, cleanup_outcome,
                         cleanup_error, consent_id, full_decode_verified, min_savings_enabled,
                         min_savings_pct, tool_versions, current_attempt_id, created_at,
-                        updated_at, completed_at, output_fingerprint_json
+                        updated_at, completed_at, output_fingerprint_json,
+                        output_mode, replace_behavior,
+                        (SELECT pi.staged_path FROM publish_intents pi
+                         WHERE pi.job_id = jobs.id
+                           AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
+                         ORDER BY pi.updated_at DESC LIMIT 1) AS active_staged_path,
+                        (SELECT pi.staged_size FROM publish_intents pi
+                         WHERE pi.job_id = jobs.id
+                           AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
+                         ORDER BY pi.updated_at DESC LIMIT 1) AS active_staged_size
                  FROM jobs WHERE queue_id = ?1 ORDER BY position ASC",
             )
             .map_err(|e| e.to_string())?;
@@ -1039,7 +1140,16 @@ impl Database {
                         error_message, diagnostics, cleanup_policy, cleanup_outcome,
                         cleanup_error, consent_id, full_decode_verified, min_savings_enabled,
                         min_savings_pct, tool_versions, current_attempt_id, created_at,
-                        updated_at, completed_at, output_fingerprint_json
+                        updated_at, completed_at, output_fingerprint_json,
+                        output_mode, replace_behavior,
+                        (SELECT pi.staged_path FROM publish_intents pi
+                         WHERE pi.job_id = jobs.id
+                           AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
+                         ORDER BY pi.updated_at DESC LIMIT 1) AS active_staged_path,
+                        (SELECT pi.staged_size FROM publish_intents pi
+                         WHERE pi.job_id = jobs.id
+                           AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
+                         ORDER BY pi.updated_at DESC LIMIT 1) AS active_staged_size
                  FROM jobs ORDER BY queue_id ASC, position ASC",
             )
             .map_err(|e| e.to_string())?;
@@ -1057,7 +1167,16 @@ impl Database {
                         error_message, diagnostics, cleanup_policy, cleanup_outcome,
                         cleanup_error, consent_id, full_decode_verified, min_savings_enabled,
                         min_savings_pct, tool_versions, current_attempt_id, created_at,
-                        updated_at, completed_at, output_fingerprint_json
+                        updated_at, completed_at, output_fingerprint_json,
+                        output_mode, replace_behavior,
+                        (SELECT pi.staged_path FROM publish_intents pi
+                         WHERE pi.job_id = jobs.id
+                           AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
+                         ORDER BY pi.updated_at DESC LIMIT 1) AS active_staged_path,
+                        (SELECT pi.staged_size FROM publish_intents pi
+                         WHERE pi.job_id = jobs.id
+                           AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
+                         ORDER BY pi.updated_at DESC LIMIT 1) AS active_staged_size
                  FROM jobs WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -1077,6 +1196,14 @@ impl Database {
                 let clean_p: String = r.get(21)?;
                 let clean_o: String = r.get(22)?;
                 let out_fp_s: Option<String> = r.get(33)?;
+                let out_mode_s: Option<String> = r.get(34)?;
+                let rep_beh_s: Option<String> = r.get(35)?;
+                let staged_raw: Option<String> = r.get(36)?;
+                let staged_sz_raw: Option<i64> = r.get(37)?;
+                let staged_exists = staged_raw
+                    .as_deref()
+                    .map(|p| std::path::Path::new(p).is_file())
+                    .unwrap_or(false);
                 Ok(JobRecord {
                     id: r.get(0)?,
                     queue_id: r.get(1)?,
@@ -1088,6 +1215,20 @@ impl Database {
                     source_fingerprint: fp_s.and_then(|s| serde_json::from_str(&s).ok()),
                     destination_path: r.get(8)?,
                     dest_volume_id: r.get(9)?,
+                    output_mode: out_mode_s
+                        .as_deref()
+                        .map(OutputMode::from_str)
+                        .unwrap_or_default(),
+                    replace_behavior: rep_beh_s
+                        .as_deref()
+                        .map(ReplaceBehavior::from_str)
+                        .unwrap_or_default(),
+                    staged_path: if staged_exists { staged_raw } else { None },
+                    staged_bytes: if staged_exists {
+                        staged_sz_raw.map(|v| v.max(0) as u64)
+                    } else {
+                        None
+                    },
                     recipe: serde_json::from_str(&rec_s)
                         .unwrap_or_else(|_| EncodeRecipe::archive_balanced_default()),
                     compat_overrides: serde_json::from_str(&ov_s).unwrap_or_default(),
@@ -1118,6 +1259,34 @@ impl Database {
             })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
+                    staged_file_id, staged_size, final_path, state
+             FROM publish_intents
+             WHERE job_id = ?1
+             ORDER BY updated_at DESC
+             LIMIT 1",
+            params![job_id],
+            |r| {
+                Ok(PublishIntentRecord {
+                    intent_id: r.get(0)?,
+                    job_id: r.get(1)?,
+                    attempt_id: r.get(2)?,
+                    staged_path: r.get(3)?,
+                    staged_volume_id: r.get(4)?,
+                    staged_file_id: r.get(5)?,
+                    staged_size: r.get::<_, i64>(6)? as u64,
+                    final_path: r.get(7)?,
+                    state: r.get(8)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
     }
 
     pub fn upsert_job(&self, j: &JobRecord) -> Result<(), String> {
@@ -1157,6 +1326,7 @@ impl Database {
             "INSERT INTO jobs (
                 id, queue_id, batch_id, position, source_path, source_rel_path,
                 source_root, source_fingerprint_json, destination_path, dest_volume_id,
+                output_mode, replace_behavior,
                 recipe_json, compat_overrides_json, status, status_reason,
                 probe_json, plan_json, input_bytes, output_bytes, error_stage,
                 error_message, diagnostics, cleanup_policy, cleanup_outcome,
@@ -1165,9 +1335,10 @@ impl Database {
                 updated_at, completed_at, output_fingerprint_json
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-                ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-                ?31, ?32, ?33, ?34
+                ?11, ?12,
+                ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
+                ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
+                ?33, ?34, ?35, ?36
             )
             ON CONFLICT(id) DO UPDATE SET
                 queue_id = excluded.queue_id,
@@ -1179,6 +1350,8 @@ impl Database {
                 source_fingerprint_json = excluded.source_fingerprint_json,
                 destination_path = excluded.destination_path,
                 dest_volume_id = excluded.dest_volume_id,
+                output_mode = excluded.output_mode,
+                replace_behavior = excluded.replace_behavior,
                 recipe_json = excluded.recipe_json,
                 compat_overrides_json = excluded.compat_overrides_json,
                 status = excluded.status,
@@ -1213,6 +1386,8 @@ impl Database {
                 fp_s,
                 j.destination_path,
                 j.dest_volume_id,
+                j.output_mode.as_str(),
+                j.replace_behavior.as_str(),
                 rec_s,
                 ov_s,
                 j.status.as_str(),
@@ -1324,6 +1499,34 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
+    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
+                    staged_file_id, staged_size, final_path, state
+             FROM publish_intents
+             WHERE job_id = ?1
+             ORDER BY updated_at DESC
+             LIMIT 1",
+            params![job_id],
+            |r| {
+                Ok(PublishIntentRecord {
+                    intent_id: r.get(0)?,
+                    job_id: r.get(1)?,
+                    attempt_id: r.get(2)?,
+                    staged_path: r.get(3)?,
+                    staged_volume_id: r.get(4)?,
+                    staged_file_id: r.get(5)?,
+                    staged_size: r.get::<_, i64>(6)? as u64,
+                    final_path: r.get(7)?,
+                    state: r.get(8)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
     pub fn save_publish_intent(
         &self,
         intent_id: &str,
@@ -1407,6 +1610,34 @@ impl Database {
             })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
+                    staged_file_id, staged_size, final_path, state
+             FROM publish_intents
+             WHERE job_id = ?1
+             ORDER BY updated_at DESC
+             LIMIT 1",
+            params![job_id],
+            |r| {
+                Ok(PublishIntentRecord {
+                    intent_id: r.get(0)?,
+                    job_id: r.get(1)?,
+                    attempt_id: r.get(2)?,
+                    staged_path: r.get(3)?,
+                    staged_volume_id: r.get(4)?,
+                    staged_file_id: r.get(5)?,
+                    staged_size: r.get::<_, i64>(6)? as u64,
+                    final_path: r.get(7)?,
+                    state: r.get(8)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
     }
 
     pub fn save_cleanup_consent(
@@ -1518,6 +1749,34 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
+    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
+                    staged_file_id, staged_size, final_path, state
+             FROM publish_intents
+             WHERE job_id = ?1
+             ORDER BY updated_at DESC
+             LIMIT 1",
+            params![job_id],
+            |r| {
+                Ok(PublishIntentRecord {
+                    intent_id: r.get(0)?,
+                    job_id: r.get(1)?,
+                    attempt_id: r.get(2)?,
+                    staged_path: r.get(3)?,
+                    staged_volume_id: r.get(4)?,
+                    staged_file_id: r.get(5)?,
+                    staged_size: r.get::<_, i64>(6)? as u64,
+                    final_path: r.get(7)?,
+                    state: r.get(8)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
     pub fn get_volume_reserve(&self, volume_id: &str) -> Result<Option<u64>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let v: Option<i64> = conn
@@ -1554,6 +1813,34 @@ impl Database {
             })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
+                    staged_file_id, staged_size, final_path, state
+             FROM publish_intents
+             WHERE job_id = ?1
+             ORDER BY updated_at DESC
+             LIMIT 1",
+            params![job_id],
+            |r| {
+                Ok(PublishIntentRecord {
+                    intent_id: r.get(0)?,
+                    job_id: r.get(1)?,
+                    attempt_id: r.get(2)?,
+                    staged_path: r.get(3)?,
+                    staged_volume_id: r.get(4)?,
+                    staged_file_id: r.get(5)?,
+                    staged_size: r.get::<_, i64>(6)? as u64,
+                    final_path: r.get(7)?,
+                    state: r.get(8)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
     }
 
     pub fn get_workspace_json<T: serde::de::DeserializeOwned + Default>(&self, key: &str) -> Result<T, String> {
@@ -1827,6 +2114,34 @@ impl Database {
             })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
+                    staged_file_id, staged_size, final_path, state
+             FROM publish_intents
+             WHERE job_id = ?1
+             ORDER BY updated_at DESC
+             LIMIT 1",
+            params![job_id],
+            |r| {
+                Ok(PublishIntentRecord {
+                    intent_id: r.get(0)?,
+                    job_id: r.get(1)?,
+                    attempt_id: r.get(2)?,
+                    staged_path: r.get(3)?,
+                    staged_volume_id: r.get(4)?,
+                    staged_file_id: r.get(5)?,
+                    staged_size: r.get::<_, i64>(6)? as u64,
+                    final_path: r.get(7)?,
+                    state: r.get(8)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
     }
 }
 

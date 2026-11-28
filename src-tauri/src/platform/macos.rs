@@ -1,4 +1,4 @@
-use crate::models::{ProcessPriority, SourceFingerprint};
+use crate::models::{DestinationCapabilities, ProcessPriority, SourceFingerprint};
 use crate::platform::common::{compute_head_tail_hash, verify_no_symlink_ancestors_impl};
 use crate::platform::{PublishOutcome, VolumeStats};
 use std::ffi::{c_void, CStr, CString};
@@ -448,6 +448,44 @@ pub fn check_trash_support(path: &Path) -> Result<bool, String> {
     } else {
         Err(format!("Filesystem '{fstype}' lacks verified recoverable Trash guarantee."))
     }
+}
+
+pub fn destination_capabilities(path: &Path) -> Result<DestinationCapabilities, String> {
+    let existing = nearest_existing_ancestor(path)
+        .ok_or_else(|| format!("Path does not exist: {}", path.display()))?;
+    let c_path = CString::new(existing.as_os_str().as_encoded_bytes())
+        .map_err(|_| "Path contains NUL".to_string())?;
+    let mut sfs: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(c_path.as_ptr(), &mut sfs) } != 0 {
+        return Err(format!("statfs failed: {}", std::io::Error::last_os_error()));
+    }
+    let fs_type = unsafe { CStr::from_ptr(sfs.f_fstypename.as_ptr()) }
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    let mount_point = unsafe { CStr::from_ptr(sfs.f_mntonname.as_ptr()) }
+        .to_string_lossy()
+        .to_string();
+    let is_local = (sfs.f_flags & libc::MNT_LOCAL as u32) != 0;
+    let is_read_only = (sfs.f_flags & libc::MNT_RDONLY as u32) != 0;
+    let is_writable = !is_read_only && unsafe { libc::access(c_path.as_ptr(), libc::W_OK) } == 0;
+    let supports_atomic_no_replace =
+        is_local && !is_read_only && matches!(fs_type.as_str(), "apfs" | "hfs");
+    let (supports_trash, trash_note) = match check_trash_support(path) {
+        Ok(true) => (true, None),
+        Ok(false) => (false, Some("Recoverable Trash is unavailable on this volume.".to_string())),
+        Err(e) => (false, Some(e)),
+    };
+
+    Ok(DestinationCapabilities {
+        fs_type,
+        mount_point,
+        is_local,
+        is_read_only,
+        is_writable,
+        supports_atomic_no_replace,
+        supports_trash,
+        trash_note,
+    })
 }
 
 /// Identity-checked, recoverable-only OS Trash move on macOS.

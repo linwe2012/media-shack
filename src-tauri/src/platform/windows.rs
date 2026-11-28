@@ -1,4 +1,4 @@
-use crate::models::{ProcessPriority, SourceFingerprint};
+use crate::models::{DestinationCapabilities, ProcessPriority, SourceFingerprint};
 use crate::platform::{PublishOutcome, VolumeStats};
 use std::fs::File;
 use std::os::windows::ffi::OsStrExt;
@@ -335,4 +335,62 @@ pub fn move_to_recoverable_trash_verified(
 ) -> Result<(), String> {
     let _ = (source_path, expected);
     Err("Recoverable-only OS Trash is disabled on Windows until strict Recycle Bin policy and FOFX_RECYCLEONDELETE enforcement are enabled; original file preserved.".to_string())
+}
+
+pub fn destination_capabilities(path: &Path) -> Result<DestinationCapabilities, String> {
+    let existing = nearest_existing_ancestor(path)
+        .ok_or_else(|| format!("Path does not exist: {}", path.display()))?;
+    let w_path = to_wide_null(existing.as_os_str());
+    let mut vol_root = vec![0u16; 260];
+    let ok = unsafe { GetVolumePathNameW(w_path.as_ptr(), vol_root.as_mut_ptr(), vol_root.len() as u32) };
+    if ok == 0 {
+        return Err(format!(
+            "GetVolumePathNameW failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    let mut flags: u32 = 0;
+    let mut fs_buf = vec![0u16; 64];
+    let info_ok = unsafe {
+        GetVolumeInformationW(
+            vol_root.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut flags,
+            fs_buf.as_mut_ptr(),
+            fs_buf.len() as u32,
+        )
+    };
+    if info_ok == 0 {
+        return Err(format!(
+            "GetVolumeInformationW failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    const FILE_READ_ONLY_VOLUME: u32 = 0x0008_0000;
+    let fs_end = fs_buf.iter().position(|&c| c == 0).unwrap_or(fs_buf.len());
+    let fs_type = String::from_utf16_lossy(&fs_buf[..fs_end]).to_ascii_lowercase();
+    let mp_end = vol_root.iter().position(|&c| c == 0).unwrap_or(vol_root.len());
+    let mount_point = String::from_utf16_lossy(&vol_root[..mp_end]);
+    let is_local = !mount_point.starts_with("\\\\");
+    let is_read_only = (flags & FILE_READ_ONLY_VOLUME) != 0;
+    let is_writable = !is_read_only
+        && std::fs::metadata(&existing)
+            .map(|m| !m.permissions().readonly())
+            .unwrap_or(true);
+    let trash_note = check_trash_support(path).err();
+
+    Ok(DestinationCapabilities {
+        fs_type,
+        mount_point,
+        is_local,
+        is_read_only,
+        is_writable,
+        supports_atomic_no_replace: !is_read_only,
+        supports_trash: false,
+        trash_note,
+    })
 }

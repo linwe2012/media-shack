@@ -226,6 +226,118 @@ impl Default for CleanupPolicy {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputMode {
+    #[default]
+    TemplateFolder,
+    ReplaceOriginal,
+}
+
+impl OutputMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OutputMode::TemplateFolder => "template_folder",
+            OutputMode::ReplaceOriginal => "replace_original",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "replace_original" => OutputMode::ReplaceOriginal,
+            _ => OutputMode::TemplateFolder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplaceBehavior {
+    #[default]
+    AutoDeleteOriginal,
+    KeepForComparison,
+}
+
+impl ReplaceBehavior {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReplaceBehavior::AutoDeleteOriginal => "auto_delete_original",
+            ReplaceBehavior::KeepForComparison => "keep_for_comparison",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "keep_for_comparison" => ReplaceBehavior::KeepForComparison,
+            _ => ReplaceBehavior::AutoDeleteOriginal,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputConfig {
+    #[serde(default)]
+    pub mode: OutputMode,
+    #[serde(default)]
+    pub replace_behavior: ReplaceBehavior,
+    #[serde(default)]
+    pub path_template: Option<String>,
+    #[serde(default)]
+    pub regex_find: Option<String>,
+    #[serde(default)]
+    pub regex_replace: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DestinationCapabilities {
+    pub fs_type: String,
+    pub mount_point: String,
+    pub is_local: bool,
+    pub is_read_only: bool,
+    pub is_writable: bool,
+    pub supports_atomic_no_replace: bool,
+    pub supports_trash: bool,
+    pub trash_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputPathPreviewItem {
+    pub job_id: String,
+    pub source_path: String,
+    pub destination_path: String,
+    pub collides_with_source: bool,
+    pub target_exists: bool,
+    pub fs_type: Option<String>,
+    pub atomic_no_replace_supported: Option<bool>,
+    pub trash_supported: Option<bool>,
+    pub warnings: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueuePreflightReport {
+    pub ok: bool,
+    pub regex_error: Option<String>,
+    pub blocking_errors: Vec<String>,
+    pub warnings: Vec<String>,
+    pub previews: Vec<OutputPathPreviewItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StagedOutputInfo {
+    pub job_id: String,
+    pub source_path: String,
+    pub destination_path: String,
+    pub staged_path: Option<String>,
+    pub staged_exists: bool,
+    pub staged_bytes: u64,
+    pub target_exists: bool,
+    pub source_exists: bool,
+    pub error_stage: Option<String>,
+    pub error_message: Option<String>,
+    pub capabilities: Option<DestinationCapabilities>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
     pub id: String,
@@ -234,6 +346,8 @@ pub struct Profile {
     pub priority: ProcessPriority,
     pub recursive_import: bool,
     pub destination_root: Option<String>,
+    #[serde(default)]
+    pub output_config: OutputConfig,
     pub keep_awake: bool,
     pub error_policy: ErrorPolicy,
     pub min_savings_enabled: bool,
@@ -274,6 +388,8 @@ pub struct QueueTab {
     pub priority: ProcessPriority,
     pub recursive_import: bool,
     pub destination_root: Option<String>,
+    #[serde(default)]
+    pub output_config: OutputConfig,
     pub keep_awake: bool,
     pub error_policy: ErrorPolicy,
     pub min_savings_enabled: bool,
@@ -596,6 +712,14 @@ pub struct JobRecord {
     pub source_fingerprint: Option<SourceFingerprint>,
     pub destination_path: String,
     pub dest_volume_id: Option<String>,
+    #[serde(default)]
+    pub output_mode: OutputMode,
+    #[serde(default)]
+    pub replace_behavior: ReplaceBehavior,
+    #[serde(default)]
+    pub staged_path: Option<String>,
+    #[serde(default)]
+    pub staged_bytes: Option<u64>,
     pub recipe: EncodeRecipe,
     pub compat_overrides: CompatOverrides,
     pub status: JobStatus,

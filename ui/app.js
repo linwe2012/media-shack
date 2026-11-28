@@ -70,6 +70,22 @@
   let liveSpeedJobId = null;
   let liveSpeedHistory = [];
   let telemetryChartMetric = "speed"; // "speed" | "ratio" | "compare"
+  let lastPreflightReport = null;
+  let lastPreflightKey = "";
+  let preflightTimer = null;
+
+  function defaultOutputConfig() {
+    return {
+      mode: "template_folder",
+      replace_behavior: "auto_delete_original",
+      path_template: null,
+      regex_find: null,
+      regex_replace: null,
+    };
+  }
+  function isPublishRecoverableJob(j) {
+    return Boolean(j && (j.staged_path || j.error_stage === "publishing" || j.error_stage === "confirm_replace"));
+  }
   const encodeFilters = {
     search: "",
     searchMode: "name", // "name" | "path" | "regex"
@@ -2245,12 +2261,21 @@
         acts.appendChild(b);
       }
       if (["failed", "interrupted", "needs_attention"].includes(j.status) || (j.status === "canceled" && j.status_reason !== "Not selected")) {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = "btn btn-sm btn-secondary";
-        b.textContent = "Retry";
-        b.onclick = (e) => { e.stopPropagation(); invoke("retry_jobs", { jobIds: [j.id] }); };
-        acts.appendChild(b);
+        if (isPublishRecoverableJob(j)) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "btn btn-sm btn-primary";
+          b.textContent = "Resolve…";
+          b.onclick = (e) => { e.stopPropagation(); openResolveStagedModal(j.id); };
+          acts.appendChild(b);
+        } else {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "btn btn-sm btn-secondary";
+          b.textContent = "Retry";
+          b.onclick = (e) => { e.stopPropagation(); invoke("retry_jobs", { jobIds: [j.id] }); };
+          acts.appendChild(b);
+        }
       }
       if (canChk || ["ready", "queued", "needs_attention", "interrupted", "failed", "completed", "below_savings_target"].includes(j.status)) {
         const rm = document.createElement("button");
@@ -2275,22 +2300,36 @@
       if (j.status === "needs_attention" && j.error_message) {
         const errTr = document.createElement("tr");
         errTr.className = "tc-subrow";
+        const recoverable = isPublishRecoverableJob(j);
         const canMkv = j.plan?.issues?.some((iss) => iss.can_use_mkv);
         errTr.innerHTML = `
           <td colspan="10">
             <div class="inline-row" style="justify-content:space-between;gap:8px;flex-wrap:wrap;">
               <span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span>
               <div class="inline-row" style="gap:6px;">
-                <button type="button" class="btn btn-sm btn-secondary" data-fwd-rep="${j.id}">Send to Repair</button>
-                ${canMkv ? `<button type="button" class="btn btn-sm btn-primary" data-fix-mkv="${j.id}">Use MKV</button>` : ""}
+                ${recoverable ? `
+                  <button type="button" class="btn btn-sm btn-secondary" data-open-staged="${j.id}">Open Staged Folder</button>
+                  <button type="button" class="btn btn-sm btn-primary" data-resolve-staged="${j.id}">Resolve / Save…</button>
+                ` : `
+                  <button type="button" class="btn btn-sm btn-secondary" data-fwd-rep="${j.id}">Send to Repair</button>
+                  ${canMkv ? `<button type="button" class="btn btn-sm btn-primary" data-fix-mkv="${j.id}">Use MKV</button>` : ""}
+                `}
               </div>
             </div>
           </td>
         `;
-        errTr.querySelector("[data-fwd-rep]").onclick = (e) => {
+        errTr.querySelector("[data-open-staged]")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          invoke("reveal_staged_file", { jobId: j.id }).catch((err) => showToast(String(err), "warn"));
+        });
+        errTr.querySelector("[data-resolve-staged]")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openResolveStagedModal(j.id);
+        });
+        errTr.querySelector("[data-fwd-rep]")?.addEventListener("click", (e) => {
           e.stopPropagation();
           openForwardModal([j.id], "repair", "file needing repair", false);
-        };
+        });
         errTr.querySelector("[data-fix-mkv]")?.addEventListener("click", (e) => {
           e.stopPropagation();
           invoke("update_pending_job", { jobId: j.id, patch: { recipe: { ...j.recipe, container: "mkv" } } });
@@ -3105,7 +3144,9 @@
           <div class="inline-row" style="justify-content:flex-end;gap:4px;">
             ${j.status === "encoding" ? `<button type="button" class="btn btn-sm btn-secondary qp-act-live">Live</button>` : ""}
             ${j.status === "completed" ? `<button type="button" class="btn btn-sm btn-secondary qp-act-show">Show</button>` : ""}
-            ${["failed", "interrupted", "canceled", "needs_attention"].includes(j.status) ? `<button type="button" class="btn btn-sm btn-secondary qp-act-retry">Retry</button>` : ""}
+            ${isPublishRecoverableJob(j)
+              ? `${j.staged_path || j.error_stage === "confirm_replace" ? `<button type="button" class="btn btn-sm btn-secondary qp-act-cmp-staged">Compare</button>` : ""}<button type="button" class="btn btn-sm btn-primary qp-act-resolve">Resolve…</button>`
+              : (["failed", "interrupted", "canceled", "needs_attention"].includes(j.status) ? `<button type="button" class="btn btn-sm btn-secondary qp-act-retry">Retry</button>` : "")}
             ${!isBusy ? `<button type="button" class="btn btn-sm btn-ghost qp-act-deq" title="Remove from Queue (keeps file in Video List)">Remove</button>` : ""}
           </div>
         </td>
@@ -3136,6 +3177,15 @@
       });
       tr.querySelector(".qp-act-live")?.addEventListener("click", () => openLivePreviewModal(j.id));
       tr.querySelector(".qp-act-show")?.addEventListener("click", () => invoke("reveal_output", { path: j.destination_path }));
+      tr.querySelector(".qp-act-cmp-staged")?.addEventListener("click", async () => {
+        try {
+          const info = await invoke("get_staged_output_info", { jobId: j.id });
+          openStagedCompareModal(info);
+        } catch (err) {
+          showToast(String(err), "warn");
+        }
+      });
+      tr.querySelector(".qp-act-resolve")?.addEventListener("click", () => openResolveStagedModal(j.id));
       tr.querySelector(".qp-act-retry")?.addEventListener("click", () => invoke("retry_jobs", { jobIds: [j.id] }));
       tr.querySelector(".qp-act-deq")?.addEventListener("click", () => {
         queueCheckedIds.delete(j.id);
@@ -3148,7 +3198,13 @@
       if (["failed", "needs_attention"].includes(j.status) && j.error_message) {
         const errRow = document.createElement("tr");
         errRow.className = "tc-subrow";
-        errRow.innerHTML = `<td colspan="8"><span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span></td>`;
+        if (isPublishRecoverableJob(j)) {
+          errRow.innerHTML = `<td colspan="8"><div class="inline-row" style="justify-content:space-between;gap:8px;flex-wrap:wrap;"><span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span><div class="inline-row" style="gap:6px;"><button type="button" class="btn btn-sm btn-secondary qp-err-finder">Open Staged Folder</button><button type="button" class="btn btn-sm btn-primary qp-err-resolve">Choose How to Save…</button></div></div></td>`;
+          errRow.querySelector(".qp-err-finder")?.addEventListener("click", () => invoke("reveal_staged_file", { jobId: j.id }).catch((e) => showToast(String(e), "warn")));
+          errRow.querySelector(".qp-err-resolve")?.addEventListener("click", () => openResolveStagedModal(j.id));
+        } else {
+          errRow.innerHTML = `<td colspan="8"><span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span></td>`;
+        }
         tbody.appendChild(errRow);
       }
     });
@@ -4153,13 +4209,38 @@
     }
     $("btn-delete-named-preset").classList.toggle("hidden", !selNp.value);
 
+    const outCfg = { ...defaultOutputConfig(), ...(q.output_config || {}) };
+    const isReplace = outCfg.mode === "replace_original";
+    document.querySelectorAll("#seg-output-mode [data-out-mode]").forEach((btn) => {
+      btn.classList.toggle("active", btn.getAttribute("data-out-mode") === outCfg.mode);
+    });
+    $("wrap-out-folder")?.classList.toggle("hidden", isReplace);
+    $("wrap-out-replace")?.classList.toggle("hidden", !isReplace);
+    $("wrap-cleanup-policy")?.classList.toggle("hidden", isReplace);
+    if ($("sel-replace-behavior")) $("sel-replace-behavior").value = outCfg.replace_behavior || "auto_delete_original";
+    if ($("inp-out-template") && document.activeElement !== $("inp-out-template")) {
+      $("inp-out-template").value = outCfg.path_template || "";
+    }
+    if ($("inp-out-regex-find") && document.activeElement !== $("inp-out-regex-find")) {
+      $("inp-out-regex-find").value = outCfg.regex_find || "";
+    }
+    if ($("inp-out-regex-replace") && document.activeElement !== $("inp-out-regex-replace")) {
+      $("inp-out-regex-replace").value = outCfg.regex_replace || "";
+    }
+    const curTmpl = outCfg.path_template || "";
+    document.querySelectorAll(".out-chip-btn[data-out-tmpl]").forEach((btn) => {
+      btn.classList.toggle("active", (btn.getAttribute("data-out-tmpl") || "") === curTmpl);
+    });
+
     $("lbl-dest-root").textContent = q.destination_root || "Same folder as source";
+    $("btn-reset-dest-root")?.classList.toggle("hidden", !q.destination_root);
     const vol = findQueueVolumeInfo(q);
     $("lbl-dest-space").textContent = vol ? `${fmtBytes(vol.free_bytes)} free (${vol.mount_point})` : "Auto";
     if (vol && vol.total_bytes > 0) {
       const usedPct = Math.min(100, Math.max(4, Math.round(((vol.total_bytes - vol.free_bytes) / vol.total_bytes) * 100)));
       $("disk-bar-fill").style.width = `${usedPct}%`;
     }
+    schedulePreflightPreview(q, outCfg);
 
     $("sel-cleanup-policy").value = q.cleanup_policy;
     $("chk-min-savings").checked = q.min_savings_enabled;
@@ -4181,6 +4262,7 @@
     }
 
     const info = jobVideoInfo(j);
+    const recoverable = isPublishRecoverableJob(j);
     el.innerHTML = `
       <div class="setup-card">
         <span class="setup-kicker">Selected Job</span>
@@ -4193,6 +4275,18 @@
             : `<button type="button" id="jd-fwd" class="btn btn-sm btn-secondary" style="flex:1;">Forward →</button>`}
         </div>
       </div>
+
+      ${recoverable ? `
+        <div class="setup-card" style="border-color:rgba(245,158,11,0.45);background:rgba(245,158,11,0.07);">
+          <span class="setup-kicker">${j.error_stage === "confirm_replace" ? "Ready to Compare &amp; Finalize" : "Staged Output Preserved"}</span>
+          <div style="font-size:11.5px;line-height:1.4;margin-bottom:6px;">${escapeHtml(j.error_message || "Encoded output is saved and waiting for your decision.")}</div>
+          ${j.staged_path ? `<div class="mono muted" style="font-size:10px;word-break:break-all;margin-bottom:6px;">${escapeHtml(j.staged_path)}${j.staged_bytes ? ` (${fmtBytes(j.staged_bytes)})` : ""}</div>` : ""}
+          <div class="inline-row" style="gap:6px;flex-wrap:wrap;">
+            <button type="button" id="jd-resolve-staged" class="btn btn-sm btn-primary" style="flex:1;">Resolve / Save…</button>
+            <button type="button" id="jd-reveal-staged" class="btn btn-sm btn-secondary">Finder</button>
+          </div>
+        </div>
+      ` : ""}
 
       <div class="setup-card">
         <div class="setup-card-head">
@@ -4223,6 +4317,8 @@
 
     el.querySelector("#jd-preview").onclick = () => openSamplePreviewModal(j);
     el.querySelector("#jd-live")?.addEventListener("click", () => openLivePreviewModal(j.id));
+    el.querySelector("#jd-resolve-staged")?.addEventListener("click", () => openResolveStagedModal(j.id));
+    el.querySelector("#jd-reveal-staged")?.addEventListener("click", () => invoke("reveal_staged_file", { jobId: j.id }).catch((e) => showToast(String(e), "warn")));
     el.querySelector("#jd-fwd")?.addEventListener("click", () => {
       openForwardModal([j.id], j.status === "needs_attention" ? "repair" : "explore", "selected file", j.status === "completed");
     });
@@ -4890,6 +4986,7 @@
     if (!q) return;
     const patch = {
       recipe: { ...q.recipe }, priority: q.priority, recursive_import: q.recursive_import, destination_root: q.destination_root,
+      output_config: { ...defaultOutputConfig(), ...(q.output_config || {}) },
       keep_awake: q.keep_awake, error_policy: q.error_policy, min_savings_enabled: q.min_savings_enabled, min_savings_pct: q.min_savings_pct,
       cleanup_policy: q.cleanup_policy, full_decode_verify: q.full_decode_verify,
     };
@@ -5194,6 +5291,286 @@
     };
     openSampleRefresh = draw;
     draw();
+  }
+
+  function renderPreflightBox(report, q) {
+    const box = $("out-preflight-box");
+    const statusEl = $("lbl-preflight-status");
+    const sampleEl = $("lbl-out-preview-sample");
+    if (!box || !statusEl || !sampleEl) return;
+
+    box.classList.remove("has-err", "has-warn");
+    if (!report) {
+      statusEl.className = "badge";
+      statusEl.textContent = "Preflight pending";
+      sampleEl.textContent = "Add files to preview resolved paths";
+      return;
+    }
+
+    if (!report.ok || (report.blocking_errors && report.blocking_errors.length > 0)) {
+      box.classList.add("has-err");
+      statusEl.className = "badge badge-err";
+      statusEl.textContent = `${report.blocking_errors.length} preflight error(s)`;
+      sampleEl.textContent = report.regex_error || report.blocking_errors[0] || "Fix destination settings";
+      return;
+    }
+
+    const first = report.previews && report.previews[0];
+    if (report.warnings && report.warnings.length > 0) {
+      box.classList.add("has-warn");
+      statusEl.className = "badge badge-warn";
+      statusEl.textContent = first?.fs_type ? `Ready · ${first.fs_type.toUpperCase()} (safe fallback)` : "Preflight warnings";
+    } else {
+      statusEl.className = "badge badge-ok";
+      statusEl.textContent = first?.fs_type ? `Ready · ${first.fs_type.toUpperCase()}` : "Preflight OK";
+    }
+    if (first) {
+      sampleEl.textContent = `→ ${first.destination_path}`;
+      sampleEl.title = first.destination_path;
+    } else {
+      sampleEl.textContent = q?.output_config?.mode === "replace_original" ? "Will replace originals in source folder" : "No waiting files in tab";
+    }
+  }
+
+  function schedulePreflightPreview(q, overrideCfg) {
+    if (!q || q.tab_type !== "encode") return;
+    const cfg = overrideCfg || q.output_config || defaultOutputConfig();
+    const jobsCount = (snapshot?.jobs || []).filter((j) => j.queue_id === q.id && !["completed", "below_savings_target"].includes(j.status)).length;
+    const key = JSON.stringify([q.id, q.destination_root || "", q.recipe?.container, q.recipe?.codec, q.recipe?.crf, q.cleanup_policy, cfg, jobsCount]);
+    if (key === lastPreflightKey && lastPreflightReport) {
+      renderPreflightBox(lastPreflightReport, q);
+      return;
+    }
+    clearTimeout(preflightTimer);
+    preflightTimer = setTimeout(async () => {
+      try {
+        const rep = await invoke("check_queue_preflight", {
+          queueId: q.id,
+          outputConfigOverride: cfg,
+          destinationRootOverride: q.destination_root || null,
+        });
+        lastPreflightKey = key;
+        lastPreflightReport = rep;
+        renderPreflightBox(rep, q);
+      } catch (err) {
+        lastPreflightReport = { ok: false, regex_error: String(err), blocking_errors: [String(err)], warnings: [], previews: [] };
+        renderPreflightBox(lastPreflightReport, q);
+      }
+    }, 180);
+  }
+
+  async function openPreflightPreviewModal(q) {
+    if (!q) return;
+    const rep = await invoke("check_queue_preflight", {
+      queueId: q.id,
+      outputConfigOverride: q.output_config || defaultOutputConfig(),
+      destinationRootOverride: q.destination_root || null,
+    });
+    const wrap = document.createElement("div");
+    const errHtml = rep.blocking_errors?.length
+      ? `<div class="banner-card warn" style="border-color:rgba(239,68,68,0.45);background:rgba(239,68,68,0.08);margin-bottom:10px;"><div><strong>Blocking Preflight Issues:</strong><ul style="margin:4px 0 0 18px;padding:0;font-size:12px;">${rep.blocking_errors.map((e) => `<li>${escapeHtml(e)}</li>`).join("")}</ul></div></div>`
+      : "";
+    const warnHtml = rep.warnings?.length
+      ? `<div class="banner-card warn" style="margin-bottom:10px;"><div><strong>Filesystem &amp; Safety Advisories:</strong><ul style="margin:4px 0 0 18px;padding:0;font-size:12px;">${rep.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul></div></div>`
+      : "";
+    const rows = (rep.previews || []).map((p) => `
+      <tr>
+        <td class="mono" style="font-size:11px;word-break:break-all;">${escapeHtml(p.source_path)}</td>
+        <td class="mono" style="font-size:11px;word-break:break-all;${p.error ? "color:var(--danger,#ef4444);" : ""}">${escapeHtml(p.destination_path)}</td>
+        <td style="font-size:11px;white-space:nowrap;">${p.fs_type ? escapeHtml(p.fs_type.toUpperCase()) : "—"}${p.atomic_no_replace_supported === false ? " (safe fallback)" : ""}</td>
+        <td style="font-size:11px;">${p.error ? `<span class="badge badge-err">${escapeHtml(p.error)}</span>` : (p.target_exists ? `<span class="badge badge-warn">${q.output_config?.mode === "replace_original" ? "Replace" : "Exists"}</span>` : `<span class="badge badge-ok">Ready</span>`)}</td>
+      </tr>
+    `).join("");
+
+    wrap.innerHTML = `
+      ${errHtml}
+      ${warnHtml}
+      ${rep.previews?.length ? `
+        <div style="max-height:52vh;overflow:auto;">
+          <table class="transcode-table">
+            <thead><tr><th>Source</th><th>Resolved Output Path</th><th>FS</th><th>Check</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      ` : `<p class="muted">No pending files in this tab yet.</p>`}
+    `;
+    openModalEl("Preflight & Output Path Preview", wrap, [{ label: "Close", cls: "btn btn-primary", onClick: closeModal }], { wide: true });
+  }
+
+  async function openStagedCompareModal(info) {
+    const compPath = info.staged_exists && info.staged_path ? info.staged_path : info.destination_path;
+    if (!compPath) return showToast("No encoded file path available to compare.", "warn");
+    const jobRec = (snapshot?.jobs || []).find((x) => x.id === info.job_id);
+    const dur = Math.max(2, Number(jobRec?.probe?.format?.duration_secs || 60));
+    let seekOffset = Math.min(dur * 0.25, Math.max(0, dur - 2));
+    let zoom100 = false;
+    let soloPane = null;
+
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `
+      <div class="inline-row" style="gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+        <span class="muted tabular-nums" style="font-size:12px;">Position:</span>
+        <input id="stg-cmp-seek" type="range" min="0" max="${Math.max(1, dur - 0.5).toFixed(1)}" step="0.5" value="${seekOffset.toFixed(1)}" style="flex:1;min-width:140px;" />
+        <span id="stg-cmp-ts" class="mono tabular-nums" style="font-size:12px;">${fmtDuration(seekOffset)} / ${fmtDuration(dur)}</span>
+        <button id="stg-cmp-zoom" class="btn btn-sm" type="button">100%</button>
+        <label class="inline-row" style="gap:4px;font-size:12px;cursor:pointer;"><input type="checkbox" id="stg-cmp-delta" checked /> Show Delta</label>
+        <select id="stg-cmp-gain" style="width:74px;font-size:11px;"><option value="4" selected>4× diff</option><option value="8">8× diff</option><option value="16">16× diff</option></select>
+        <span id="stg-cmp-stats" class="muted tabular-nums" style="font-size:11px;"></span>
+      </div>
+      <div id="stg-cmp-grid" class="compare-grid cols-3">
+        <div id="stg-pane-orig" class="compare-pane"><div class="compare-label"><span>Original (${escapeHtml((info.source_path || "").split(/[/\\]/).pop() || "")})</span><button type="button" class="compare-pane-expand-btn" data-stg-solo="orig">Expand</button></div><img id="stg-img-orig" alt="Original frame" /></div>
+        <div id="stg-pane-enc" class="compare-pane"><div class="compare-label"><span>Encoded (${fmtBytes(info.staged_bytes || jobRec?.output_bytes || 0)})</span><button type="button" class="compare-pane-expand-btn" data-stg-solo="enc">Expand</button></div><img id="stg-img-enc" alt="Encoded frame" /></div>
+        <div id="stg-pane-delta" class="compare-pane"><div class="compare-label"><span>Delta Diff</span><button type="button" class="compare-pane-expand-btn" data-stg-solo="delta">Expand</button></div><img id="stg-img-delta" alt="Delta diff" /></div>
+      </div>
+    `;
+    openModalEl("Compare Original vs Encoded Output", wrap, [
+      { label: "Resolve Output…", cls: "btn btn-primary", onClick: () => openResolveStagedModal(info.job_id) },
+      { label: "Close", cls: "btn", onClick: closeModal },
+    ], { wide: true });
+
+    const grid = $("stg-cmp-grid");
+    const syncSolo = () => {
+      if (soloPane === "delta" && $("stg-pane-delta")?.classList.contains("hidden")) soloPane = null;
+      grid?.classList.toggle("has-solo", Boolean(soloPane));
+      for (const k of ["orig", "enc", "delta"]) {
+        $(`stg-pane-${k}`)?.classList.toggle("pane-solo", soloPane === k);
+        $(`stg-pane-${k}`)?.classList.toggle("zoom-100", zoom100);
+        const btn = wrap.querySelector(`[data-stg-solo="${k}"]`);
+        if (btn) btn.textContent = soloPane === k ? "Split View" : "Expand";
+      }
+    };
+    wrap.querySelectorAll("[data-stg-solo]").forEach((btn) => {
+      btn.onclick = () => {
+        const k = btn.getAttribute("data-stg-solo");
+        soloPane = soloPane === k ? null : k;
+        syncSolo();
+      };
+    });
+
+    const loadPair = async () => {
+      const showDelta = Boolean($("stg-cmp-delta")?.checked);
+      const gain = Number($("stg-cmp-gain")?.value || 4);
+      $("stg-cmp-ts").textContent = `${fmtDuration(seekOffset)} / ${fmtDuration(dur)}`;
+      const pair = await invoke("get_sample_comparison_pair", {
+        sourcePath: info.source_path,
+        encodedPath: compPath,
+        origTs: seekOffset,
+        encTs: seekOffset,
+        fullResolution: zoom100,
+        includeDelta: showDelta,
+        deltaGain: gain,
+      });
+      $("stg-img-orig").src = pair.orig_data_url;
+      $("stg-img-enc").src = pair.enc_data_url;
+      if (showDelta && pair.delta_data_url) {
+        $("stg-img-delta").src = pair.delta_data_url;
+        $("stg-pane-delta")?.classList.remove("hidden");
+        grid?.classList.add("cols-3");
+        $("stg-cmp-stats").textContent = `Diff MAE ${pair.mae_pct?.toFixed(2) ?? "—"}% · PSNR ${pair.psnr_db?.toFixed(1) ?? "—"} dB`;
+      } else {
+        $("stg-pane-delta")?.classList.add("hidden");
+        grid?.classList.remove("cols-3");
+        $("stg-cmp-stats").textContent = "";
+      }
+      syncSolo();
+    };
+    $("stg-cmp-seek")?.addEventListener("change", (e) => { seekOffset = Number(e.target.value); loadPair().catch((err) => showToast(String(err), "warn")); });
+    $("stg-cmp-seek")?.addEventListener("input", (e) => { seekOffset = Number(e.target.value); $("stg-cmp-ts").textContent = `${fmtDuration(seekOffset)} / ${fmtDuration(dur)}`; });
+    $("stg-cmp-zoom")?.addEventListener("click", () => { zoom100 = !zoom100; $("stg-cmp-zoom").textContent = zoom100 ? "Fit" : "100%"; loadPair().catch(() => {}); });
+    $("stg-cmp-delta")?.addEventListener("change", () => { $("stg-cmp-gain")?.classList.toggle("hidden", !$("stg-cmp-delta").checked); loadPair().catch(() => {}); });
+    $("stg-cmp-gain")?.addEventListener("change", () => loadPair().catch(() => {}));
+    loadPair().catch((err) => showToast(String(err), "warn"));
+  }
+
+  async function openResolveStagedModal(jobId) {
+    let info;
+    try {
+      info = await invoke("get_staged_output_info", { jobId });
+    } catch (err) {
+      return showToast(String(err), "warn");
+    }
+
+    const isConfirmSideBySide = info.error_stage === "confirm_replace" && !info.staged_exists && info.target_exists;
+    const capTxt = info.capabilities
+      ? `${info.capabilities.fs_type.toUpperCase()} · ${info.capabilities.mount_point}${info.capabilities.supports_atomic_no_replace ? " · Atomic move" : " · Fault-tolerant fallback"}${info.capabilities.supports_trash ? " · Trash OK" : " · No OS Trash"}`
+      : "Unknown destination filesystem";
+
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `
+      <div class="banner-card warn" style="margin-bottom:10px;">
+        <span style="font-size:12px;"><strong>${escapeHtml(info.error_message || "Output waiting for your decision.")}</strong></span>
+      </div>
+      <div class="resolve-card">
+        <div class="setup-kicker">Preserved Files (Not Deleted)</div>
+        <div style="font-size:11.5px;margin-top:4px;"><strong>Source:</strong> <span class="mono">${escapeHtml(info.source_path)}</span> ${info.source_exists ? "" : `<span class="badge badge-warn">missing</span>`}</div>
+        <div style="font-size:11.5px;margin-top:4px;"><strong>Planned Destination:</strong> <span class="mono">${escapeHtml(info.destination_path)}</span> ${info.target_exists ? `<span class="badge badge-warn">exists</span>` : ""}</div>
+        ${info.staged_path ? `<div style="font-size:11.5px;margin-top:4px;"><strong>Staged Output:</strong> <span class="mono">${escapeHtml(info.staged_path)}</span> ${info.staged_exists ? `<span class="badge badge-ok">${fmtBytes(info.staged_bytes)} ready</span>` : `<span class="badge badge-warn">not on disk</span>`}</div>` : ""}
+        <div class="muted" style="font-size:11px;margin-top:6px;">Filesystem: ${escapeHtml(capTxt)}</div>
+      </div>
+
+      <div class="resolve-card">
+        <div class="setup-kicker">Inspect &amp; Open in Finder / Explorer</div>
+        <div class="inline-row" style="gap:8px;flex-wrap:wrap;margin-top:6px;">
+          ${(info.staged_exists || info.target_exists) ? `<button type="button" id="res-compare" class="btn btn-sm btn-secondary">Compare Original vs Encoded</button>` : ""}
+          ${info.staged_exists ? `<button type="button" id="res-open-staged" class="btn btn-sm btn-secondary">Open Staged File in Finder</button>` : ""}
+          <button type="button" id="res-open-dest" class="btn btn-sm btn-secondary">Open Destination Folder</button>
+          <button type="button" id="res-open-src" class="btn btn-sm btn-ghost">Open Source Folder</button>
+        </div>
+      </div>
+
+      <div class="resolve-card">
+        <div class="setup-kicker">Choose How to Finish (Without Re-encoding)</div>
+        <label class="inline-row" style="gap:6px;font-size:12px;margin:6px 0 8px;cursor:pointer;">
+          <input type="checkbox" id="res-keep-backup" checked />
+          <span>Do not delete original file (keep original / <code>.orig</code> backup copy)</span>
+        </label>
+        <div class="resolve-actions-grid">
+          ${info.staged_exists ? `
+            <button type="button" id="res-save-as" class="btn btn-sm btn-primary">Save / Move to New Path…</button>
+            <button type="button" id="res-keep-both" class="btn btn-sm btn-secondary">Keep Both (Auto Name)</button>
+            <button type="button" id="res-replace-ft" class="btn btn-sm btn-secondary">Fault-Tolerant Replace Target</button>
+          ` : ""}
+          ${isConfirmSideBySide ? `
+            <button type="button" id="res-confirm-del" class="btn btn-sm btn-primary">Apply Replace / Original Setting</button>
+            <button type="button" id="res-keep-both" class="btn btn-sm btn-secondary">Keep Both Files</button>
+          ` : ""}
+          <button type="button" id="res-mark-done" class="btn btn-sm btn-ghost">I Moved It Manually (Mark Done)</button>
+          ${info.staged_exists ? `<button type="button" id="res-discard" class="btn btn-sm btn-danger-outline">Discard Staged &amp; Re-encode</button>` : ""}
+        </div>
+      </div>
+    `;
+
+    openModalEl("Resolve Encoded Output", wrap, [{ label: "Close", cls: "btn", onClick: closeModal }]);
+
+    const runAction = async (action, extra = {}) => {
+      const keepBackup = Boolean($("res-keep-backup")?.checked);
+      try {
+        await invoke("resolve_staged_publish", {
+          jobId,
+          action,
+          targetPath: extra.targetPath || null,
+          keepOriginalBackup: keepBackup,
+        });
+        closeModal();
+        showToast("Updated output resolution.", "success");
+      } catch (err) {
+        showToast(String(err), "warn");
+      }
+    };
+
+    wrap.querySelector("#res-compare")?.addEventListener("click", () => openStagedCompareModal(info));
+    wrap.querySelector("#res-open-staged")?.addEventListener("click", () => invoke("reveal_staged_file", { jobId }).catch((e) => showToast(String(e), "warn")));
+    wrap.querySelector("#res-open-dest")?.addEventListener("click", () => invoke("reveal_folder", { path: info.destination_path }).catch((e) => showToast(String(e), "warn")));
+    wrap.querySelector("#res-open-src")?.addEventListener("click", () => invoke("reveal_folder", { path: info.source_path }).catch((e) => showToast(String(e), "warn")));
+    wrap.querySelector("#res-save-as")?.addEventListener("click", async () => {
+      const picked = await dialog.save({ defaultPath: info.destination_path });
+      if (picked) await runAction("publish_no_replace", { targetPath: picked });
+    });
+    wrap.querySelector("#res-keep-both")?.addEventListener("click", () => runAction("keep_both"));
+    wrap.querySelector("#res-replace-ft")?.addEventListener("click", () => runAction("fault_tolerant_replace"));
+    wrap.querySelector("#res-confirm-del")?.addEventListener("click", () => runAction("confirm_delete_original"));
+    wrap.querySelector("#res-mark-done")?.addEventListener("click", () => runAction("mark_completed_manual"));
+    wrap.querySelector("#res-discard")?.addEventListener("click", () => runAction("discard_staged"));
   }
 
   async function openLivePreviewModal(jobId) {
@@ -5879,6 +6256,39 @@
     });
   });
   $("btn-choose-dest").onclick = async () => { const dir = await dialog.open({ directory: true }); if (dir) patchActiveQueueSettings((p) => { p.destination_root = dir; }); };
+  $("btn-reset-dest-root")?.addEventListener("click", () => patchActiveQueueSettings((p) => { p.destination_root = null; }));
+  document.querySelectorAll("#seg-output-mode [data-out-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.getAttribute("data-out-mode");
+      patchActiveQueueSettings((p) => { p.output_config = { ...(p.output_config || defaultOutputConfig()), mode }; });
+    });
+  });
+  $("sel-replace-behavior")?.addEventListener("change", (e) => {
+    patchActiveQueueSettings((p) => { p.output_config = { ...(p.output_config || defaultOutputConfig()), replace_behavior: e.target.value }; });
+  });
+  document.querySelectorAll(".out-chip-btn[data-out-tmpl]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const val = btn.getAttribute("data-out-tmpl") || "";
+      if ($("inp-out-template")) $("inp-out-template").value = val;
+      patchActiveQueueSettings((p) => { p.output_config = { ...(p.output_config || defaultOutputConfig()), path_template: val || null }; });
+    });
+  });
+  $("inp-out-template")?.addEventListener("change", (e) => {
+    const val = e.target.value.trim();
+    patchActiveQueueSettings((p) => { p.output_config = { ...(p.output_config || defaultOutputConfig()), path_template: val || null }; });
+  });
+  $("inp-out-regex-find")?.addEventListener("change", (e) => {
+    const val = e.target.value;
+    patchActiveQueueSettings((p) => { p.output_config = { ...(p.output_config || defaultOutputConfig()), regex_find: val.trim() ? val : null }; }).catch((err) => showToast(String(err), "warn"));
+  });
+  $("inp-out-regex-replace")?.addEventListener("change", (e) => {
+    const val = e.target.value;
+    patchActiveQueueSettings((p) => { p.output_config = { ...(p.output_config || defaultOutputConfig()), regex_replace: val !== "" ? val : null }; });
+  });
+  $("btn-preflight-preview")?.addEventListener("click", () => {
+    const q = activeQueue();
+    if (q) openPreflightPreviewModal(q).catch((err) => showToast(String(err), "warn"));
+  });
   $("btn-volume-reserve").onclick = () => {
     const vol = findQueueVolumeInfo(activeQueue());
     if (!vol) return showToast("Choose a destination folder first.", "info");
