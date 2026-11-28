@@ -778,34 +778,6 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
-    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
-                    staged_file_id, staged_size, final_path, state
-             FROM publish_intents
-             WHERE job_id = ?1
-             ORDER BY updated_at DESC
-             LIMIT 1",
-            params![job_id],
-            |r| {
-                Ok(PublishIntentRecord {
-                    intent_id: r.get(0)?,
-                    job_id: r.get(1)?,
-                    attempt_id: r.get(2)?,
-                    staged_path: r.get(3)?,
-                    staged_volume_id: r.get(4)?,
-                    staged_file_id: r.get(5)?,
-                    staged_size: r.get::<_, i64>(6)? as u64,
-                    final_path: r.get(7)?,
-                    state: r.get(8)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|e| e.to_string())
-    }
-
     pub fn save_named_preset(&self, name: &str, recipe: &EncodeRecipe) -> Result<NamedPreset, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let now = Utc::now().timestamp();
@@ -937,34 +909,6 @@ impl Database {
             })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
-    }
-
-    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
-                    staged_file_id, staged_size, final_path, state
-             FROM publish_intents
-             WHERE job_id = ?1
-             ORDER BY updated_at DESC
-             LIMIT 1",
-            params![job_id],
-            |r| {
-                Ok(PublishIntentRecord {
-                    intent_id: r.get(0)?,
-                    job_id: r.get(1)?,
-                    attempt_id: r.get(2)?,
-                    staged_path: r.get(3)?,
-                    staged_volume_id: r.get(4)?,
-                    staged_file_id: r.get(5)?,
-                    staged_size: r.get::<_, i64>(6)? as u64,
-                    final_path: r.get(7)?,
-                    state: r.get(8)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|e| e.to_string())
     }
 
     pub fn get_queue(&self, queue_id: &str) -> Result<Option<QueueTab>, String> {
@@ -1261,34 +1205,6 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
-    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
-                    staged_file_id, staged_size, final_path, state
-             FROM publish_intents
-             WHERE job_id = ?1
-             ORDER BY updated_at DESC
-             LIMIT 1",
-            params![job_id],
-            |r| {
-                Ok(PublishIntentRecord {
-                    intent_id: r.get(0)?,
-                    job_id: r.get(1)?,
-                    attempt_id: r.get(2)?,
-                    staged_path: r.get(3)?,
-                    staged_volume_id: r.get(4)?,
-                    staged_file_id: r.get(5)?,
-                    staged_size: r.get::<_, i64>(6)? as u64,
-                    final_path: r.get(7)?,
-                    state: r.get(8)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|e| e.to_string())
-    }
-
     pub fn upsert_job(&self, j: &JobRecord) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let fp_s = j
@@ -1497,34 +1413,6 @@ impl Database {
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
-    }
-
-    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
-                    staged_file_id, staged_size, final_path, state
-             FROM publish_intents
-             WHERE job_id = ?1
-             ORDER BY updated_at DESC
-             LIMIT 1",
-            params![job_id],
-            |r| {
-                Ok(PublishIntentRecord {
-                    intent_id: r.get(0)?,
-                    job_id: r.get(1)?,
-                    attempt_id: r.get(2)?,
-                    staged_path: r.get(3)?,
-                    staged_volume_id: r.get(4)?,
-                    staged_file_id: r.get(5)?,
-                    staged_size: r.get::<_, i64>(6)? as u64,
-                    final_path: r.get(7)?,
-                    state: r.get(8)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|e| e.to_string())
     }
 
     pub fn save_publish_intent(
@@ -1749,34 +1637,6 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
-    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
-                    staged_file_id, staged_size, final_path, state
-             FROM publish_intents
-             WHERE job_id = ?1
-             ORDER BY updated_at DESC
-             LIMIT 1",
-            params![job_id],
-            |r| {
-                Ok(PublishIntentRecord {
-                    intent_id: r.get(0)?,
-                    job_id: r.get(1)?,
-                    attempt_id: r.get(2)?,
-                    staged_path: r.get(3)?,
-                    staged_volume_id: r.get(4)?,
-                    staged_file_id: r.get(5)?,
-                    staged_size: r.get::<_, i64>(6)? as u64,
-                    final_path: r.get(7)?,
-                    state: r.get(8)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|e| e.to_string())
-    }
-
     pub fn get_volume_reserve(&self, volume_id: &str) -> Result<Option<u64>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let v: Option<i64> = conn
@@ -1813,34 +1673,6 @@ impl Database {
             })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
-    }
-
-    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
-                    staged_file_id, staged_size, final_path, state
-             FROM publish_intents
-             WHERE job_id = ?1
-             ORDER BY updated_at DESC
-             LIMIT 1",
-            params![job_id],
-            |r| {
-                Ok(PublishIntentRecord {
-                    intent_id: r.get(0)?,
-                    job_id: r.get(1)?,
-                    attempt_id: r.get(2)?,
-                    staged_path: r.get(3)?,
-                    staged_volume_id: r.get(4)?,
-                    staged_file_id: r.get(5)?,
-                    staged_size: r.get::<_, i64>(6)? as u64,
-                    final_path: r.get(7)?,
-                    state: r.get(8)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|e| e.to_string())
     }
 
     pub fn get_workspace_json<T: serde::de::DeserializeOwned + Default>(&self, key: &str) -> Result<T, String> {
@@ -2114,34 +1946,6 @@ impl Database {
             })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
-    }
-
-    pub fn get_latest_publish_intent_for_job(&self, job_id: &str) -> Result<Option<PublishIntentRecord>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT intent_id, job_id, attempt_id, staged_path, staged_volume_id,
-                    staged_file_id, staged_size, final_path, state
-             FROM publish_intents
-             WHERE job_id = ?1
-             ORDER BY updated_at DESC
-             LIMIT 1",
-            params![job_id],
-            |r| {
-                Ok(PublishIntentRecord {
-                    intent_id: r.get(0)?,
-                    job_id: r.get(1)?,
-                    attempt_id: r.get(2)?,
-                    staged_path: r.get(3)?,
-                    staged_volume_id: r.get(4)?,
-                    staged_file_id: r.get(5)?,
-                    staged_size: r.get::<_, i64>(6)? as u64,
-                    final_path: r.get(7)?,
-                    state: r.get(8)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|e| e.to_string())
     }
 }
 

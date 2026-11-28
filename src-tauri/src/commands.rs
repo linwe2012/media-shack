@@ -3844,6 +3844,7 @@ pub fn resolve_staged_publish(
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(&job.destination_path));
     let keep_backup = keep_original_backup.unwrap_or(false);
+    let full_decode_verified = job.full_decode_verified;
 
     match action.as_str() {
         "publish_no_replace" => {
@@ -3873,7 +3874,7 @@ pub fn resolve_staged_publish(
                         ffmpeg_opt.as_deref(),
                         &final_dest,
                         out_bytes,
-                        job.full_decode_verified,
+                        full_decode_verified,
                         format!("Saved to {}", final_dest.display()),
                         "",
                         false,
@@ -3929,7 +3930,7 @@ pub fn resolve_staged_publish(
                 ffmpeg_opt.as_deref(),
                 &final_dest,
                 out_bytes,
-                job.full_decode_verified,
+                full_decode_verified,
                 summary,
                 "",
                 !keep_backup,
@@ -3965,7 +3966,7 @@ pub fn resolve_staged_publish(
                 ffmpeg_opt.as_deref(),
                 &final_dest,
                 out_bytes,
-                job.full_decode_verified,
+                full_decode_verified,
                 if deleted {
                     "Verified & original removed after comparison".to_string()
                 } else {
@@ -4023,7 +4024,7 @@ pub fn resolve_staged_publish(
                                 ffmpeg_opt.as_deref(),
                                 &chosen,
                                 out_bytes,
-                                job.full_decode_verified,
+                                full_decode_verified,
                                 "Saved encoded copy alongside original".to_string(),
                                 "",
                                 false,
@@ -4046,7 +4047,7 @@ pub fn resolve_staged_publish(
                     ffmpeg_opt.as_deref(),
                     &final_dest,
                     out_bytes,
-                    job.full_decode_verified,
+                    full_decode_verified,
                     "Completed (kept both original & encoded)".to_string(),
                     "",
                     false,
@@ -4074,7 +4075,7 @@ pub fn resolve_staged_publish(
                 ffmpeg_opt.as_deref(),
                 &final_dest,
                 out_bytes,
-                job.full_decode_verified,
+                full_decode_verified,
                 "Finalized manually by user".to_string(),
                 "",
                 false,

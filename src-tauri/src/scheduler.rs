@@ -155,7 +155,6 @@ impl Scheduler {
                                 job.updated_at = Utc::now().timestamp();
                                 let _ = self.db.upsert_job(&job);
                             }
-                            handled = true;
                             continue;
                         }
                         match publish_staged_file(staged_p, final_p, true) {
