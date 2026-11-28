@@ -3864,37 +3864,29 @@ pub fn reveal_folder(path: String) -> Result<(), String> {
     Err("Unsupported platform".to_string())
 }
 
-#[tauri::command]
-pub fn resolve_staged_publish(
-    state: State<'_, AppState>,
-    job_id: String,
-    action: String,
-    target_path: Option<String>,
-    keep_original_backup: Option<bool>,
+fn execute_single_job_resolution(
+    sched: &Scheduler,
+    job_id: &str,
+    action: &str,
+    target_path: Option<&str>,
+    keep_original_backup: bool,
 ) -> Result<JobRecord, String> {
-    let _guard = state.scheduler.cleanup_lock.lock();
-    let mut job = state
-        .scheduler
+    let mut job = sched
         .db
-        .get_job(&job_id)?
+        .get_job(job_id)?
         .ok_or_else(|| "Job not found".to_string())?;
-    let intent = state
-        .scheduler
-        .db
-        .get_latest_publish_intent_for_job(&job_id)?;
+    let intent = sched.db.get_latest_publish_intent_for_job(job_id)?;
 
     let staged_str = job
         .staged_path
         .clone()
         .or_else(|| intent.as_ref().map(|i| i.staged_path.clone()));
-    let ffprobe_opt = state
-        .scheduler
+    let ffprobe_opt = sched
         .tool_status
         .lock()
         .ok()
         .and_then(|t| t.capabilities.as_ref().map(|c| PathBuf::from(&c.ffprobe_path)));
-    let ffmpeg_opt = state
-        .scheduler
+    let ffmpeg_opt = sched
         .tool_status
         .lock()
         .ok()
@@ -3905,10 +3897,9 @@ pub fn resolve_staged_publish(
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(&job.destination_path));
-    let keep_backup = keep_original_backup.unwrap_or(false);
     let full_decode_verified = job.full_decode_verified;
 
-    match action.as_str() {
+    match action {
         "publish_no_replace" => {
             let Some(sp_str) = staged_str else {
                 return Err("No staged output file found to move.".to_string());
@@ -3921,16 +3912,19 @@ pub fn resolve_staged_publish(
             match publish_staged_file(staged_p, &final_dest, true) {
                 PublishOutcome::Published => {
                     if let Some(ref it) = intent {
-                        let _ = state.scheduler.db.update_publish_intent_state(
+                        let _ = sched.db.update_publish_intent_state(
                             &it.intent_id,
                             "published",
                             Some(&final_dest.to_string_lossy()),
                         );
                     }
-                    if let Some(sd) = staged_p.parent().filter(|p| p.to_string_lossy().contains(".ffq-staging")) {
+                    if let Some(sd) = staged_p
+                        .parent()
+                        .filter(|p| p.to_string_lossy().contains(".ffq-staging"))
+                    {
                         let _ = std::fs::remove_dir_all(sd);
                     }
-                    state.scheduler.complete_published_job(
+                    sched.complete_published_job(
                         &mut job,
                         ffprobe_opt.as_deref(),
                         ffmpeg_opt.as_deref(),
@@ -3941,7 +3935,6 @@ pub fn resolve_staged_publish(
                         "",
                         false,
                     );
-                    state.scheduler.emit_snapshot_changed();
                     Ok(job)
                 }
                 PublishOutcome::DestinationExists => Err(format!(
@@ -3960,7 +3953,8 @@ pub fn resolve_staged_publish(
                 return Err(format!("Staged output file missing: {sp_str}"));
             }
             let out_bytes = std::fs::metadata(staged_p).map(|m| m.len()).unwrap_or(0);
-            let prefer_trash = matches!(destination_capabilities(&final_dest), Ok(c) if c.supports_trash);
+            let prefer_trash =
+                matches!(destination_capabilities(&final_dest), Ok(c) if c.supports_trash);
             let src_p = Path::new(&job.source_path);
             let bak_opt = fault_tolerant_replace_file(
                 staged_p,
@@ -3969,16 +3963,19 @@ pub fn resolve_staged_publish(
                 out_bytes,
                 job.source_fingerprint.as_ref(),
                 prefer_trash,
-                keep_backup,
+                keep_original_backup,
             )?;
             if let Some(ref it) = intent {
-                let _ = state.scheduler.db.update_publish_intent_state(
+                let _ = sched.db.update_publish_intent_state(
                     &it.intent_id,
                     "published",
                     Some(&final_dest.to_string_lossy()),
                 );
             }
-            if let Some(sd) = staged_p.parent().filter(|p| p.to_string_lossy().contains(".ffq-staging")) {
+            if let Some(sd) = staged_p
+                .parent()
+                .filter(|p| p.to_string_lossy().contains(".ffq-staging"))
+            {
                 let _ = std::fs::remove_dir_all(sd);
             }
             let summary = if let Some(ref bak) = bak_opt {
@@ -3986,7 +3983,7 @@ pub fn resolve_staged_publish(
             } else {
                 "Verified fault-tolerant replacement".to_string()
             };
-            state.scheduler.complete_published_job(
+            sched.complete_published_job(
                 &mut job,
                 ffprobe_opt.as_deref(),
                 ffmpeg_opt.as_deref(),
@@ -3995,20 +3992,23 @@ pub fn resolve_staged_publish(
                 full_decode_verified,
                 summary,
                 "",
-                !keep_backup,
+                !keep_original_backup,
             );
-            state.scheduler.emit_snapshot_changed();
             Ok(job)
         }
         "confirm_delete_original" => {
             if !final_dest.is_file() {
-                return Err(format!("Published output not found at {}", final_dest.display()));
+                return Err(format!(
+                    "Published output not found at {}",
+                    final_dest.display()
+                ));
             }
             let out_bytes = std::fs::metadata(&final_dest).map(|m| m.len()).unwrap_or(0);
             let src_p = Path::new(&job.source_path);
             let mut deleted = false;
             if src_p != final_dest && src_p.exists() {
-                let prefer_trash = matches!(destination_capabilities(src_p), Ok(c) if c.supports_trash);
+                let prefer_trash =
+                    matches!(destination_capabilities(src_p), Ok(c) if c.supports_trash);
                 if prefer_trash {
                     if let Some(ref fp) = job.source_fingerprint {
                         if crate::platform::move_to_recoverable_trash_verified(src_p, fp).is_ok() {
@@ -4016,13 +4016,13 @@ pub fn resolve_staged_publish(
                         }
                     }
                 }
-                if !deleted && !keep_backup {
+                if !deleted && !keep_original_backup {
                     std::fs::remove_file(src_p)
                         .map_err(|e| format!("Failed removing original file: {e}"))?;
                     deleted = true;
                 }
             }
-            state.scheduler.complete_published_job(
+            sched.complete_published_job(
                 &mut job,
                 ffprobe_opt.as_deref(),
                 ffmpeg_opt.as_deref(),
@@ -4037,7 +4037,6 @@ pub fn resolve_staged_publish(
                 "",
                 deleted,
             );
-            state.scheduler.emit_snapshot_changed();
             Ok(job)
         }
         "keep_both" => {
@@ -4047,7 +4046,10 @@ pub fn resolve_staged_publish(
                     let out_bytes = std::fs::metadata(staged_p).map(|m| m.len()).unwrap_or(0);
                     let mut chosen = final_dest.clone();
                     if chosen == Path::new(&job.source_path) || chosen.exists() {
-                        let parent = chosen.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+                        let parent = chosen
+                            .parent()
+                            .unwrap_or_else(|| Path::new("."))
+                            .to_path_buf();
                         let stem = chosen
                             .file_stem()
                             .map(|s| s.to_string_lossy().to_string())
@@ -4071,16 +4073,19 @@ pub fn resolve_staged_publish(
                     match publish_staged_file(staged_p, &chosen, true) {
                         PublishOutcome::Published => {
                             if let Some(ref it) = intent {
-                                let _ = state.scheduler.db.update_publish_intent_state(
+                                let _ = sched.db.update_publish_intent_state(
                                     &it.intent_id,
                                     "published",
                                     Some(&chosen.to_string_lossy()),
                                 );
                             }
-                            if let Some(sd) = staged_p.parent().filter(|p| p.to_string_lossy().contains(".ffq-staging")) {
+                            if let Some(sd) = staged_p
+                                .parent()
+                                .filter(|p| p.to_string_lossy().contains(".ffq-staging"))
+                            {
                                 let _ = std::fs::remove_dir_all(sd);
                             }
-                            state.scheduler.complete_published_job(
+                            sched.complete_published_job(
                                 &mut job,
                                 ffprobe_opt.as_deref(),
                                 ffmpeg_opt.as_deref(),
@@ -4091,11 +4096,13 @@ pub fn resolve_staged_publish(
                                 "",
                                 false,
                             );
-                            state.scheduler.emit_snapshot_changed();
                             return Ok(job);
                         }
                         PublishOutcome::DestinationExists => {
-                            return Err("Could not find free filename; choose location manually.".to_string())
+                            return Err(
+                                "Could not find free filename; choose location manually."
+                                    .to_string(),
+                            )
                         }
                         PublishOutcome::Error(e) => return Err(e),
                     }
@@ -4103,7 +4110,7 @@ pub fn resolve_staged_publish(
             }
             if final_dest.is_file() {
                 let out_bytes = std::fs::metadata(&final_dest).map(|m| m.len()).unwrap_or(0);
-                state.scheduler.complete_published_job(
+                sched.complete_published_job(
                     &mut job,
                     ffprobe_opt.as_deref(),
                     ffmpeg_opt.as_deref(),
@@ -4114,24 +4121,26 @@ pub fn resolve_staged_publish(
                     "",
                     false,
                 );
-                state.scheduler.emit_snapshot_changed();
                 return Ok(job);
             }
             Err("Neither staged nor published output file was found.".to_string())
         }
         "mark_completed_manual" => {
             if !final_dest.is_file() {
-                return Err(format!("No output file found at {}. Pick its path or place it there first.", final_dest.display()));
+                return Err(format!(
+                    "No output file found at {}. Pick its path or place it there first.",
+                    final_dest.display()
+                ));
             }
             let out_bytes = std::fs::metadata(&final_dest).map(|m| m.len()).unwrap_or(0);
             if let Some(ref it) = intent {
-                let _ = state.scheduler.db.update_publish_intent_state(
+                let _ = sched.db.update_publish_intent_state(
                     &it.intent_id,
                     "published",
                     Some(&final_dest.to_string_lossy()),
                 );
             }
-            state.scheduler.complete_published_job(
+            sched.complete_published_job(
                 &mut job,
                 ffprobe_opt.as_deref(),
                 ffmpeg_opt.as_deref(),
@@ -4142,7 +4151,6 @@ pub fn resolve_staged_publish(
                 "",
                 false,
             );
-            state.scheduler.emit_snapshot_changed();
             Ok(job)
         }
         "discard_staged" => {
@@ -4151,13 +4159,15 @@ pub fn resolve_staged_publish(
                 if p.is_file() {
                     let _ = std::fs::remove_file(p);
                 }
-                if let Some(sd) = p.parent().filter(|d| d.to_string_lossy().contains(".ffq-staging")) {
+                if let Some(sd) = p
+                    .parent()
+                    .filter(|d| d.to_string_lossy().contains(".ffq-staging"))
+                {
                     let _ = std::fs::remove_dir_all(sd);
                 }
             }
             if let Some(ref it) = intent {
-                let _ = state
-                    .scheduler
+                let _ = sched
                     .db
                     .update_publish_intent_state(&it.intent_id, "discarded", None);
             }
@@ -4169,10 +4179,194 @@ pub fn resolve_staged_publish(
             job.error_message = None;
             job.status_reason = Some("Staged output discarded; ready to re-encode".to_string());
             job.updated_at = Utc::now().timestamp();
-            state.scheduler.db.upsert_job(&job)?;
-            state.scheduler.emit_snapshot_changed();
+            sched.db.upsert_job(&job)?;
             Ok(job)
         }
         other => Err(format!("Unknown resolution action: {other}")),
     }
+}
+
+#[tauri::command]
+pub fn resolve_staged_publish(
+    state: State<'_, AppState>,
+    job_id: String,
+    action: String,
+    target_path: Option<String>,
+    keep_original_backup: Option<bool>,
+) -> Result<JobRecord, String> {
+    let _guard = state.scheduler.cleanup_lock.lock();
+    let job = execute_single_job_resolution(
+        &state.scheduler,
+        &job_id,
+        &action,
+        target_path.as_deref(),
+        keep_original_backup.unwrap_or(false),
+    )?;
+    state.scheduler.emit_snapshot_changed();
+    Ok(job)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BatchResolveItemResult {
+    pub job_id: String,
+    pub ok: bool,
+    pub destination_path: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BatchResolveResult {
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub results: Vec<BatchResolveItemResult>,
+}
+
+#[tauri::command]
+pub fn batch_resolve_staged_publish(
+    state: State<'_, AppState>,
+    job_ids: Vec<String>,
+    action: String,
+    target_dir: Option<String>,
+    path_template: Option<String>,
+    regex_find: Option<String>,
+    regex_replace: Option<String>,
+    keep_original_backup: Option<bool>,
+) -> Result<BatchResolveResult, String> {
+    let _guard = state.scheduler.cleanup_lock.lock();
+    let keep_backup = keep_original_backup.unwrap_or(false);
+    let custom_tmpl = path_template
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let custom_regex_find = regex_find
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let custom_cfg = OutputConfig {
+        mode: if action == "fault_tolerant_replace" {
+            OutputMode::ReplaceOriginal
+        } else {
+            OutputMode::TemplateFolder
+        },
+        replace_behavior: ReplaceBehavior::AutoDeleteOriginal,
+        path_template: custom_tmpl.clone(),
+        regex_find: custom_regex_find.clone(),
+        regex_replace: regex_replace.clone(),
+    };
+    if custom_regex_find.is_some() {
+        apply_output_regex_to_stem("check", &custom_cfg)?;
+    }
+
+    let mut reserved: HashSet<String> = state
+        .scheduler
+        .db
+        .list_all_jobs()?
+        .into_iter()
+        .map(|j| j.destination_path.to_ascii_lowercase())
+        .collect();
+
+    let mut succeeded = 0usize;
+    let mut failed = 0usize;
+    let mut results = Vec::with_capacity(job_ids.len());
+
+    for jid in &job_ids {
+        let computed_target: Option<String> = match state.scheduler.db.get_job(jid)? {
+            Some(job) => {
+                reserved.remove(&job.destination_path.to_ascii_lowercase());
+                if custom_tmpl.is_some() || custom_regex_find.is_some() || target_dir.is_some() {
+                    let src_p = Path::new(&job.source_path);
+                    let dest_root = target_dir
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| {
+                            src_p
+                                .parent()
+                                .unwrap_or_else(|| Path::new("."))
+                                .to_path_buf()
+                        });
+                    let rel_p = if target_dir.is_some() && custom_tmpl.is_none() {
+                        src_p
+                            .file_name()
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| PathBuf::from(&job.source_rel_path))
+                    } else {
+                        PathBuf::from(&job.source_rel_path)
+                    };
+                    match resolve_destination_path_with_config(
+                        src_p,
+                        &rel_p,
+                        &dest_root,
+                        &job.recipe,
+                        &custom_cfg,
+                        &mut reserved,
+                    ) {
+                        Ok(p) => Some(p.to_string_lossy().to_string()),
+                        Err(e) => {
+                            failed += 1;
+                            results.push(BatchResolveItemResult {
+                                job_id: jid.clone(),
+                                ok: false,
+                                destination_path: None,
+                                error: Some(e),
+                            });
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+            None => {
+                failed += 1;
+                results.push(BatchResolveItemResult {
+                    job_id: jid.clone(),
+                    ok: false,
+                    destination_path: None,
+                    error: Some("Job not found".to_string()),
+                });
+                continue;
+            }
+        };
+
+        match execute_single_job_resolution(
+            &state.scheduler,
+            jid,
+            &action,
+            computed_target.as_deref(),
+            keep_backup,
+        ) {
+            Ok(updated_job) => {
+                succeeded += 1;
+                results.push(BatchResolveItemResult {
+                    job_id: jid.clone(),
+                    ok: true,
+                    destination_path: Some(updated_job.destination_path),
+                    error: None,
+                });
+            }
+            Err(e) => {
+                failed += 1;
+                results.push(BatchResolveItemResult {
+                    job_id: jid.clone(),
+                    ok: false,
+                    destination_path: computed_target,
+                    error: Some(e),
+                });
+            }
+        }
+    }
+
+    state.scheduler.emit_snapshot_changed();
+    Ok(BatchResolveResult {
+        total: job_ids.len(),
+        succeeded,
+        failed,
+        results,
+    })
 }

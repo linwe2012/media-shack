@@ -311,6 +311,7 @@ pub fn run() {
             commands::reveal_staged_file,
             commands::reveal_folder,
             commands::resolve_staged_publish,
+            commands::batch_resolve_staged_publish,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Media Shack");

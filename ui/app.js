@@ -86,6 +86,13 @@
   function isPublishRecoverableJob(j) {
     return Boolean(j && (j.staged_path || j.error_stage === "publishing" || j.error_stage === "confirm_replace"));
   }
+  function knownJobOutputBytes(j) {
+    return Number(j?.output_bytes || j?.staged_bytes || 0);
+  }
+  function errorGroupKey(j) {
+    if (!j) return "";
+    return `${j.error_stage || j.status || ""}::${(j.error_message || "").trim()}`;
+  }
   const encodeFilters = {
     search: "",
     searchMode: "name", // "name" | "path" | "regex"
@@ -1019,7 +1026,7 @@
       return true;
     }
     if (j.status === "canceled" && j.status_reason !== "Not selected") return true;
-    if (j.status === "needs_attention" && ["encoding", "verifying", "publishing"].includes(j.error_stage)) {
+    if (j.status === "needs_attention" && (["encoding", "verifying", "publishing", "confirm_replace"].includes(j.error_stage) || j.staged_path)) {
       return true;
     }
     return false;
@@ -2195,8 +2202,9 @@
         : `${j.recipe.codec.toUpperCase()} CRF ${j.recipe.crf} · ${j.recipe.container.toUpperCase()}`;
 
       let statusHtml = "";
-      if (j.status === "completed" && j.output_bytes) {
-        statusHtml = `<span class="badge badge-ok">Done ${fmtRatio(j.input_bytes, j.output_bytes)}</span>`;
+      const listKnownOut = knownJobOutputBytes(j);
+      if (j.status === "completed" && listKnownOut > 0) {
+        statusHtml = `<span class="badge badge-ok">Done ${fmtRatio(j.input_bytes, listKnownOut)} · ${fmtBytes(listKnownOut)}</span>`;
       } else if (prog) {
         statusHtml = buildInlineProgressHtml(j, prog, false);
       } else if (["verifying", "publishing"].includes(j.status)) {
@@ -2207,6 +2215,8 @@
         statusHtml = `<span class="badge badge-active">In Queue</span>`;
       } else if (j.status === "listed" || (j.status === "canceled" && j.status_reason === "Not selected")) {
         statusHtml = isChecked ? `<span class="badge badge-active">Selected</span>` : `<span class="badge">Ready</span>`;
+      } else if (listKnownOut > 0) {
+        statusHtml = `<span class="badge ${statusBadgeClass(j.status)}">${escapeHtml(statusLabel(j.status))} · ${fmtRatio(j.input_bytes, listKnownOut)} · ${fmtBytes(listKnownOut)}</span>`;
       } else {
         statusHtml = `<span class="badge ${statusBadgeClass(j.status)}">${escapeHtml(statusLabel(j.status))}</span>`;
       }
@@ -2301,6 +2311,9 @@
         const errTr = document.createElement("tr");
         errTr.className = "tc-subrow";
         const recoverable = isPublishRecoverableJob(j);
+        const sameGroup = recoverable
+          ? allJobs.filter((x) => isPublishRecoverableJob(x) && errorGroupKey(x) === errorGroupKey(j))
+          : [];
         const canMkv = j.plan?.issues?.some((iss) => iss.can_use_mkv);
         errTr.innerHTML = `
           <td colspan="10">
@@ -2310,6 +2323,7 @@
                 ${recoverable ? `
                   <button type="button" class="btn btn-sm btn-secondary" data-open-staged="${j.id}">Open Staged Folder</button>
                   <button type="button" class="btn btn-sm btn-primary" data-resolve-staged="${j.id}">Resolve / Save…</button>
+                  ${sameGroup.length > 1 ? `<button type="button" class="btn btn-sm btn-secondary" data-resolve-same="${j.id}">Resolve All ${sameGroup.length} Same…</button>` : ""}
                 ` : `
                   <button type="button" class="btn btn-sm btn-secondary" data-fwd-rep="${j.id}">Send to Repair</button>
                   ${canMkv ? `<button type="button" class="btn btn-sm btn-primary" data-fix-mkv="${j.id}">Use MKV</button>` : ""}
@@ -2325,6 +2339,10 @@
         errTr.querySelector("[data-resolve-staged]")?.addEventListener("click", (e) => {
           e.stopPropagation();
           openResolveStagedModal(j.id);
+        });
+        errTr.querySelector("[data-resolve-same]")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openBatchResolveModal(sameGroup.map((x) => x.id));
         });
         errTr.querySelector("[data-fwd-rep]")?.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -2404,13 +2422,14 @@
   }
 
   function buildQueueCompressionCellHtml(job, prog) {
-    if (job.status === "completed" && job.output_bytes) {
-      const ratio = job.input_bytes > 0 ? job.input_bytes / job.output_bytes : null;
+    const knownOut = knownJobOutputBytes(job);
+    if (job.status === "completed" && knownOut > 0) {
+      const ratio = job.input_bytes > 0 ? job.input_bytes / knownOut : null;
       const savedPct = ratio && ratio > 0 ? Math.round((1 - 1 / ratio) * 100) : null;
       return `
         <div class="tabular-nums">
-          <div style="font-weight:600;color:var(--ok);">${escapeHtml(fmtRatio(job.input_bytes, job.output_bytes))}${savedPct !== null ? ` <span class="muted" style="font-weight:500;">(${savedPct >= 0 ? `-${savedPct}%` : `+${Math.abs(savedPct)}%`})</span>` : ""}</div>
-          <div class="mono muted" style="font-size:10.5px;">Out ${fmtBytes(job.output_bytes)}</div>
+          <div style="font-weight:600;color:var(--ok);">${escapeHtml(fmtRatio(job.input_bytes, knownOut))}${savedPct !== null ? ` <span class="muted" style="font-weight:500;">(${savedPct >= 0 ? `-${savedPct}%` : `+${Math.abs(savedPct)}%`})</span>` : ""}</div>
+          <div class="mono muted" style="font-size:10.5px;">Out ${fmtBytes(knownOut)}</div>
         </div>
       `;
     }
@@ -2424,6 +2443,17 @@
         <div class="tabular-nums">
           <div style="font-weight:600;color:var(--accent-text);">${ratio ? `${ratio.toFixed(2)}:1 (${savedPct >= 0 ? `-${savedPct}%` : `+${Math.abs(savedPct)}%`})` : "Estimating…"}</div>
           <div class="mono muted" style="font-size:10.5px;">Now ${outSz}${estFinal ? ` → ~${fmtBytes(estFinal)}` : ""} · ETA ${etaStr}</div>
+        </div>
+      `;
+    }
+    if (knownOut > 0) {
+      const ratio = job.input_bytes > 0 ? job.input_bytes / knownOut : null;
+      const savedPct = ratio && ratio > 0 ? Math.round((1 - 1 / ratio) * 100) : null;
+      const prefix = job.staged_path ? "Staged" : "Out";
+      return `
+        <div class="tabular-nums">
+          <div style="font-weight:600;color:var(--warn, #f59e0b);">${escapeHtml(fmtRatio(job.input_bytes, knownOut))}${savedPct !== null ? ` <span class="muted" style="font-weight:500;">(${savedPct >= 0 ? `-${savedPct}%` : `+${Math.abs(savedPct)}%`})</span>` : ""}</div>
+          <div class="mono muted" style="font-size:10.5px;">${prefix} ${fmtBytes(knownOut)}</div>
         </div>
       `;
     }
@@ -2934,7 +2964,13 @@
     const hasPausedWaiting = Boolean(q.is_paused) && allQueued.some((j) =>
       ["ready", "queued", "interrupted"].includes(j.status)
     );
-    const retryableIds = allQueued.filter((j) => ["failed", "interrupted", "canceled", "needs_attention"].includes(j.status)).map((j) => j.id);
+    const retryableIds = allQueued.filter((j) => ["failed", "interrupted", "canceled", "needs_attention"].includes(j.status) && !isPublishRecoverableJob(j)).map((j) => j.id);
+    const allRecoverable = allQueued.filter(isPublishRecoverableJob);
+    const checkedRecoverable = checkedRemovable.filter(isPublishRecoverableJob);
+    const checkedErrKeys = new Set(checkedRemovable.filter((j) => j.error_message).map(errorGroupKey));
+    const sameIssueExpandable = checkedErrKeys.size > 0
+      ? allQueued.filter((j) => j.error_message && checkedErrKeys.has(errorGroupKey(j)) && !queueCheckedIds.has(j.id) && !["probing", "encoding", "verifying", "publishing"].includes(j.status))
+      : [];
     const finishedIds = allQueued.filter((j) => ["completed", "below_savings_target", "canceled"].includes(j.status)).map((j) => j.id);
     const activeProg = snapshot.active_progress && snapshot.active_progress.queue_id === q.id
       ? snapshot.active_progress
@@ -2955,6 +2991,10 @@
           ${isEncodingNow ? `<button type="button" id="qp-pause" class="btn btn-sm btn-warn-outline">Pause After File</button>` : ""}
           ${isEncodingNow ? `<button type="button" id="qp-cancel" class="btn btn-sm btn-danger-outline">Cancel Current</button>` : ""}
           ${(!isEncodingNow && hasPausedWaiting) ? `<button type="button" id="qp-resume" class="btn btn-sm btn-primary">Resume Queue</button>` : ""}
+          ${sameIssueExpandable.length > 0 ? `<button type="button" id="qp-sel-same-err" class="btn btn-sm btn-secondary">Select +${sameIssueExpandable.length} Same Error</button>` : ""}
+          ${checkedRecoverable.length > 0
+            ? `<button type="button" id="qp-batch-resolve" class="btn btn-sm btn-primary">Batch Resolve (${checkedRecoverable.length})…</button>`
+            : (allRecoverable.length > 1 ? `<button type="button" id="qp-resolve-all" class="btn btn-sm btn-primary">Resolve All (${allRecoverable.length})…</button>` : "")}
           ${retryableIds.length > 0 ? `<button type="button" id="qp-retry-all" class="btn btn-sm btn-secondary">Retry Failed (${retryableIds.length})</button>` : ""}
           ${checkedRemovable.length > 0 ? `<button type="button" id="qp-remove-checked" class="btn btn-sm btn-danger-outline">Remove ${checkedRemovable.length} from Queue</button>` : ""}
           ${finishedIds.length > 0 ? `<button type="button" id="qp-clear-finished" class="btn btn-sm btn-ghost">Clear Finished (${finishedIds.length})</button>` : ""}
@@ -3030,6 +3070,16 @@
     el.querySelector("#qp-cancel")?.addEventListener("click", () => invoke("cancel_current_file", { jobId: null }));
     el.querySelector("#qp-live")?.addEventListener("click", () => {
       if (isEncodingNow) openLivePreviewModal(isEncodingNow.id);
+    });
+    el.querySelector("#qp-sel-same-err")?.addEventListener("click", () => {
+      sameIssueExpandable.forEach((x) => queueCheckedIds.add(x.id));
+      renderTabQueueView(q, tabJobs);
+    });
+    el.querySelector("#qp-batch-resolve")?.addEventListener("click", () => {
+      openBatchResolveModal(checkedRecoverable.map((x) => x.id));
+    });
+    el.querySelector("#qp-resolve-all")?.addEventListener("click", () => {
+      openBatchResolveModal(allRecoverable.map((x) => x.id));
     });
     el.querySelector("#qp-retry-all")?.addEventListener("click", () => {
       if (retryableIds.length > 0) invoke("retry_jobs", { jobIds: retryableIds });
@@ -3199,9 +3249,11 @@
         const errRow = document.createElement("tr");
         errRow.className = "tc-subrow";
         if (isPublishRecoverableJob(j)) {
-          errRow.innerHTML = `<td colspan="8"><div class="inline-row" style="justify-content:space-between;gap:8px;flex-wrap:wrap;"><span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span><div class="inline-row" style="gap:6px;"><button type="button" class="btn btn-sm btn-secondary qp-err-finder">Open Staged Folder</button><button type="button" class="btn btn-sm btn-primary qp-err-resolve">Choose How to Save…</button></div></div></td>`;
+          const sameGroup = allQueued.filter((x) => isPublishRecoverableJob(x) && errorGroupKey(x) === errorGroupKey(j));
+          errRow.innerHTML = `<td colspan="8"><div class="inline-row" style="justify-content:space-between;gap:8px;flex-wrap:wrap;"><span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span><div class="inline-row" style="gap:6px;"><button type="button" class="btn btn-sm btn-secondary qp-err-finder">Open Staged Folder</button><button type="button" class="btn btn-sm btn-primary qp-err-resolve">Choose How to Save…</button>${sameGroup.length > 1 ? `<button type="button" class="btn btn-sm btn-secondary qp-err-batch">Resolve All ${sameGroup.length} Same…</button>` : ""}</div></div></td>`;
           errRow.querySelector(".qp-err-finder")?.addEventListener("click", () => invoke("reveal_staged_file", { jobId: j.id }).catch((e) => showToast(String(e), "warn")));
           errRow.querySelector(".qp-err-resolve")?.addEventListener("click", () => openResolveStagedModal(j.id));
+          errRow.querySelector(".qp-err-batch")?.addEventListener("click", () => openBatchResolveModal(sameGroup.map((x) => x.id)));
         } else {
           errRow.innerHTML = `<td colspan="8"><span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span></td>`;
         }
@@ -4263,11 +4315,13 @@
 
     const info = jobVideoInfo(j);
     const recoverable = isPublishRecoverableJob(j);
+    const knownOut = knownJobOutputBytes(j);
     el.innerHTML = `
       <div class="setup-card">
         <span class="setup-kicker">Selected Job</span>
         <div style="font-size:12.5px;font-weight:600;word-break:break-all;">${escapeHtml(jobFileName(j))}</div>
         <div class="muted tabular-nums" style="font-size:11px;">${fmtBytes(j.input_bytes)} · ${fmtDuration(info.dur)} · ${escapeHtml(info.codec)} ${info.mbps > 0 ? info.mbps + " Mbps" : ""}</div>
+        ${knownOut > 0 ? `<div class="tabular-nums" style="font-size:11.5px;font-weight:600;color:${j.status === "completed" ? "var(--ok)" : "var(--warn)"};">${j.staged_path && j.status !== "completed" ? "Staged output" : "Output"}: ${fmtBytes(knownOut)} · ${escapeHtml(fmtRatio(j.input_bytes, knownOut))}</div>` : ""}
         <div class="inline-row" style="gap:6px;">
           <button type="button" id="jd-preview" class="accent-pill-btn" style="flex:1;">Preview 15s</button>
           ${j.status === "encoding"
@@ -5571,6 +5625,117 @@
     wrap.querySelector("#res-confirm-del")?.addEventListener("click", () => runAction("confirm_delete_original"));
     wrap.querySelector("#res-mark-done")?.addEventListener("click", () => runAction("mark_completed_manual"));
     wrap.querySelector("#res-discard")?.addEventListener("click", () => runAction("discard_staged"));
+  }
+
+  function openBatchResolveModal(jobIds) {
+    const all = snapshot?.jobs || [];
+    const jobs = (jobIds || []).map((id) => all.find((j) => j.id === id)).filter(Boolean);
+    if (!jobs.length) return showToast("No recoverable jobs selected.", "info");
+
+    const totalIn = jobs.reduce((a, b) => a + (b.input_bytes || 0), 0);
+    const totalOut = jobs.reduce((a, b) => a + knownJobOutputBytes(b), 0);
+    const withStagedCount = jobs.filter((j) => Boolean(j.staged_path)).length;
+    const distinctErrs = Array.from(new Set(jobs.map((j) => (j.error_message || "").trim()).filter(Boolean)));
+    const q = activeQueue();
+    let chosenDir = null;
+
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `
+      <div class="resolve-card">
+        <div class="setup-kicker">Selected Items Summary (${jobs.length} files)</div>
+        <div class="tabular-nums" style="font-size:12.5px;font-weight:600;margin-top:4px;">
+          ${fmtBytes(totalIn)} input${totalOut > 0 ? ` → ${fmtBytes(totalOut)} encoded (${escapeHtml(fmtRatio(totalIn, totalOut))})` : ""}
+        </div>
+        <div class="muted" style="font-size:11.5px;margin-top:4px;">
+          ${withStagedCount} of ${jobs.length} have verified staged files preserved in <code>.ffq-staging/</code>.
+        </div>
+        ${distinctErrs.length === 1
+          ? `<div style="font-size:11.5px;color:var(--warn);margin-top:6px;"><strong>Shared issue:</strong> ${escapeHtml(distinctErrs[0])}</div>`
+          : (distinctErrs.length > 1
+            ? `<div style="font-size:11.5px;color:var(--warn);margin-top:6px;">${distinctErrs.length} different issues across selection.</div>`
+            : "")}
+      </div>
+
+      <div class="resolve-card">
+        <div class="setup-kicker">Destination Override (Optional)</div>
+        <div class="inline-row" style="gap:8px;margin-top:6px;">
+          <button type="button" id="bres-pick-dir" class="btn btn-sm btn-secondary">Choose Target Folder…</button>
+          <span id="bres-dir-lbl" class="mono muted truncate" style="font-size:11px;flex:1;">Use each job's planned path / template</span>
+          <button type="button" id="bres-clear-dir" class="btn-link hidden" style="font-size:11px;">Clear</button>
+        </div>
+        <div class="field-block" style="margin-top:8px;">
+          <span class="field-label">Or custom path template (applied per file, e.g. <code>$sourceFolder/encoded/$sourceFileName</code>)</span>
+          <input id="bres-tmpl" type="text" class="full-input mono" style="font-size:11px;" value="${escapeHtml(q?.output_config?.path_template || "")}" placeholder="Leave empty to use Base / Target Folder" />
+        </div>
+        <div class="out-regex-row" style="margin-top:6px;">
+          <input id="bres-rgx-find" type="text" class="full-input mono" style="font-size:11px;" value="${escapeHtml(q?.output_config?.regex_find || "")}" placeholder="Regex find on stem (optional)" />
+          <input id="bres-rgx-rep" type="text" class="full-input mono" style="font-size:11px;" value="${escapeHtml(q?.output_config?.regex_replace || "")}" placeholder="Replace with" />
+        </div>
+      </div>
+
+      <div class="resolve-card">
+        <div class="setup-kicker">Batch Action (No Re-encoding Required)</div>
+        <label class="inline-row" style="gap:6px;font-size:12px;margin:6px 0 8px;cursor:pointer;">
+          <input type="checkbox" id="bres-keep-backup" checked />
+          <span>Do not delete original files (keep originals / <code>.orig</code> backup copies)</span>
+        </label>
+        <div class="resolve-actions-grid">
+          <button type="button" id="bres-publish" class="btn btn-sm btn-primary">Save All to Folder / Template</button>
+          <button type="button" id="bres-keep-both" class="btn btn-sm btn-secondary">Keep Both (Auto Name)</button>
+          <button type="button" id="bres-replace" class="btn btn-sm btn-secondary">Fault-Tolerant Replace All</button>
+          <button type="button" id="bres-discard" class="btn btn-sm btn-danger-outline">Discard Staged &amp; Reset</button>
+        </div>
+      </div>
+    `;
+
+    openModalEl(`Batch Resolve ${jobs.length} Files`, wrap, [{ label: "Close", cls: "btn", onClick: closeModal }]);
+
+    wrap.querySelector("#bres-pick-dir")?.addEventListener("click", async () => {
+      const dir = await dialog.open({ directory: true });
+      if (dir) {
+        chosenDir = dir;
+        if ($("bres-dir-lbl")) $("bres-dir-lbl").textContent = dir;
+        $("bres-clear-dir")?.classList.remove("hidden");
+      }
+    });
+    wrap.querySelector("#bres-clear-dir")?.addEventListener("click", () => {
+      chosenDir = null;
+      if ($("bres-dir-lbl")) $("bres-dir-lbl").textContent = "Use each job's planned path / template";
+      $("bres-clear-dir")?.classList.add("hidden");
+    });
+
+    const runBatch = async (action) => {
+      const tmpl = ($("bres-tmpl")?.value || "").trim() || null;
+      const rgxFind = ($("bres-rgx-find")?.value || "").trim() || null;
+      const rgxRep = ($("bres-rgx-rep")?.value || "");
+      const keepBackup = Boolean($("bres-keep-backup")?.checked);
+      try {
+        const res = await invoke("batch_resolve_staged_publish", {
+          jobIds: jobs.map((x) => x.id),
+          action,
+          targetDir: chosenDir,
+          pathTemplate: tmpl,
+          regexFind: rgxFind,
+          regexReplace: rgxFind ? rgxRep : null,
+          keepOriginalBackup: keepBackup,
+        });
+        jobs.forEach((x) => queueCheckedIds.delete(x.id));
+        closeModal();
+        if (res.failed === 0) {
+          showToast(`Batch resolved all ${res.succeeded} file(s).`, "success");
+        } else {
+          const firstErr = (res.results || []).find((r) => !r.ok)?.error || "Some items failed";
+          showToast(`Resolved ${res.succeeded}/${res.total} file(s) (${res.failed} failed: ${firstErr}).`, "warn");
+        }
+      } catch (err) {
+        showToast(String(err), "warn");
+      }
+    };
+
+    wrap.querySelector("#bres-publish")?.addEventListener("click", () => runBatch("publish_no_replace"));
+    wrap.querySelector("#bres-keep-both")?.addEventListener("click", () => runBatch("keep_both"));
+    wrap.querySelector("#bres-replace")?.addEventListener("click", () => runBatch("fault_tolerant_replace"));
+    wrap.querySelector("#bres-discard")?.addEventListener("click", () => runBatch("discard_staged"));
   }
 
   async function openLivePreviewModal(jobId) {

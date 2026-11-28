@@ -1608,7 +1608,7 @@
   function renderUpdatesCardHtml() {
     const upd = state.updateCheck;
     const prog = state.updateProgress;
-    const curVer = upd?.current_version || "0.3.4";
+    const curVer = upd?.current_version || "0.3.5";
     const pct = prog?.percent != null ? Math.max(0, Math.min(100, prog.percent)) : null;
 
     let statusLine = `<span class="muted">Check GitHub Releases for newer builds.</span>`;

@@ -1059,10 +1059,15 @@ impl Database {
                         min_savings_pct, tool_versions, current_attempt_id, created_at,
                         updated_at, completed_at, output_fingerprint_json,
                         output_mode, replace_behavior,
-                        (SELECT pi.staged_path FROM publish_intents pi
-                         WHERE pi.job_id = jobs.id
-                           AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
-                         ORDER BY pi.updated_at DESC LIMIT 1) AS active_staged_path,
+                        COALESCE(
+                            (SELECT pi.staged_path FROM publish_intents pi
+                             WHERE pi.job_id = jobs.id
+                               AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
+                             ORDER BY pi.updated_at DESC LIMIT 1),
+                            (SELECT ja.partial_path FROM job_attempts ja
+                             WHERE ja.job_id = jobs.id AND ja.status = 'encoded'
+                             ORDER BY ja.started_at DESC LIMIT 1)
+                        ) AS active_staged_path,
                         (SELECT pi.staged_size FROM publish_intents pi
                          WHERE pi.job_id = jobs.id
                            AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
@@ -1086,10 +1091,15 @@ impl Database {
                         min_savings_pct, tool_versions, current_attempt_id, created_at,
                         updated_at, completed_at, output_fingerprint_json,
                         output_mode, replace_behavior,
-                        (SELECT pi.staged_path FROM publish_intents pi
-                         WHERE pi.job_id = jobs.id
-                           AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
-                         ORDER BY pi.updated_at DESC LIMIT 1) AS active_staged_path,
+                        COALESCE(
+                            (SELECT pi.staged_path FROM publish_intents pi
+                             WHERE pi.job_id = jobs.id
+                               AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
+                             ORDER BY pi.updated_at DESC LIMIT 1),
+                            (SELECT ja.partial_path FROM job_attempts ja
+                             WHERE ja.job_id = jobs.id AND ja.status = 'encoded'
+                             ORDER BY ja.started_at DESC LIMIT 1)
+                        ) AS active_staged_path,
                         (SELECT pi.staged_size FROM publish_intents pi
                          WHERE pi.job_id = jobs.id
                            AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
@@ -1113,10 +1123,15 @@ impl Database {
                         min_savings_pct, tool_versions, current_attempt_id, created_at,
                         updated_at, completed_at, output_fingerprint_json,
                         output_mode, replace_behavior,
-                        (SELECT pi.staged_path FROM publish_intents pi
-                         WHERE pi.job_id = jobs.id
-                           AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
-                         ORDER BY pi.updated_at DESC LIMIT 1) AS active_staged_path,
+                        COALESCE(
+                            (SELECT pi.staged_path FROM publish_intents pi
+                             WHERE pi.job_id = jobs.id
+                               AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
+                             ORDER BY pi.updated_at DESC LIMIT 1),
+                            (SELECT ja.partial_path FROM job_attempts ja
+                             WHERE ja.job_id = jobs.id AND ja.status = 'encoded'
+                             ORDER BY ja.started_at DESC LIMIT 1)
+                        ) AS active_staged_path,
                         (SELECT pi.staged_size FROM publish_intents pi
                          WHERE pi.job_id = jobs.id
                            AND pi.state IN ('pending', 'failed', 'needs_attention', 'awaiting_confirmation')
@@ -1144,10 +1159,10 @@ impl Database {
                 let rep_beh_s: Option<String> = r.get(35)?;
                 let staged_raw: Option<String> = r.get(36)?;
                 let staged_sz_raw: Option<i64> = r.get(37)?;
-                let staged_exists = staged_raw
+                let staged_fs_len = staged_raw
                     .as_deref()
-                    .map(|p| std::path::Path::new(p).is_file())
-                    .unwrap_or(false);
+                    .and_then(|p| std::fs::metadata(p).ok().filter(|m| m.is_file()).map(|m| m.len()));
+                let staged_exists = staged_fs_len.is_some();
                 Ok(JobRecord {
                     id: r.get(0)?,
                     queue_id: r.get(1)?,
@@ -1169,7 +1184,10 @@ impl Database {
                         .unwrap_or_default(),
                     staged_path: if staged_exists { staged_raw } else { None },
                     staged_bytes: if staged_exists {
-                        staged_sz_raw.map(|v| v.max(0) as u64)
+                        staged_sz_raw
+                            .map(|v| v.max(0) as u64)
+                            .filter(|&v| v > 0)
+                            .or(staged_fs_len)
                     } else {
                         None
                     },
