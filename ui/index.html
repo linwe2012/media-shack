@@ -43,30 +43,9 @@
       </div>
 
       <div class="chrome-right" data-tauri-drag-region>
-        <span id="nav-selection-pill" class="counts-pill hidden">0 selected</span>
-        <button id="btn-back-to-tabs" class="btn btn-sm btn-secondary hidden" type="button">← Resource Tabs</button>
-        <div class="utility-dropdown-wrap">
-          <button id="btn-utility-menu" class="btn btn-sm btn-ghost utility-trigger" type="button" title="Catalog, Organize, People, Tasks &amp; Settings">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z"/></svg>
-            <span>Library &amp; Tools</span>
-          </button>
-          <div id="primary-nav-tabs" class="utility-menu hidden" role="menu" aria-label="Library &amp; Platform Tools">
-            <button class="nav-tab active" data-view="transcode" type="button">Resource Tabs</button>
-            <button class="nav-tab" data-view="queue" type="button">Encode Queue <span id="nav-queue-badge" class="badge hidden">0</span></button>
-            <button class="nav-tab" data-view="library" type="button">Library Catalog</button>
-            <button class="nav-tab" data-view="duplicates" type="button">Catalog Duplicates</button>
-            <button class="nav-tab" data-view="organize" type="button">Batch Organize</button>
-            <button class="nav-tab hidden" id="nav-tab-people" data-view="people" type="button">People</button>
-            <button class="nav-tab" data-view="repair" type="button">Repair &amp; PAR2</button>
-            <button class="nav-tab" data-view="tasks" type="button">Tasks <span id="nav-tasks-badge" class="badge hidden">0</span></button>
-            <button class="nav-tab" data-view="settings" type="button">Settings</button>
-          </div>
-        </div>
-
-        <button id="btn-open-queue" class="btn btn-sm panel-toggle-btn" type="button" title="View Encode Queue &amp; Transcoding Progress">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z"/></svg>
-          <span>Queue</span>
-          <span id="header-queue-badge" class="tab-count-pill hidden">0</span>
+        <button id="btn-update-pill" class="btn btn-sm update-pill-btn hidden" type="button" title="A newer Media Shack release is available on GitHub">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0 4.5-4.5M12 15 7.5 10.5M4.5 18.75h15"/></svg>
+          <span id="lbl-update-pill">Update</span>
         </button>
 
         <button id="btn-toggle-inspector" class="btn btn-sm panel-toggle-btn" type="button" title="Toggle Inspector Panel" aria-expanded="true">
@@ -74,12 +53,7 @@
           <span>Panel</span>
         </button>
 
-        <button id="btn-update-pill" class="btn btn-sm update-pill-btn hidden" type="button" title="A newer Media Shack release is available on GitHub">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0 4.5-4.5M12 15 7.5 10.5M4.5 18.75h15"/></svg>
-          <span id="lbl-update-pill">Update</span>
-        </button>
-
-        <button id="btn-open-settings-tab" class="btn btn-sm panel-toggle-btn" type="button" title="Open Settings Tab (Theme, Accent, FFmpeg, Privacy)">
+        <button id="btn-open-settings-tab" class="btn btn-sm panel-toggle-btn" type="button" title="Open Settings Tab (Theme, Accent, Updates, FFmpeg, Privacy)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg>
           <span>Settings</span>
         </button>
@@ -88,210 +62,7 @@
     </header>
 
     <!-- ================================================================== -->
-    <!-- VIEW 1: LIBRARY (Persistent Catalog, Search, Filters, Tags)        -->
-    <!-- ================================================================== -->
-    <div id="view-library" class="nav-view hidden">
-      <section class="toolbar" aria-label="Library Toolbar">
-        <div class="toolbar-left">
-          <button id="btn-lib-add-folder" class="btn btn-primary btn-sm" type="button">+ Add Folder</button>
-          <button id="btn-lib-add-file" class="btn btn-secondary btn-sm" type="button">+ Add File</button>
-          <button id="btn-lib-refresh-vols" class="btn btn-ghost btn-sm" type="button" title="Reconcile drives and offline status">Refresh Drives</button>
-          <div class="divider-v"></div>
-          <input id="inp-lib-search" class="search-input" type="search" placeholder="Search filename, path, tag, creator, OCR… (Ctrl+F)" />
-          <label class="toggle-inline" title="Use local visual semantic similarity search">
-            <input type="checkbox" id="chk-lib-semantic" />
-            <span>Semantic</span>
-          </label>
-          <select id="sel-lib-type" class="compact-sel" title="Media Type">
-            <option value="all">All types</option>
-            <option value="video">Video</option>
-            <option value="image">Image</option>
-            <option value="audio">Audio</option>
-          </select>
-          <select id="sel-lib-online" class="compact-sel" title="Availability">
-            <option value="all">Online + Offline</option>
-            <option value="online">Online only</option>
-            <option value="offline">Offline only</option>
-          </select>
-          <button id="btn-lib-adv-filters" class="btn btn-ghost btn-sm" type="button">Filters ▾</button>
-        </div>
-        <div class="toolbar-right">
-          <button id="btn-lib-view-mode" class="btn btn-ghost btn-sm" type="button">Grid</button>
-          <button id="btn-lib-columns" class="btn btn-ghost btn-sm" type="button">Columns</button>
-          <button id="btn-lib-bulk-tag" class="btn btn-secondary btn-sm" type="button">Tag</button>
-          <button id="btn-lib-send-organize" class="btn btn-secondary btn-sm" type="button">Organize</button>
-          <button id="btn-lib-send-transcode" class="btn btn-secondary btn-sm" type="button">Transcode</button>
-          <button id="btn-lib-analyze-menu" class="btn btn-ghost btn-sm" type="button">Analyze ▾</button>
-        </div>
-      </section>
-
-      <div id="lib-adv-filters-bar" class="advanced-drawer hidden">
-        <div class="compact-filter-row">
-          <label>Dir <input id="flt-dir" type="text" placeholder="Folder prefix" style="width:120px" /></label>
-          <label>Codec <input id="flt-codec" type="text" placeholder="h264 / hevc / av1" style="width:105px" /></label>
-          <label>Min W <input id="flt-min-w" type="number" placeholder="1920" style="width:68px" /></label>
-          <label>Min MB <input id="flt-min-mb" type="number" placeholder="0" style="width:68px" /></label>
-          <label>Min Dur(s) <input id="flt-min-dur" type="number" placeholder="0" style="width:62px" /></label>
-          <label>Max Dur(s) <input id="flt-max-dur" type="number" placeholder="" style="width:62px" /></label>
-          <label>Include tags <input id="flt-inc-tags" type="text" placeholder="tag1, tag2" style="width:120px" /></label>
-          <select id="flt-tag-mode" class="compact-sel">
-            <option value="and">AND</option>
-            <option value="or">OR</option>
-          </select>
-          <label>Exclude tags <input id="flt-exc-tags" type="text" placeholder="tag3" style="width:100px" /></label>
-          <label>Creator <input id="flt-creator" type="text" placeholder="creator" style="width:90px" /></label>
-          <label>OCR <input id="flt-ocr" type="text" placeholder="OCR text" style="width:90px" /></label>
-          <label>Integrity
-            <select id="flt-integrity" class="compact-sel">
-              <option value="all">Any</option>
-              <option value="valid">Valid</option>
-              <option value="corrupted">Corrupted</option>
-              <option value="changed">Changed</option>
-              <option value="unverified">Unverified</option>
-            </select>
-          </label>
-          <label class="toggle-inline"><input type="checkbox" id="flt-vr-only" /><span>VR</span></label>
-          <label class="toggle-inline"><input type="checkbox" id="flt-dup-only" /><span>Dups</span></label>
-          <label class="toggle-inline"><input type="checkbox" id="flt-untagged-only" /><span>Untagged</span></label>
-          <label class="toggle-inline"><input type="checkbox" id="flt-wm-only" /><span>Watermarked</span></label>
-          <button id="btn-flt-apply" class="btn btn-primary btn-sm" type="button">Apply</button>
-          <button id="btn-flt-save-col" class="btn btn-secondary btn-sm" type="button">Save Collection…</button>
-          <button id="btn-flt-clear" class="btn btn-ghost btn-sm" type="button">Reset</button>
-        </div>
-      </div>
-
-      <main class="library-workspace">
-        <aside id="lib-sidebar" class="lib-sidebar">
-          <div class="sb-section">
-            <div class="sb-header"><span>Drives &amp; Volumes</span></div>
-            <div id="lib-volumes-list" class="sb-list"></div>
-          </div>
-          <div class="sb-section">
-            <div class="sb-header"><span>Library Roots</span></div>
-            <div id="lib-roots-list" class="sb-list"></div>
-          </div>
-          <div class="sb-section">
-            <div class="sb-header"><span>Virtual Collections</span></div>
-            <div id="lib-collections-list" class="sb-list"></div>
-          </div>
-          <div class="sb-section">
-            <div class="sb-header" style="display:flex;justify-content:space-between;align-items:center">
-              <span>Tags</span>
-              <button id="btn-manage-tags" class="btn btn-ghost btn-sm" type="button" title="Merge tags or add aliases" style="padding:1px 5px;font-size:10px">Manage</button>
-            </div>
-            <div id="lib-tags-list" class="sb-list"></div>
-          </div>
-        </aside>
-        <div class="resizer-v" data-target="lib-sidebar" data-side="left"></div>
-
-        <section class="lib-main">
-          <div id="lib-table-wrap" class="lib-table-wrap">
-            <table class="dense-table" id="lib-table">
-              <thead id="lib-thead"></thead>
-              <tbody id="lib-tbody"></tbody>
-            </table>
-          </div>
-          <div id="lib-grid-wrap" class="lib-grid-wrap hidden"></div>
-          <div class="lib-pagination">
-            <span id="lib-page-info" class="muted">0 items</span>
-            <div class="inline-row">
-              <button id="btn-lib-select-all" class="btn btn-ghost btn-sm" type="button">Select page</button>
-              <button id="btn-lib-prev" class="btn btn-ghost btn-sm" type="button">Prev</button>
-              <button id="btn-lib-next" class="btn btn-ghost btn-sm" type="button">Next</button>
-            </div>
-          </div>
-        </section>
-
-        <div class="resizer-v" data-target="lib-inspector" data-side="right"></div>
-        <aside id="lib-inspector" class="side-panel">
-          <div id="lib-inspector-content" class="side-panel-content">
-            <p class="muted">Select a media item to inspect metadata, tags, relationships, OCR text, and integrity.</p>
-          </div>
-        </aside>
-      </main>
-    </div>
-
-    <!-- ================================================================== -->
-    <!-- VIEW 2: DUPLICATES & SIMILAR MEDIA                                 -->
-    <!-- ================================================================== -->
-    <div id="view-duplicates" class="nav-view hidden">
-      <section class="toolbar">
-        <div class="toolbar-left">
-          <button id="btn-dup-scan" class="btn btn-primary btn-sm" type="button">Scan Duplicates &amp; Similar</button>
-          <label class="toggle-inline"><input type="checkbox" id="chk-dup-sha256" /><span>Also SHA-256</span></label>
-          <label class="toggle-inline"><input type="checkbox" id="chk-dup-perceptual" checked /><span>Perceptual &amp; Partial Overlap</span></label>
-          <div class="divider-v"></div>
-          <select id="sel-dup-filter" class="compact-sel">
-            <option value="all">All match types</option>
-            <option value="exact">Exact (BLAKE3)</option>
-            <option value="equivalent_stream">Equivalent Streams</option>
-            <option value="perceptual">Perceptual Video</option>
-            <option value="partial_overlap">Partial / Clip Overlap</option>
-          </select>
-        </div>
-        <div class="toolbar-right">
-          <span id="lbl-dup-summary" class="muted">0 groups</span>
-        </div>
-      </section>
-      <main class="split-workspace">
-        <aside class="dup-groups-pane" id="dup-groups-list"></aside>
-        <section class="dup-detail-pane" id="dup-detail-pane">
-          <p class="muted">Run a duplicate scan or select a candidate group to compare copies side-by-side.</p>
-        </section>
-      </main>
-    </div>
-
-    <!-- ================================================================== -->
-    <!-- VIEW 3: ORGANIZE (Batch Rename, Move/Copy, History, Local LLM)     -->
-    <!-- ================================================================== -->
-    <div id="view-organize" class="nav-view hidden">
-      <section class="toolbar">
-        <div class="toolbar-left">
-          <span id="lbl-org-selected" class="counts-pill">0 files selected from Library</span>
-          <button id="btn-org-mode-rename" class="btn btn-secondary btn-sm" type="button">Batch Rename</button>
-          <button id="btn-org-mode-move" class="btn btn-ghost btn-sm" type="button">Move / Copy</button>
-          <button id="btn-org-mode-llm" class="btn btn-ghost btn-sm" type="button">AI Rules (Optional)</button>
-          <button id="btn-org-mode-history" class="btn btn-ghost btn-sm" type="button">History &amp; Undo</button>
-        </div>
-        <div class="toolbar-right">
-          <button id="btn-org-preview" class="btn btn-secondary btn-sm" type="button">Preview Changes</button>
-          <button id="btn-org-execute" class="btn btn-primary btn-sm" type="button" disabled>Execute Operation</button>
-        </div>
-      </section>
-      <div id="org-controls-panel" class="config-strip"></div>
-      <div id="org-preview-wrap" class="org-preview-wrap">
-        <p class="muted">Select files in Library, configure a rename or folder template, and click Preview Changes.</p>
-      </div>
-    </div>
-
-    <!-- ================================================================== -->
-    <!-- VIEW 4: PEOPLE (Opt-In Local Anonymous Face Grouping)              -->
-    <!-- ================================================================== -->
-    <div id="view-people" class="nav-view hidden">
-      <section class="toolbar">
-        <div class="toolbar-left">
-          <button id="btn-people-scan-selected" class="btn btn-primary btn-sm" type="button">Group Faces in Selected Library Files</button>
-          <button id="btn-people-refresh" class="btn btn-ghost btn-sm" type="button">Refresh</button>
-        </div>
-        <div class="toolbar-right">
-          <button id="btn-people-purge" class="btn btn-danger-outline btn-sm" type="button">Delete All Biometric Data</button>
-        </div>
-      </section>
-      <main class="split-workspace">
-        <aside class="dup-groups-pane" id="people-groups-list"></aside>
-        <section class="dup-detail-pane" id="people-detail-pane">
-          <p class="muted">Face grouping is local-only and opt-in. Select a person group to label, merge, split, or exclude observations.</p>
-        </section>
-      </main>
-    </div>
-
-    <!-- ================================================================== -->
-    <!-- VIEW 5: ENCODE QUEUE (Active & Queued Transcode Jobs Only)         -->
-    <!-- ================================================================== -->
-    <div id="view-queue" class="nav-view hidden"></div>
-
-    <!-- ================================================================== -->
-    <!-- HERO VIEW: FIRST-CLASS RESOURCE TABS (Explore / Transcode / Dedupe / Repair) -->
+    <!-- HERO VIEW: FIRST-CLASS RESOURCE TABS (Explore / Transcode / Organize / Repair) -->
     <!-- ================================================================== -->
     <div id="view-transcode" class="nav-view">
       <!-- Streamlined Connected Action Bar -->
@@ -347,7 +118,7 @@
             <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/></svg>
           </button>
 
-          <button id="btn-view-encode-queue" class="btn btn-secondary btn-sm hidden" type="button" title="Open the Encode Queue page">View Queue (0) →</button>
+          <button id="btn-view-encode-queue" class="btn btn-secondary btn-sm hidden" type="button" title="Show this tab's Encode Queue">Queue (0)</button>
           <button id="btn-pause-after" class="btn btn-sm btn-warn-outline hidden" type="button">Pause after file</button>
           <button id="btn-cancel-current" class="btn btn-sm btn-danger-outline hidden" type="button">Cancel file</button>
           <button id="btn-start-queue" class="btn btn-primary btn-sm primary-cta-btn" type="button">Select Videos to Queue</button>
@@ -390,10 +161,11 @@
           <!-- Mode A: Explore & Triage -->
           <section id="mode-view-explore" class="mode-view hidden" aria-label="Explore Resources"></section>
 
-          <!-- Mode B: Transcode Queue (Unified Selection Table + Criteria) -->
+          <!-- Mode B: Transcode Queue (Unified Selection Table + Per-Tab Queue) -->
           <section id="mode-view-encode" class="mode-view hidden" aria-label="Transcode Queue">
-            <div id="banner-area" class="banner-area"></div>
-            <div id="queue-controls-bar" class="queue-controls-bar" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <div id="tab-encode-list-view" class="tab-encode-subview">
+              <div id="banner-area" class="banner-area"></div>
+              <div id="queue-controls-bar" class="queue-controls-bar" style="flex-direction:column;align-items:stretch;gap:8px;">
               <div class="inline-row" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
                 <div class="inline-row" style="flex-wrap:wrap;gap:8px;">
                   <span id="lbl-queue-filter-bar" class="tabular-nums muted">0 files</span>
@@ -564,10 +336,250 @@
               </div>
             </div>
             <div id="queue-rows" class="transcode-table-wrap"></div>
+            </div>
+            <div id="tab-encode-queue-view" class="tab-encode-subview hidden"></div>
           </section>
 
-          <!-- Mode C: Organize (Side Tabs: Largest / Duplicates & Cache / Watermarks / People / Folder by Tag) -->
-          <section id="mode-view-organize" class="mode-view hidden" aria-label="Organize Resources"></section>
+          <!-- Mode C: Organize (Tab Tools + Catalog Library, Duplicates, Batch Rename, Integrity, Tasks) -->
+          <section id="mode-view-organize" class="mode-view hidden" aria-label="Organize Resources">
+            <div class="org-split-layout">
+              <aside id="org-side-rail" class="org-side-rail" aria-label="Organize tools"></aside>
+              <div class="org-main-pane">
+                <div id="org-tab-pane"></div>
+                <div id="org-embedded-tools" class="org-embedded-tools hidden">
+                  <!-- Embedded Catalog Library -->
+                  <div id="view-library" class="org-embedded-panel hidden">
+                    <section class="toolbar" aria-label="Library Toolbar">
+                      <div class="toolbar-left">
+                        <button id="btn-lib-add-folder" class="btn btn-primary btn-sm" type="button">+ Add Folder</button>
+                        <button id="btn-lib-add-file" class="btn btn-secondary btn-sm" type="button">+ Add File</button>
+                        <button id="btn-lib-refresh-vols" class="btn btn-ghost btn-sm" type="button" title="Reconcile drives and offline status">Refresh Drives</button>
+                        <span id="lbl-lib-selected" class="counts-pill hidden">0 selected</span>
+                        <div class="divider-v"></div>
+                        <input id="inp-lib-search" class="search-input" type="search" placeholder="Search filename, path, tag, creator, OCR… (Ctrl+F)" />
+                        <label class="toggle-inline" title="Use local visual semantic similarity search">
+                          <input type="checkbox" id="chk-lib-semantic" />
+                          <span>Semantic</span>
+                        </label>
+                        <select id="sel-lib-type" class="compact-sel" title="Media Type">
+                          <option value="all">All types</option>
+                          <option value="video">Video</option>
+                          <option value="image">Image</option>
+                          <option value="audio">Audio</option>
+                        </select>
+                        <select id="sel-lib-online" class="compact-sel" title="Availability">
+                          <option value="all">Online + Offline</option>
+                          <option value="online">Online only</option>
+                          <option value="offline">Offline only</option>
+                        </select>
+                        <button id="btn-lib-adv-filters" class="btn btn-ghost btn-sm" type="button">Filters ▾</button>
+                      </div>
+                      <div class="toolbar-right">
+                        <button id="btn-lib-view-mode" class="btn btn-ghost btn-sm" type="button">Grid</button>
+                        <button id="btn-lib-columns" class="btn btn-ghost btn-sm" type="button">Columns</button>
+                        <button id="btn-lib-bulk-tag" class="btn btn-secondary btn-sm" type="button">Tag</button>
+                        <button id="btn-lib-send-organize" class="btn btn-secondary btn-sm" type="button">Organize</button>
+                        <button id="btn-lib-send-transcode" class="btn btn-secondary btn-sm" type="button">Transcode</button>
+                        <button id="btn-lib-analyze-menu" class="btn btn-ghost btn-sm" type="button">Analyze ▾</button>
+                      </div>
+                    </section>
+
+                    <div id="lib-adv-filters-bar" class="advanced-drawer hidden">
+                      <div class="compact-filter-row">
+                        <label>Dir <input id="flt-dir" type="text" placeholder="Folder prefix" style="width:120px" /></label>
+                        <label>Codec <input id="flt-codec" type="text" placeholder="h264 / hevc / av1" style="width:105px" /></label>
+                        <label>Min W <input id="flt-min-w" type="number" placeholder="1920" style="width:68px" /></label>
+                        <label>Min MB <input id="flt-min-mb" type="number" placeholder="0" style="width:68px" /></label>
+                        <label>Min Dur(s) <input id="flt-min-dur" type="number" placeholder="0" style="width:62px" /></label>
+                        <label>Max Dur(s) <input id="flt-max-dur" type="number" placeholder="" style="width:62px" /></label>
+                        <label>Include tags <input id="flt-inc-tags" type="text" placeholder="tag1, tag2" style="width:120px" /></label>
+                        <select id="flt-tag-mode" class="compact-sel">
+                          <option value="and">AND</option>
+                          <option value="or">OR</option>
+                        </select>
+                        <label>Exclude tags <input id="flt-exc-tags" type="text" placeholder="tag3" style="width:100px" /></label>
+                        <label>Creator <input id="flt-creator" type="text" placeholder="creator" style="width:90px" /></label>
+                        <label>OCR <input id="flt-ocr" type="text" placeholder="OCR text" style="width:90px" /></label>
+                        <label>Integrity
+                          <select id="flt-integrity" class="compact-sel">
+                            <option value="all">Any</option>
+                            <option value="valid">Valid</option>
+                            <option value="corrupted">Corrupted</option>
+                            <option value="changed">Changed</option>
+                            <option value="unverified">Unverified</option>
+                          </select>
+                        </label>
+                        <label class="toggle-inline"><input type="checkbox" id="flt-vr-only" /><span>VR</span></label>
+                        <label class="toggle-inline"><input type="checkbox" id="flt-dup-only" /><span>Dups</span></label>
+                        <label class="toggle-inline"><input type="checkbox" id="flt-untagged-only" /><span>Untagged</span></label>
+                        <label class="toggle-inline"><input type="checkbox" id="flt-wm-only" /><span>Watermarked</span></label>
+                        <button id="btn-flt-apply" class="btn btn-primary btn-sm" type="button">Apply</button>
+                        <button id="btn-flt-save-col" class="btn btn-secondary btn-sm" type="button">Save Collection…</button>
+                        <button id="btn-flt-clear" class="btn btn-ghost btn-sm" type="button">Reset</button>
+                      </div>
+                    </div>
+
+                    <main class="library-workspace">
+                      <aside id="lib-sidebar" class="lib-sidebar">
+                        <div class="sb-section">
+                          <div class="sb-header"><span>Drives &amp; Volumes</span></div>
+                          <div id="lib-volumes-list" class="sb-list"></div>
+                        </div>
+                        <div class="sb-section">
+                          <div class="sb-header"><span>Library Roots</span></div>
+                          <div id="lib-roots-list" class="sb-list"></div>
+                        </div>
+                        <div class="sb-section">
+                          <div class="sb-header"><span>Virtual Collections</span></div>
+                          <div id="lib-collections-list" class="sb-list"></div>
+                        </div>
+                        <div class="sb-section">
+                          <div class="sb-header" style="display:flex;justify-content:space-between;align-items:center">
+                            <span>Tags</span>
+                            <button id="btn-manage-tags" class="btn btn-ghost btn-sm" type="button" title="Merge tags or add aliases" style="padding:1px 5px;font-size:10px">Manage</button>
+                          </div>
+                          <div id="lib-tags-list" class="sb-list"></div>
+                        </div>
+                      </aside>
+                      <div class="resizer-v" data-target="lib-sidebar" data-side="left"></div>
+
+                      <section class="lib-main">
+                        <div id="lib-table-wrap" class="lib-table-wrap">
+                          <table class="dense-table" id="lib-table">
+                            <thead id="lib-thead"></thead>
+                            <tbody id="lib-tbody"></tbody>
+                          </table>
+                        </div>
+                        <div id="lib-grid-wrap" class="lib-grid-wrap hidden"></div>
+                        <div class="lib-pagination">
+                          <span id="lib-page-info" class="muted">0 items</span>
+                          <div class="inline-row">
+                            <button id="btn-lib-select-all" class="btn btn-ghost btn-sm" type="button">Select page</button>
+                            <button id="btn-lib-prev" class="btn btn-ghost btn-sm" type="button">Prev</button>
+                            <button id="btn-lib-next" class="btn btn-ghost btn-sm" type="button">Next</button>
+                          </div>
+                        </div>
+                      </section>
+
+                      <div class="resizer-v" data-target="lib-inspector" data-side="right"></div>
+                      <aside id="lib-inspector" class="side-panel">
+                        <div id="lib-inspector-content" class="side-panel-content">
+                          <p class="muted">Select a media item to inspect metadata, tags, relationships, OCR text, and integrity.</p>
+                        </div>
+                      </aside>
+                    </main>
+                  </div>
+
+                  <!-- Embedded Catalog Duplicates -->
+                  <div id="view-duplicates" class="org-embedded-panel hidden">
+                    <section class="toolbar">
+                      <div class="toolbar-left">
+                        <button id="btn-dup-scan" class="btn btn-primary btn-sm" type="button">Scan Duplicates &amp; Similar</button>
+                        <label class="toggle-inline"><input type="checkbox" id="chk-dup-sha256" /><span>Also SHA-256</span></label>
+                        <label class="toggle-inline"><input type="checkbox" id="chk-dup-perceptual" checked /><span>Perceptual &amp; Partial Overlap</span></label>
+                        <div class="divider-v"></div>
+                        <select id="sel-dup-filter" class="compact-sel">
+                          <option value="all">All match types</option>
+                          <option value="exact">Exact (BLAKE3)</option>
+                          <option value="equivalent_stream">Equivalent Streams</option>
+                          <option value="perceptual">Perceptual Video</option>
+                          <option value="partial_overlap">Partial / Clip Overlap</option>
+                        </select>
+                      </div>
+                      <div class="toolbar-right">
+                        <span id="lbl-dup-summary" class="muted">0 groups</span>
+                      </div>
+                    </section>
+                    <main class="split-workspace">
+                      <aside class="dup-groups-pane" id="dup-groups-list"></aside>
+                      <section class="dup-detail-pane" id="dup-detail-pane">
+                        <p class="muted">Run a duplicate scan or select a candidate group to compare copies side-by-side.</p>
+                      </section>
+                    </main>
+                  </div>
+
+                  <!-- Embedded Batch Rename, Move/Copy & AI Rules -->
+                  <div id="view-organize" class="org-embedded-panel hidden">
+                    <section class="toolbar">
+                      <div class="toolbar-left">
+                        <span id="lbl-org-selected" class="counts-pill">0 files selected from Library</span>
+                        <button id="btn-org-mode-rename" class="btn btn-secondary btn-sm" type="button">Batch Rename</button>
+                        <button id="btn-org-mode-move" class="btn btn-ghost btn-sm" type="button">Move / Copy</button>
+                        <button id="btn-org-mode-llm" class="btn btn-ghost btn-sm" type="button">AI Rules (Optional)</button>
+                        <button id="btn-org-mode-history" class="btn btn-ghost btn-sm" type="button">History &amp; Undo</button>
+                      </div>
+                      <div class="toolbar-right">
+                        <button id="btn-org-preview" class="btn btn-secondary btn-sm" type="button">Preview Changes</button>
+                        <button id="btn-org-execute" class="btn btn-primary btn-sm" type="button" disabled>Execute Operation</button>
+                      </div>
+                    </section>
+                    <div id="org-controls-panel" class="config-strip"></div>
+                    <div id="org-preview-wrap" class="org-preview-wrap">
+                      <p class="muted">Select files in Catalog Library, configure a rename or folder template, and click Preview Changes.</p>
+                    </div>
+                  </div>
+
+                  <!-- Embedded Catalog People (Opt-In Face Grouping) -->
+                  <div id="view-people" class="org-embedded-panel hidden">
+                    <section class="toolbar">
+                      <div class="toolbar-left">
+                        <button id="btn-people-scan-selected" class="btn btn-primary btn-sm" type="button">Group Faces in Selected Library Files</button>
+                        <button id="btn-people-refresh" class="btn btn-ghost btn-sm" type="button">Refresh</button>
+                      </div>
+                      <div class="toolbar-right">
+                        <button id="btn-people-purge" class="btn btn-danger-outline btn-sm" type="button">Delete All Biometric Data</button>
+                      </div>
+                    </section>
+                    <main class="split-workspace">
+                      <aside class="dup-groups-pane" id="people-groups-list"></aside>
+                      <section class="dup-detail-pane" id="people-detail-pane">
+                        <p class="muted">Face grouping is local-only and opt-in. Select a person group to label, merge, split, or exclude observations.</p>
+                      </section>
+                    </main>
+                  </div>
+
+                  <!-- Embedded Integrity & PAR2 -->
+                  <div id="view-repair" class="org-embedded-panel hidden">
+                    <section class="toolbar">
+                      <div class="toolbar-left">
+                        <button id="btn-rep-pick-damaged" class="btn btn-secondary btn-sm" type="button">Select Damaged Video…</button>
+                        <input id="inp-rep-damaged" type="text" class="search-input" placeholder="Path to damaged MP4/MOV/MKV…" style="width:280px" />
+                        <button id="btn-rep-pick-ref" class="btn btn-ghost btn-sm" type="button">Reference Video…</button>
+                        <input id="inp-rep-ref" type="text" class="search-input" placeholder="Optional healthy reference MP4…" style="width:230px" />
+                      </div>
+                      <div class="toolbar-right">
+                        <button id="btn-rep-diagnose" class="btn btn-secondary btn-sm" type="button">Diagnose</button>
+                        <button id="btn-rep-run" class="btn btn-primary btn-sm" type="button">Repair (Non-Destructive)</button>
+                        <button id="btn-int-par2" class="btn btn-ghost btn-sm" type="button">Create PAR2 Parity</button>
+                        <button id="btn-int-export" class="btn btn-ghost btn-sm" type="button">Export Checksum Manifest</button>
+                      </div>
+                    </section>
+                    <div id="archival-repair-workspace" class="panel-workspace">
+                      <div id="repair-result-panel" class="card-panel">
+                        <p class="muted">Choose a damaged video (or right-click a file in Catalog Library → Send to Repair) to inspect MP4 atoms (`ftyp`/`moov`/`mdat`), FFprobe readability, and recovery options.</p>
+                      </div>
+                      <div id="integrity-history-panel" class="card-panel"></div>
+                    </div>
+                  </div>
+
+                  <!-- Embedded Tasks & Resource Budgets -->
+                  <div id="view-tasks" class="org-embedded-panel hidden">
+                    <section class="toolbar">
+                      <div class="toolbar-left">
+                        <strong>Unified Task Manager &amp; Resource Budgets</strong>
+                      </div>
+                      <div class="toolbar-right">
+                        <button id="btn-tasks-refresh" class="btn btn-ghost btn-sm" type="button">Refresh</button>
+                        <button id="btn-cache-evict" class="btn btn-secondary btn-sm" type="button">Enforce Cache Budget</button>
+                        <button id="btn-cache-clear" class="btn btn-danger-outline btn-sm" type="button">Clear Visual Cache</button>
+                      </div>
+                    </section>
+                    <div id="tasks-workspace" class="panel-workspace"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
 
           <!-- Mode D: Repair Videos -->
           <section id="mode-view-repair" class="mode-view hidden" aria-label="Repair Resources"></section>
@@ -808,50 +820,7 @@
     </div>
 
     <!-- ================================================================== -->
-    <!-- VIEW 6: REPAIR & INTEGRITY                                         -->
-    <!-- ================================================================== -->
-    <div id="view-repair" class="nav-view hidden">
-      <section class="toolbar">
-        <div class="toolbar-left">
-          <button id="btn-rep-pick-damaged" class="btn btn-secondary btn-sm" type="button">Select Damaged Video…</button>
-          <input id="inp-rep-damaged" type="text" class="search-input" placeholder="Path to damaged MP4/MOV/MKV…" style="width:280px" />
-          <button id="btn-rep-pick-ref" class="btn btn-ghost btn-sm" type="button">Reference Video…</button>
-          <input id="inp-rep-ref" type="text" class="search-input" placeholder="Optional healthy reference MP4…" style="width:230px" />
-        </div>
-        <div class="toolbar-right">
-          <button id="btn-rep-diagnose" class="btn btn-secondary btn-sm" type="button">Diagnose</button>
-          <button id="btn-rep-run" class="btn btn-primary btn-sm" type="button">Repair (Non-Destructive)</button>
-          <button id="btn-int-par2" class="btn btn-ghost btn-sm" type="button">Create PAR2 Parity</button>
-          <button id="btn-int-export" class="btn btn-ghost btn-sm" type="button">Export Checksum Manifest</button>
-        </div>
-      </section>
-      <div id="archival-repair-workspace" class="panel-workspace">
-        <div id="repair-result-panel" class="card-panel">
-          <p class="muted">Choose a damaged video (or right-click a file in Library → Send to Repair) to inspect MP4 atoms (`ftyp`/`moov`/`mdat`), FFprobe readability, and recovery options.</p>
-        </div>
-        <div id="integrity-history-panel" class="card-panel"></div>
-      </div>
-    </div>
-
-    <!-- ================================================================== -->
-    <!-- VIEW 7: TASKS & RESOURCE BUDGETS                                   -->
-    <!-- ================================================================== -->
-    <div id="view-tasks" class="nav-view hidden">
-      <section class="toolbar">
-        <div class="toolbar-left">
-          <strong>Unified Task Manager &amp; Resource Budgets</strong>
-        </div>
-        <div class="toolbar-right">
-          <button id="btn-tasks-refresh" class="btn btn-ghost btn-sm" type="button">Refresh</button>
-          <button id="btn-cache-evict" class="btn btn-secondary btn-sm" type="button">Enforce Cache Budget</button>
-          <button id="btn-cache-clear" class="btn btn-danger-outline btn-sm" type="button">Clear Visual Cache</button>
-        </div>
-      </section>
-      <div id="tasks-workspace" class="panel-workspace"></div>
-    </div>
-
-    <!-- ================================================================== -->
-    <!-- VIEW 8: SETTINGS, OCR REVIEW & BACKUP                              -->
+    <!-- VIEW: SETTINGS, UPDATES, OCR REVIEW & BACKUP                       -->
     <!-- ================================================================== -->
     <div id="view-settings" class="nav-view hidden">
       <div id="settings-workspace" class="panel-workspace"></div>

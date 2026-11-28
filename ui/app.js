@@ -89,9 +89,19 @@
   let dedupeAlsoSha256 = true;
   let dedupePerceptual = true;
   let dedupeScanning = false;
-  let organizeSideTab = "largest"; // "largest" | "duplicates" | "watermarks" | "faces" | "folder"
+  let organizeSideTab = "largest"; // "largest" | "duplicates" | "watermarks" | "faces" | "folder" | "library" | "catalog_dups" | "batch" | "catalog_people" | "integrity" | "tasks"
   let organizeOverview = null;
   let organizeOverviewQueueId = null;
+  let latestTasksCount = 0;
+  let catalogFacesEnabled = false;
+  const EMBEDDED_ORG_PANELS = {
+    library: "view-library",
+    catalog_dups: "view-duplicates",
+    batch: "view-organize",
+    catalog_people: "view-people",
+    integrity: "view-repair",
+    tasks: "view-tasks",
+  };
   let ocrScanning = false;
   let faceScanning = false;
   const orgSelectedByQueue = new Map(); // queue_id -> Set<job_id>
@@ -116,8 +126,18 @@
   const expandedJobIds = new Set();
   const checkedJobIds = new Set();
   const queueCheckedIds = new Set();
+  const encodeSubViewByTab = new Map(); // queue_id -> "list" | "queue"
   let queuePageFilter = "all"; // "all" | "active" | "completed" | "failed"
   let queuePageNodes = new Map();
+
+  function activeEncodeSubView(q) {
+    return (q && encodeSubViewByTab.get(q.id)) || "list";
+  }
+
+  function setActiveEncodeSubView(q, subView) {
+    if (!q) return;
+    encodeSubViewByTab.set(q.id, subView === "queue" ? "queue" : "list");
+  }
   let queueJobsById = new Map();
   const storyboardCache = new Map(); // job_id -> array of data/blob URLs
   const storyboardInflight = new Set();
@@ -371,7 +391,6 @@
     renderWorkspace();
     renderSidebar();
     renderFooter();
-    if (currentPlatformView === "queue") renderQueuePage();
   }
 
   function renderTabs() {
@@ -586,17 +605,22 @@
       const selectable = (j) => isEncodeSelectableJob(j);
       const selectedReadyCount = jobs.filter((j) => checkedJobIds.has(j.id) && selectable(j) && j.plan?.is_ready).length;
       const selectedProbingCount = jobs.filter((j) => checkedJobIds.has(j.id) && selectable(j) && !j.plan).length;
-      const queuedJobsAll = (snapshot.jobs || []).filter(isQueuedJob);
-      const activeOrWaitingCount = queuedJobsAll.filter((j) => ["ready", "queued", "probing", "encoding", "verifying", "publishing"].includes(j.status)).length;
+      const tabQueued = jobs.filter(isQueuedJob);
+      const activeOrWaitingCount = tabQueued.filter((j) => ["ready", "queued", "probing", "encoding", "verifying", "publishing"].includes(j.status)).length;
       const attCount = jobs.filter((j) => j.status === "needs_attention").length;
-      const activeJob = queuedJobsAll.find((j) => ["encoding", "verifying", "publishing"].includes(j.status));
+      const activeJob = tabQueued.find((j) => ["encoding", "verifying", "publishing"].includes(j.status));
+      const inTabQueue = activeEncodeSubView(q) === "queue";
 
       const viewQueueBtn = $("btn-view-encode-queue");
       if (viewQueueBtn) {
-        viewQueueBtn.classList.toggle("hidden", queuedJobsAll.length === 0);
-        viewQueueBtn.textContent = activeOrWaitingCount > 0
-          ? `View Queue (${activeOrWaitingCount}) →`
-          : `View Queue (${queuedJobsAll.length}) →`;
+        viewQueueBtn.classList.toggle("hidden", jobs.length === 0 && tabQueued.length === 0);
+        viewQueueBtn.classList.toggle("active", inTabQueue);
+        if (inTabQueue) {
+          viewQueueBtn.textContent = "← Video List";
+        } else {
+          const cnt = activeOrWaitingCount > 0 ? activeOrWaitingCount : tabQueued.length;
+          viewQueueBtn.textContent = `Queue (${cnt})`;
+        }
       }
 
       const bAll = document.createElement("button");
@@ -619,12 +643,13 @@
         pills.appendChild(b);
       }
 
-      if (activeJob && activeJob.queue_id === q.id) {
+      if (activeJob) {
         pauseBtn.classList.remove("hidden");
         pauseBtn.textContent = q.pause_after_current ? "Pause scheduled" : "Pause after file";
         cancelBtn.classList.remove("hidden");
       }
 
+      startBtn.classList.toggle("hidden", inTabQueue);
       startBtn.disabled = selectedReadyCount === 0;
       startBtn.textContent = selectedReadyCount > 0
         ? `Add ${selectedReadyCount} to Queue`
@@ -632,8 +657,12 @@
           ? `Waiting Stats (${selectedProbingCount})…`
           : "Select Videos to Queue";
     } else {
+      startBtn.classList.remove("hidden");
       const prevViewBtn = $("btn-view-encode-queue");
-      if (prevViewBtn) prevViewBtn.classList.add("hidden");
+      if (prevViewBtn) {
+        prevViewBtn.classList.add("hidden");
+        prevViewBtn.classList.remove("active");
+      }
     }
     if (mode === "explore") {
       const compCount = jobs.filter((j) => ["compress_balanced", "compress_compact"].includes(jobDecision(j))).length;
@@ -641,26 +670,31 @@
       startBtn.textContent = compCount > 0 ? `Send ${compCount} to Transcode` : "Tag Videos to Compress";
     } else if (mode === "organize") {
       const trashCount = getOrgSelectedSet(q?.id).size;
+      const isEmbedded = Boolean(EMBEDDED_ORG_PANELS[organizeSideTab]);
+      startBtn.classList.toggle("hidden", isEmbedded);
       startBtn.disabled = jobs.length === 0 || dedupeScanning || ocrScanning || faceScanning;
-      if (organizeSideTab === "duplicates") {
-        if (dedupeScanning) {
-          startBtn.textContent = "Scanning…";
-        } else if (trashCount > 0) {
-          startBtn.textContent = `Delete ${trashCount} Selected`;
+      if (!isEmbedded) {
+        if (organizeSideTab === "duplicates") {
+          if (dedupeScanning) {
+            startBtn.textContent = "Scanning…";
+          } else if (trashCount > 0) {
+            startBtn.textContent = `Delete ${trashCount} Selected`;
+          } else {
+            startBtn.textContent = "Scan Duplicates";
+            startBtn.disabled = jobs.length < 2;
+          }
+        } else if (organizeSideTab === "watermarks") {
+          startBtn.textContent = ocrScanning ? "Extracting…" : "Extract Watermarks";
+        } else if (organizeSideTab === "faces") {
+          startBtn.textContent = faceScanning ? "Grouping…" : "Detect People";
+        } else if (organizeSideTab === "folder") {
+          startBtn.textContent = "Preview Move/Copy";
         } else {
-          startBtn.textContent = "Scan Duplicates";
-          startBtn.disabled = jobs.length < 2;
+          startBtn.textContent = trashCount > 0 ? `Delete ${trashCount} Selected` : "Scan Duplicates";
         }
-      } else if (organizeSideTab === "watermarks") {
-        startBtn.textContent = ocrScanning ? "Extracting…" : "Extract Watermarks";
-      } else if (organizeSideTab === "faces") {
-        startBtn.textContent = faceScanning ? "Grouping…" : "Detect People";
-      } else if (organizeSideTab === "folder") {
-        startBtn.textContent = "Preview Move/Copy";
-      } else {
-        startBtn.textContent = trashCount > 0 ? `Delete ${trashCount} Selected` : "Scan Duplicates";
       }
     } else if (mode === "repair") {
+      startBtn.classList.remove("hidden");
       const unrepaired = jobs.filter((j) => {
         const st = snapshot.tab_repair_items?.[j.id]?.status;
         return !["recovered", "partial_recovery"].includes(st);
@@ -709,7 +743,7 @@
     Object.values(views).forEach((el) => el.classList.add("hidden"));
     $("forward-sticky-bar").classList.add("hidden");
 
-    if (jobs.length === 0) {
+    if (jobs.length === 0 && mode !== "organize") {
       $("empty-drop-state").classList.remove("hidden");
       renderEmptyState(q, mode);
       return;
@@ -727,8 +761,18 @@
       renderRepairView(q, jobs);
     } else {
       views.encode.classList.remove("hidden");
-      renderBanners(q, jobs);
-      renderQueueList(q, jobs);
+      const listView = $("tab-encode-list-view");
+      const queueView = $("tab-encode-queue-view");
+      if (activeEncodeSubView(q) === "queue") {
+        listView?.classList.add("hidden");
+        queueView?.classList.remove("hidden");
+        renderTabQueueView(q, jobs);
+      } else {
+        queueView?.classList.add("hidden");
+        listView?.classList.remove("hidden");
+        renderBanners(q, jobs);
+        renderQueueList(q, jobs);
+      }
     }
   }
 
@@ -988,25 +1032,7 @@
   }
 
   function renderQueueBadges() {
-    const allQueued = (snapshot?.jobs || []).filter(isQueuedJob);
-    const activeOrWaiting = allQueued.filter((j) =>
-      ["ready", "queued", "probing", "encoding", "verifying", "publishing"].includes(j.status)
-    ).length;
-    const isRunning = allQueued.some((j) => ["encoding", "verifying", "publishing"].includes(j.status));
-    const badgeCount = activeOrWaiting > 0 ? activeOrWaiting : allQueued.length;
-
-    const hb = $("header-queue-badge");
-    if (hb) {
-      hb.textContent = String(badgeCount);
-      hb.classList.toggle("hidden", allQueued.length === 0);
-      hb.style.background = isRunning ? "var(--accent-soft)" : "";
-      hb.style.color = isRunning ? "var(--accent-text)" : "";
-    }
-    const nb = $("nav-queue-badge");
-    if (nb) {
-      nb.textContent = String(badgeCount);
-      nb.classList.toggle("hidden", allQueued.length === 0);
-    }
+    // Queue badges now render per-tab in the tab strip and in the active tab's action bar.
   }
 
   function closeColFilterPopover() {
@@ -2333,12 +2359,11 @@
     );
   }
 
-  function renderQueuePage() {
-    const el = $("view-queue");
-    if (!el || !snapshot) return;
+  function renderTabQueueView(q, tabJobs) {
+    const el = $("tab-encode-queue-view");
+    if (!el || !q || !snapshot) return;
 
-    const queuesById = new Map((snapshot.queues || []).map((q) => [q.id, q]));
-    const allQueued = (snapshot.jobs || [])
+    const allQueued = (tabJobs || [])
       .filter(isQueuedJob)
       .sort((a, b) => (a.position || 0) - (b.position || 0));
 
@@ -2368,22 +2393,23 @@
     const someChecked = removableVisible.some((j) => queueCheckedIds.has(j.id)) && !allChecked;
 
     const isEncodingNow = allQueued.find((j) => ["encoding", "verifying", "publishing"].includes(j.status));
-    const hasPausedWaiting = allQueued.some((j) => {
-      const qq = queuesById.get(j.queue_id);
-      return qq?.is_paused && ["ready", "queued", "interrupted"].includes(j.status);
-    });
+    const hasPausedWaiting = Boolean(q.is_paused) && allQueued.some((j) =>
+      ["ready", "queued", "interrupted"].includes(j.status)
+    );
     const retryableIds = allQueued.filter((j) => ["failed", "interrupted", "canceled", "needs_attention"].includes(j.status)).map((j) => j.id);
     const finishedIds = allQueued.filter((j) => ["completed", "below_savings_target", "canceled"].includes(j.status)).map((j) => j.id);
-    const activeProg = snapshot.active_progress;
+    const activeProg = snapshot.active_progress && snapshot.active_progress.queue_id === q.id
+      ? snapshot.active_progress
+      : null;
 
     el.innerHTML = `
       <div class="queue-page-header">
         <div>
           <div class="inline-row" style="gap:10px;flex-wrap:wrap;">
-            <h2 style="margin:0;font-size:17px;">Encode Queue</h2>
+            <h2 style="margin:0;font-size:16px;">${escapeHtml(q.name)} · Queue</h2>
             <span class="counts-pill tabular-nums">${activeList.length} active/waiting · ${completedList.length} completed${failedList.length ? ` · ${failedList.length} failed` : ""}</span>
           </div>
-          <div class="muted" style="font-size:12px;margin-top:3px;">Items added to the Queue start processing automatically. Removing an item takes it off the Queue while keeping it in your Video List.</div>
+          <div class="muted" style="font-size:12px;margin-top:3px;">Showing queued &amp; active jobs for this tab. Removing an item takes it off the Queue while keeping it in this tab's Video List.</div>
         </div>
         <div class="inline-row" style="gap:6px;flex-wrap:wrap;">
           <button type="button" id="qp-back-videos" class="btn btn-sm btn-secondary">← Back to Video List</button>
@@ -2410,25 +2436,29 @@
 
       ${visible.length === 0 ? `
         <div class="queue-empty-box">
-          <strong>${allQueued.length === 0 ? "Your Encode Queue is empty" : "No queued items match this filter"}</strong>
-          <p class="muted" style="font-size:12px;margin:6px 0 12px;">${allQueued.length === 0 ? "Select videos on the Transcode page and click \"Add to Queue\" — they enter here and begin processing right away." : "Switch filter pills above to inspect other queued items."}</p>
-          ${allQueued.length === 0 ? `<button type="button" id="qp-empty-back" class="btn btn-sm btn-primary">Browse Videos to Transcode</button>` : ""}
+          <strong>${allQueued.length === 0 ? "This tab's Queue is empty" : "No queued items match this filter"}</strong>
+          <p class="muted" style="font-size:12px;margin:6px 0 12px;">${allQueued.length === 0 ? "Select videos in this tab's Video List and click \"Add to Queue\" — they enter here and begin processing right away." : "Switch filter pills above to inspect other queued items."}</p>
+          ${allQueued.length === 0 ? `<button type="button" id="qp-empty-back" class="btn btn-sm btn-primary">Browse Videos in This Tab</button>` : ""}
         </div>
       ` : `<div id="qp-table-wrap" class="transcode-table-wrap"></div>`}
     `;
 
     el.querySelector("#qp-back-videos")?.addEventListener("click", () => {
-      window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "transcode" } }));
+      setActiveEncodeSubView(q, "list");
+      renderWorkspace();
+      renderActionBar();
     });
     el.querySelector("#qp-empty-back")?.addEventListener("click", () => {
-      window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "transcode" } }));
+      setActiveEncodeSubView(q, "list");
+      renderWorkspace();
+      renderActionBar();
     });
     el.querySelectorAll("[data-qp-flt]").forEach((b) => {
-      b.onclick = () => { queuePageFilter = b.getAttribute("data-qp-flt"); renderQueuePage(); };
+      b.onclick = () => { queuePageFilter = b.getAttribute("data-qp-flt"); renderTabQueueView(q, tabJobs); };
     });
     el.querySelector("#qp-resume")?.addEventListener("click", async () => {
       try {
-        const resp = await invoke("start_all_ready_queues", { consentConfirmed: null });
+        const resp = await invoke("start_queue", { queueId: q.id, consentConfirmed: null });
         if (resp && resp.requires_cleanup_consent) openResumeQueueConsentModal(resp);
       } catch (err) {
         showToast(String(err), "warn");
@@ -2483,14 +2513,14 @@
     masterChk?.addEventListener("change", (e) => {
       if (e.target.checked) removableVisible.forEach((j) => queueCheckedIds.add(j.id));
       else removableVisible.forEach((j) => queueCheckedIds.delete(j.id));
-      renderQueuePage();
+      renderTabQueueView(q, tabJobs);
     });
 
     queuePageNodes = new Map();
     queueJobsById = new Map(visible.map((j) => [j.id, j]));
 
     visible.forEach((j, idx) => {
-      const qObj = queuesById.get(j.queue_id);
+      const qObj = q;
       const info = jobVideoInfo(j);
       const isBusy = ["probing", "encoding", "verifying", "publishing"].includes(j.status);
       const prog = activeProg && activeProg.job_id === j.id ? activeProg : null;
@@ -2561,7 +2591,7 @@
       tr.querySelector(".qp-row-chk")?.addEventListener("change", (ev) => {
         if (ev.target.checked) queueCheckedIds.add(j.id);
         else queueCheckedIds.delete(j.id);
-        renderQueuePage();
+        renderTabQueueView(q, tabJobs);
       });
       tr.querySelector(".qp-mv-up")?.addEventListener("click", async () => {
         const ids = (snapshot.jobs || []).filter((x) => x.queue_id === j.queue_id).map((x) => x.id);
@@ -2743,6 +2773,11 @@
 
   function renderOrganizeView(q, jobs) {
     const el = $("mode-view-organize");
+    const sideRail = $("org-side-rail");
+    const tabPane = $("org-tab-pane");
+    const embeddedHost = $("org-embedded-tools");
+    if (!el || !sideRail || !tabPane || !embeddedHost) return;
+
     if (!organizeOverview || organizeOverviewQueueId !== q.id) {
       loadOrganizeOverview(q.id, false);
     }
@@ -2755,13 +2790,76 @@
     const jobById = new Map(jobs.map((j) => [j.id, j]));
 
     const dupItemCount = groups.reduce((acc, g) => acc + g.items.length, 0);
-    const sideItems = [
+    const tabSideItems = [
       { id: "largest", label: "Largest Files", count: jobs.length },
       { id: "duplicates", label: "Duplicates & Similar", count: dupItemCount || groups.length },
       { id: "watermarks", label: "Watermarks & Tags", count: (ov.ocr_detections || []).length },
       { id: "faces", label: "People & Faces", count: (ov.face_groups || []).length },
       { id: "folder", label: "Sort to Folder", count: (ov.available_tags || []).length },
     ];
+    const toolSideItems = [
+      { id: "library", label: "Catalog Library", count: null },
+      { id: "catalog_dups", label: "Catalog Duplicates", count: null },
+      { id: "batch", label: "Batch Rename & AI", count: null },
+      ...(catalogFacesEnabled ? [{ id: "catalog_people", label: "Catalog People", count: null }] : []),
+      { id: "integrity", label: "Integrity & PAR2", count: null },
+      { id: "tasks", label: "Tasks & Budgets", count: latestTasksCount > 0 ? latestTasksCount : null },
+    ];
+
+    const renderSideBtn = (s) => `
+      <button type="button" class="org-side-tab ${organizeSideTab === s.id ? "active" : ""}" data-org-side="${s.id}">
+        <span>${escapeHtml(s.label)}</span>
+        ${s.count !== null && s.count !== undefined ? `<span class="org-side-count">${s.count}</span>` : ""}
+      </button>
+    `;
+    sideRail.innerHTML = `
+      <div class="org-side-group-label">This Tab</div>
+      ${tabSideItems.map(renderSideBtn).join("")}
+      <div class="org-side-group-label" style="margin-top:6px;">Library &amp; Tools</div>
+      ${toolSideItems.map(renderSideBtn).join("")}
+    `;
+
+    sideRail.querySelectorAll("[data-org-side]").forEach((btn) => {
+      btn.onclick = () => {
+        organizeSideTab = btn.getAttribute("data-org-side");
+        movePreviewResult = null;
+        renderOrganizeView(q, jobs);
+        renderActionBar();
+        renderSidebar();
+      };
+    });
+
+    const embeddedPanelId = EMBEDDED_ORG_PANELS[organizeSideTab];
+    if (embeddedPanelId) {
+      tabPane.classList.add("hidden");
+      tabPane.innerHTML = "";
+      embeddedHost.classList.remove("hidden");
+      Object.values(EMBEDDED_ORG_PANELS).forEach((pid) => {
+        const panel = $(pid);
+        if (panel) panel.classList.toggle("hidden", pid !== embeddedPanelId);
+      });
+      window.dispatchEvent(new CustomEvent("ms-org-tool-activated", { detail: { tool: organizeSideTab } }));
+      return;
+    }
+
+    embeddedHost.classList.add("hidden");
+    tabPane.classList.remove("hidden");
+
+    if (jobs.length === 0) {
+      tabPane.innerHTML = `
+        <div class="queue-empty-box">
+          <strong>No files attached to "${escapeHtml(q.name)}" yet</strong>
+          <p class="muted" style="font-size:12px;margin:6px 0 12px;">Attach videos or a folder to analyze largest files, duplicates, watermarks, faces, and tag sorting in this tab — or browse global tools on the left.</p>
+          <div class="inline-row" style="justify-content:center;gap:8px;">
+            <button type="button" id="org-empty-folder" class="btn btn-sm btn-primary">Browse Folder…</button>
+            <button type="button" id="org-empty-files" class="btn btn-sm btn-secondary">Add Files…</button>
+          </div>
+        </div>
+      `;
+      tabPane.querySelector("#org-empty-folder")?.addEventListener("click", () => $("btn-add-folder")?.click());
+      tabPane.querySelector("#org-empty-files")?.addEventListener("click", () => $("btn-add-files")?.click());
+      return;
+    }
 
     const orgSel = getOrgSelectedSet(q.id);
     let mainHtml = "";
@@ -3093,32 +3191,7 @@
       `;
     }
 
-    el.innerHTML = `
-      <div class="org-split-layout">
-        <aside class="org-side-rail" aria-label="Organize tools">
-          ${sideItems.map((s) => `
-            <button type="button" class="org-side-tab ${organizeSideTab === s.id ? "active" : ""}" data-org-side="${s.id}">
-              <span>${escapeHtml(s.label)}</span>
-              <span class="org-side-count">${s.count}</span>
-            </button>
-          `).join("")}
-        </aside>
-        <div class="org-main-pane">
-          ${mainHtml}
-        </div>
-      </div>
-    `;
-
-    // Wire vertical side-tab switches
-    el.querySelectorAll("[data-org-side]").forEach((btn) => {
-      btn.onclick = () => {
-        organizeSideTab = btn.getAttribute("data-org-side");
-        movePreviewResult = null;
-        renderOrganizeView(q, jobs);
-        renderActionBar();
-        renderSidebar();
-      };
-    });
+    tabPane.innerHTML = mainHtml;
 
     // Wire selection checkboxes
     el.querySelectorAll(".org-del-chk").forEach((chk) => {
@@ -4839,7 +4912,48 @@
     currentPlatformView = e.detail?.view || "transcode";
     if (currentPlatformView === "settings") settingsTabOpen = true;
     renderTabs();
-    if (currentPlatformView === "queue") renderQueuePage();
+  });
+  window.addEventListener("ms-tasks-count-changed", (e) => {
+    latestTasksCount = Number(e.detail?.count || 0);
+    const q = activeQueue();
+    if (q && activeMode(q) === "organize") renderOrganizeView(q, activeQueueJobs());
+  });
+  window.addEventListener("ms-faces-enabled-changed", (e) => {
+    catalogFacesEnabled = Boolean(e.detail?.enabled);
+    const q = activeQueue();
+    if (q && activeMode(q) === "organize") renderOrganizeView(q, activeQueueJobs());
+  });
+  window.addEventListener("ms-open-organize-subtab", async (e) => {
+    const subtab = e.detail?.subtab || "library";
+    if (currentPlatformView !== "transcode") {
+      window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "transcode" } }));
+    }
+    const q = activeQueue();
+    if (q && activeMode(q) !== "organize") {
+      await invoke("set_queue_tab_type", { queueId: q.id, tabType: "organize" });
+    }
+    organizeSideTab = subtab;
+    const aq = activeQueue();
+    if (aq) {
+      renderOrganizeView(aq, activeQueueJobs());
+      renderActionBar();
+      renderSidebar();
+    }
+  });
+  window.addEventListener("ms-open-tab-encode", async () => {
+    if (currentPlatformView !== "transcode") {
+      window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "transcode" } }));
+    }
+    const q = activeQueue();
+    if (q) {
+      setActiveEncodeSubView(q, "list");
+      if (activeMode(q) !== "encode") {
+        await invoke("set_queue_tab_type", { queueId: q.id, tabType: "encode" });
+      }
+      renderWorkspace();
+      renderActionBar();
+      renderSidebar();
+    }
   });
   window.addEventListener("ms-open-tools-modal", openToolsModal);
 
@@ -4924,7 +5038,11 @@
   };
 
   $("btn-view-encode-queue")?.addEventListener("click", () => {
-    window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "queue" } }));
+    const q = activeQueue();
+    if (!q) return;
+    setActiveEncodeSubView(q, activeEncodeSubView(q) === "queue" ? "list" : "queue");
+    renderWorkspace();
+    renderActionBar();
   });
 
   $("btn-pause-after").onclick = () => invoke("pause_after_current", { queueId: activeQueue().id });
@@ -5301,8 +5419,14 @@
     if (!snapshot) return;
     snapshot.active_progress = e.payload;
     recordLiveSpeedPoint(e.payload);
-    if (currentPlatformView === "queue") updateQueuePageProgressDom(e.payload);
-    if (activeMode(activeQueue()) === "encode") updateEncodeProgressDom(e.payload);
+    const aq = activeQueue();
+    if (aq && activeMode(aq) === "encode") {
+      if (activeEncodeSubView(aq) === "queue" && e.payload?.queue_id === aq.id) {
+        updateQueuePageProgressDom(e.payload);
+      } else if (activeEncodeSubView(aq) === "list") {
+        updateEncodeProgressDom(e.payload);
+      }
+    }
   });
   event.listen("sample_preview_progress", async () => {
     snapshot = await invoke("get_snapshot");

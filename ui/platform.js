@@ -221,11 +221,7 @@
     });
   }
 
-  // Primary navigation & Utility Dropdown
-  const utilMenu = $("primary-nav-tabs");
-  const utilBtn = $("btn-utility-menu");
-  const backToTabsBtn = $("btn-back-to-tabs");
-  const openQueueBtn = $("btn-open-queue");
+  // Primary navigation (Resource Tabs + Settings)
   const openSettingsTabBtn = $("btn-open-settings-tab");
   const updatePillBtn = $("btn-update-pill");
   if (updatePillBtn) {
@@ -233,23 +229,6 @@
       window.dispatchEvent(new CustomEvent("ms-open-settings-tab"));
       switchView("settings");
     });
-  }
-  if (utilBtn && utilMenu) {
-    utilBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      utilMenu.classList.toggle("hidden");
-    });
-    document.addEventListener("click", (e) => {
-      if (!utilMenu.classList.contains("hidden") && !utilMenu.contains(e.target) && e.target !== utilBtn) {
-        utilMenu.classList.add("hidden");
-      }
-    });
-  }
-  if (backToTabsBtn) {
-    backToTabsBtn.addEventListener("click", () => switchView("transcode"));
-  }
-  if (openQueueBtn) {
-    openQueueBtn.addEventListener("click", () => switchView("queue"));
   }
   if (openSettingsTabBtn) {
     openSettingsTabBtn.addEventListener("click", () => {
@@ -259,40 +238,41 @@
   }
 
   function switchView(view) {
-    state.currentView = view;
-    if (utilMenu) utilMenu.classList.add("hidden");
-    if (backToTabsBtn) backToTabsBtn.classList.toggle("hidden", view === "transcode" || view === "settings");
-    if (openQueueBtn) openQueueBtn.classList.toggle("active", view === "queue");
-    if (openSettingsTabBtn) openSettingsTabBtn.classList.toggle("active", view === "settings");
-    document.querySelectorAll(".nav-tab").forEach((b) => {
-      b.classList.toggle("active", b.dataset.view === view);
-    });
+    const next = view === "settings" ? "settings" : "transcode";
+    state.currentView = next;
+    if (openSettingsTabBtn) openSettingsTabBtn.classList.toggle("active", next === "settings");
     document.querySelectorAll(".nav-view").forEach((el) => {
-      el.classList.toggle("hidden", el.id !== `view-${view}`);
+      el.classList.toggle("hidden", el.id !== `view-${next}`);
     });
-    window.dispatchEvent(new CustomEvent("ms-view-changed", { detail: { view } }));
-    if (view === "library") refreshLibrary();
-    if (view === "duplicates") refreshDuplicates();
-    if (view === "organize") renderOrganizeView();
-    if (view === "people") refreshPeopleView();
-    if (view === "repair") refreshRepairView();
-    if (view === "tasks") refreshTasksView();
-    if (view === "settings") refreshSettingsView();
+    window.dispatchEvent(new CustomEvent("ms-view-changed", { detail: { view: next } }));
+    if (next === "settings") refreshSettingsView();
   }
 
   window.addEventListener("ms-request-switch-view", (e) => {
     if (e.detail?.view) switchView(e.detail.view);
   });
 
-  document.querySelectorAll(".nav-tab").forEach((btn) => {
-    btn.addEventListener("click", () => switchView(btn.dataset.view));
+  window.addEventListener("ms-org-tool-activated", (e) => {
+    const tool = e.detail?.tool;
+    if (tool === "library") refreshLibrary();
+    if (tool === "catalog_dups") refreshDuplicates();
+    if (tool === "batch") renderOrganizeView();
+    if (tool === "catalog_people") refreshPeopleView();
+    if (tool === "integrity") refreshRepairView();
+    if (tool === "tasks") refreshTasksView();
   });
+
+  function openOrganizeSubtab(subtab) {
+    window.dispatchEvent(new CustomEvent("ms-open-organize-subtab", { detail: { subtab } }));
+  }
 
   function updateSelectionPill() {
     const cnt = state.selectedFileKeys.size;
-    const pill = $("nav-selection-pill");
-    pill.textContent = `${cnt} selected`;
-    pill.classList.toggle("hidden", cnt === 0);
+    const libPill = $("lbl-lib-selected");
+    if (libPill) {
+      libPill.textContent = `${cnt} selected`;
+      libPill.classList.toggle("hidden", cnt === 0);
+    }
     if ($("lbl-org-selected")) {
       $("lbl-org-selected").textContent = `${cnt} files selected from Library`;
     }
@@ -338,7 +318,7 @@
       state.volumes = vols;
       state.collections = cols;
       state.tags = tags;
-      $("nav-tab-people").classList.toggle("hidden", !faceEnabled);
+      window.dispatchEvent(new CustomEvent("ms-faces-enabled-changed", { detail: { enabled: Boolean(faceEnabled) } }));
 
       $("lbl-catalog-footer").textContent =
         `Catalog: ${stats.total_files} files (${stats.online_files} online, ${stats.offline_files} offline) · ${fmtBytes(stats.total_bytes)} · ${stats.total_tags} tags`;
@@ -703,7 +683,7 @@
       };
       $("insp-repair").onclick = () => {
         $("inp-rep-damaged").value = e.path;
-        switchView("repair");
+        openOrganizeSubtab("integrity");
       };
       $("insp-save-meta").onclick = async () => {
         await invoke("catalog_update_asset_metadata", {
@@ -784,9 +764,9 @@
       { label: "Analyze OCR & Watermarks", fn: () => invoke("ocr_analyze_files", { fileKeys: keys }).then(() => refreshLibrary()) },
       { label: "Index Semantic Search", fn: () => invoke("semantic_index_files", { fileKeys: keys }).then((n) => alert(`Indexed ${n} frame vectors.`)) },
       { label: "Detect Black / Frozen Frames", fn: () => invoke("analyze_black_frozen", { fileKey: item.file_key }).then((r) => alert(`Sampled ${r.sampled_frames} frames · Black ratio ${(r.black_ratio * 100).toFixed(0)}% · Frozen segments: ${r.frozen_intervals.length}`)) },
-      { label: "Send to Organize", fn: () => switchView("organize") },
+      { label: "Send to Organize", fn: () => openOrganizeSubtab("batch") },
       { label: "Send to Transcode Queue", fn: () => sendSelectionToTranscode() },
-      { label: "Send to Repair", fn: () => { $("inp-rep-damaged").value = item.path; switchView("repair"); } },
+      { label: "Send to Repair", fn: () => { $("inp-rep-damaged").value = item.path; openOrganizeSubtab("integrity"); } },
       { label: "Reveal in File Manager", fn: () => invoke("reveal_output", { path: item.path }) },
     ];
     menu.innerHTML = "";
@@ -828,7 +808,7 @@
     if (!qid) return;
     const n = await invoke("transcode_enqueue_from_catalog", { queueId: qid, fileKeys: keys });
     alert(`Added ${n} video(s) to Transcode list.`);
-    switchView("transcode");
+    window.dispatchEvent(new CustomEvent("ms-open-tab-encode"));
   }
 
   // Library Toolbar Listeners
@@ -945,7 +925,7 @@
     renderLibraryItems();
   };
   $("btn-lib-bulk-tag").onclick = promptBulkTag;
-  $("btn-lib-send-organize").onclick = () => switchView("organize");
+  $("btn-lib-send-organize").onclick = () => openOrganizeSubtab("batch");
   $("btn-lib-send-transcode").onclick = sendSelectionToTranscode;
   $("btn-lib-analyze-menu").onclick = async () => {
     const keys = Array.from(state.selectedFileKeys);
@@ -1536,9 +1516,7 @@
     state.tasks = tasks;
     state.budgets = budgets;
     const activeCnt = tasks.filter((t) => t.state === "running" || t.state === "queued").length;
-    const badge = $("nav-tasks-badge");
-    badge.textContent = String(activeCnt);
-    badge.classList.toggle("hidden", activeCnt === 0);
+    window.dispatchEvent(new CustomEvent("ms-tasks-count-changed", { detail: { count: activeCnt } }));
 
     $("tasks-workspace").innerHTML = `
       <div class="card-panel">
@@ -1900,7 +1878,7 @@
     };
     $("chk-set-faces").onchange = async (e) => {
       await invoke("faces_set_enabled", { enabled: e.target.checked });
-      $("nav-tab-people").classList.toggle("hidden", !e.target.checked);
+      window.dispatchEvent(new CustomEvent("ms-faces-enabled-changed", { detail: { enabled: e.target.checked } }));
     };
     $("btn-save-llm").onclick = async () => {
       await invoke("llm_save_config", {
@@ -1946,6 +1924,9 @@
 
   // Boot into Resource Tabs Workspace while hydrating footer catalog stats
   switchView("transcode");
+  invoke("faces_get_enabled")
+    .then((en) => window.dispatchEvent(new CustomEvent("ms-faces-enabled-changed", { detail: { enabled: Boolean(en) } })))
+    .catch(() => {});
   if (state.autoUpdateCheck) {
     setTimeout(() => runUpdateCheck({ silent: true }), 2500);
   }

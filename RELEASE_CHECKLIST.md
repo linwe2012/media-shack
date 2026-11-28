@@ -9,6 +9,7 @@
 - **macOS `.dmg` installer:** `4.43 MiB` (v0.1.0 baseline: `src-tauri/target/release/bundle/dmg/Media Shack_0.1.0_aarch64.dmg`; current release: `0.3.0`)
 - **Window Chrome:** Cross-platform Chrome-style overlay titlebar via `tauri-plugin-decorum` `1.1` (macOS `Overlay` traffic lights + fullscreen inset sync; Windows frameless Snap Layout controls)
 - **In-App Updates:** Checks GitHub Releases (`linwe2012/media-shack`), downloads matching platform `.dmg` / `.exe` installer with progress, and opens/reveals installer
+- **Workspace Navigation:** Removed global title-bar `Library & Tools` menu and global `Queue` view; Library Catalog, Catalog Duplicates, Batch Rename/AI, Catalog People, Integrity & PAR2, and Tasks & Budgets now live as sub-tabs inside `Organize`, and each Encode tab displays its own Queue inside the tab
 - **External media tools tested:** `ffmpeg 9.1` / `ffprobe 9.1` (`x265 4.3`, `svt-av1 4.3.0`; `56.5 MiB` Homebrew Cellar directory), previously also verified on `ffmpeg 8.0.1` (`481 KiB` + `281 KiB` binaries; `53 MiB` Cellar)
 - **Windows NSIS installer / idle GUI memory:** Pending native Windows 11 x64 build & interactive GUI measurement
 

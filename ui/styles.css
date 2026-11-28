@@ -3844,8 +3844,8 @@ input[type="radio"] {
   font-weight: 600;
 }
 
-#view-queue {
-  padding: 16px 22px 28px;
+#tab-encode-queue-view {
+  padding: 12px 16px 24px;
   gap: 12px;
   overflow-y: auto;
 }
@@ -4315,4 +4315,51 @@ body.os-windows .window-controls-slot:empty {
   height: 100%;
   background: var(--accent-progress, var(--accent));
   transition: width 150ms ease;
+}
+
+/* Per-Tab Encode Queue & Embedded Organize Tools */
+.tab-encode-subview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+.org-side-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 6px 10px 2px;
+}
+
+.org-embedded-tools {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.org-embedded-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 520px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.org-embedded-panel > .panel-workspace {
+  overflow-y: auto;
+  max-height: calc(100vh - 230px);
+}
+
+.org-embedded-panel > .library-workspace,
+.org-embedded-panel > .split-workspace {
+  min-height: 460px;
+  max-height: calc(100vh - 230px);
 }
