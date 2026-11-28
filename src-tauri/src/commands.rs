@@ -1,5 +1,5 @@
 use crate::cleanup::{
-    build_cleanup_candidates, execute_cleanup_for_job, record_batch_cleanup_consent,
+    build_cleanup_candidates, execute_cleanup_for_job_with_options, record_batch_cleanup_consent,
 };
 use crate::models::*;
 use crate::planner::{
@@ -1828,59 +1828,115 @@ pub fn set_volume_reserve(
 }
 
 #[tauri::command]
-pub fn recheck_volumes(state: State<'_, AppState>) -> Result<(), String> {
-    state.scheduler.recheck_volumes_and_resume();
+pub async fn recheck_volumes(state: State<'_, AppState>) -> Result<(), String> {
+    let sched = state.scheduler.clone();
+    tokio::task::spawn_blocking(move || sched.recheck_volumes_and_resume())
+        .await
+        .map_err(|e| format!("recheck_volumes task failed: {e}"))?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn get_cleanup_candidates(
+pub async fn get_cleanup_candidates(
     state: State<'_, AppState>,
     queue_id: String,
 ) -> Result<Vec<CleanupCandidate>, String> {
-    build_cleanup_candidates(&state.scheduler.db, &queue_id)
+    let db = state.scheduler.db.clone();
+    tokio::task::spawn_blocking(move || build_cleanup_candidates(&db, &queue_id))
+        .await
+        .map_err(|e| format!("get_cleanup_candidates task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn trash_selected_originals(
+pub async fn trash_selected_originals(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     job_ids: Vec<String>,
+    allow_permanent_delete: Option<bool>,
 ) -> Result<Vec<(String, Result<String, String>)>, String> {
-    let _guard = state.scheduler.cleanup_lock.lock();
-    let ffmpeg_opt = state
-        .scheduler
-        .tool_status
-        .lock()
-        .ok()
-        .and_then(|t| t.capabilities.as_ref().map(|c| PathBuf::from(&c.ffmpeg_path)));
+    let sched = state.scheduler.clone();
+    let allow_perm = allow_permanent_delete.unwrap_or(false);
+    tokio::task::spawn_blocking(move || {
+        let _guard = sched.cleanup_lock.lock();
+        let ffmpeg_opt = sched
+            .tool_status
+            .lock()
+            .ok()
+            .and_then(|t| t.capabilities.as_ref().map(|c| PathBuf::from(&c.ffmpeg_path)));
 
-    let mut results = Vec::new();
-    for jid in job_ids {
-        let Some(job) = state.scheduler.db.get_job(&jid)? else {
-            results.push((jid, Err("Job record not found.".to_string())));
-            continue;
-        };
-        let src_p = Path::new(&job.source_path);
-        match crate::cleanup::is_file_protected(&state.scheduler.db, Some(src_p), job.source_fingerprint.as_ref()) {
-            Ok(true) => {
-                results.push((
-                    jid,
-                    Err("Protected source ★ — original is locked against cleanup across tabs.".to_string()),
-                ));
+        let total = job_ids.len();
+        let mut results = Vec::with_capacity(total);
+        let mut succeeded = 0usize;
+        let mut failed = 0usize;
+
+        for (idx, jid) in job_ids.into_iter().enumerate() {
+            let Some(job) = sched.db.get_job(&jid)? else {
+                failed += 1;
+                results.push((jid, Err("Job record not found.".to_string())));
                 continue;
+            };
+            let current_file = Path::new(&job.source_path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| job.source_rel_path.clone());
+            let _ = app.emit(
+                "review_originals_progress",
+                serde_json::json!({
+                    "total": total,
+                    "done": idx,
+                    "succeeded": succeeded,
+                    "failed": failed,
+                    "current_file": current_file,
+                }),
+            );
+
+            let src_p = Path::new(&job.source_path);
+            match crate::cleanup::is_file_protected(&sched.db, Some(src_p), job.source_fingerprint.as_ref()) {
+                Ok(true) => {
+                    failed += 1;
+                    results.push((
+                        jid,
+                        Err("Protected source ★ — original is locked against cleanup across tabs.".to_string()),
+                    ));
+                    continue;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    failed += 1;
+                    results.push((jid, Err(format!("Cannot verify protection state ({e}); kept safely."))));
+                    continue;
+                }
             }
-            Ok(false) => {}
-            Err(e) => {
-                results.push((jid, Err(format!("Cannot verify protection state ({e}); kept safely."))));
-                continue;
+            let res = execute_cleanup_for_job_with_options(
+                &sched.db,
+                ffmpeg_opt.as_deref(),
+                &jid,
+                false,
+                allow_perm,
+            )
+            .map(|_| "Deleted original".to_string());
+            if res.is_ok() {
+                succeeded += 1;
+            } else {
+                failed += 1;
             }
+            results.push((jid, res));
+            sched.emit_snapshot_changed();
+            let _ = app.emit(
+                "review_originals_progress",
+                serde_json::json!({
+                    "total": total,
+                    "done": idx + 1,
+                    "succeeded": succeeded,
+                    "failed": failed,
+                    "current_file": current_file,
+                }),
+            );
         }
-        let res = execute_cleanup_for_job(&state.scheduler.db, ffmpeg_opt.as_deref(), &jid, false)
-            .map(|_| "Moved to Trash".to_string());
-        results.push((jid, res));
-    }
-    state.scheduler.emit_snapshot_changed();
-    Ok(results)
+        Ok(results)
+    })
+    .await
+    .map_err(|e| format!("trash_selected_originals task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -2835,30 +2891,40 @@ pub fn set_tab_dedupe_role(
 }
 
 #[tauri::command]
-pub fn preview_tab_trash(
+pub async fn preview_tab_trash(
     state: State<'_, AppState>,
     queue_id: Option<String>,
     item_ids: Vec<String>,
     removal_reason: RemovalReason,
 ) -> Result<TrashPreviewPlan, String> {
-    let _guard = state.scheduler.cleanup_lock.lock();
-    crate::cleanup::preview_guarded_trash(
-        &state.scheduler.db,
-        queue_id.as_deref(),
-        &item_ids,
-        removal_reason,
-    )
+    let sched = state.scheduler.clone();
+    tokio::task::spawn_blocking(move || {
+        let _guard = sched.cleanup_lock.lock();
+        crate::cleanup::preview_guarded_trash(
+            &sched.db,
+            queue_id.as_deref(),
+            &item_ids,
+            removal_reason,
+        )
+    })
+    .await
+    .map_err(|e| format!("preview_tab_trash task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn execute_tab_trash_plan(
+pub async fn execute_tab_trash_plan(
     state: State<'_, AppState>,
     plan_id: String,
 ) -> Result<TrashBatchResult, String> {
-    let _guard = state.scheduler.cleanup_lock.lock();
-    let res = crate::cleanup::execute_guarded_trash_plan(&state.scheduler.db, &plan_id)?;
-    state.scheduler.emit_snapshot_changed();
-    Ok(res)
+    let sched = state.scheduler.clone();
+    tokio::task::spawn_blocking(move || {
+        let _guard = sched.cleanup_lock.lock();
+        let res = crate::cleanup::execute_guarded_trash_plan(&sched.db, &plan_id)?;
+        sched.emit_snapshot_changed();
+        Ok(res)
+    })
+    .await
+    .map_err(|e| format!("execute_tab_trash_plan task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -2867,47 +2933,50 @@ pub fn check_path_trash_support(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn trash_tab_duplicates(state: State<'_, AppState>, queue_id: String) -> Result<usize, String> {
-    let _guard = state.scheduler.cleanup_lock.lock();
-    let all_map: HashMap<String, Vec<TabDedupeGroup>> = state
-        .scheduler
-        .db
-        .get_workspace_json_strict("ws_tab_dedupe_groups")?;
-    let mut item_ids = Vec::new();
-    if let Some(groups) = all_map.get(&queue_id) {
-        for g in groups {
-            for it in &g.items {
-                if it.role == "trash" && !it.trashed {
-                    item_ids.push(it.job_id.clone());
+pub async fn trash_tab_duplicates(state: State<'_, AppState>, queue_id: String) -> Result<usize, String> {
+    let sched = state.scheduler.clone();
+    tokio::task::spawn_blocking(move || {
+        let _guard = sched.cleanup_lock.lock();
+        let all_map: HashMap<String, Vec<TabDedupeGroup>> =
+            sched.db.get_workspace_json_strict("ws_tab_dedupe_groups")?;
+        let mut item_ids = Vec::new();
+        if let Some(groups) = all_map.get(&queue_id) {
+            for g in groups {
+                for it in &g.items {
+                    if it.role == "trash" && !it.trashed {
+                        item_ids.push(it.job_id.clone());
+                    }
                 }
             }
         }
-    }
-    if item_ids.is_empty() {
-        return Ok(0);
-    }
-    let plan = crate::cleanup::preview_guarded_trash(
-        &state.scheduler.db,
-        Some(&queue_id),
-        &item_ids,
-        RemovalReason::QueueDuplicateGroup,
-    )?;
-    if !plan.trash_supported && plan.eligible_count == 0 {
-        if let Some(err) = plan.trash_support_error {
-            return Err(err);
+        if item_ids.is_empty() {
+            return Ok(0);
         }
-    }
-    let res = crate::cleanup::execute_guarded_trash_plan(&state.scheduler.db, &plan.plan_id)?;
-    state.scheduler.emit_snapshot_changed();
-    if res.moved_count == 0 && res.failed_count > 0 {
-        let first_err = res
-            .outcomes
-            .iter()
-            .find_map(|o| o.error.clone())
-            .unwrap_or_else(|| "Unable to move duplicates to Trash.".to_string());
-        return Err(first_err);
-    }
-    Ok(res.moved_count)
+        let plan = crate::cleanup::preview_guarded_trash(
+            &sched.db,
+            Some(&queue_id),
+            &item_ids,
+            RemovalReason::QueueDuplicateGroup,
+        )?;
+        if !plan.trash_supported && plan.eligible_count == 0 {
+            if let Some(err) = plan.trash_support_error {
+                return Err(err);
+            }
+        }
+        let res = crate::cleanup::execute_guarded_trash_plan(&sched.db, &plan.plan_id)?;
+        sched.emit_snapshot_changed();
+        if res.moved_count == 0 && res.failed_count > 0 {
+            let first_err = res
+                .outcomes
+                .iter()
+                .find_map(|o| o.error.clone())
+                .unwrap_or_else(|| "Unable to move duplicates to Trash.".to_string());
+            return Err(first_err);
+        }
+        Ok(res.moved_count)
+    })
+    .await
+    .map_err(|e| format!("trash_tab_duplicates task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -3148,34 +3217,39 @@ pub fn clear_hash_cache(state: State<'_, AppState>) -> Result<usize, String> {
 }
 
 #[tauri::command]
-pub fn trash_tab_specific_items(
+pub async fn trash_tab_specific_items(
     state: State<'_, AppState>,
     queue_id: String,
     job_ids: Vec<String>,
 ) -> Result<usize, String> {
-    let _guard = state.scheduler.cleanup_lock.lock();
-    let plan = crate::cleanup::preview_guarded_trash(
-        &state.scheduler.db,
-        Some(&queue_id),
-        &job_ids,
-        RemovalReason::QueueSpecificItems,
-    )?;
-    if !plan.trash_supported && plan.eligible_count == 0 {
-        if let Some(err) = plan.trash_support_error {
-            return Err(err);
+    let sched = state.scheduler.clone();
+    tokio::task::spawn_blocking(move || {
+        let _guard = sched.cleanup_lock.lock();
+        let plan = crate::cleanup::preview_guarded_trash(
+            &sched.db,
+            Some(&queue_id),
+            &job_ids,
+            RemovalReason::QueueSpecificItems,
+        )?;
+        if !plan.trash_supported && plan.eligible_count == 0 {
+            if let Some(err) = plan.trash_support_error {
+                return Err(err);
+            }
         }
-    }
-    let res = crate::cleanup::execute_guarded_trash_plan(&state.scheduler.db, &plan.plan_id)?;
-    state.scheduler.emit_snapshot_changed();
-    if res.moved_count == 0 && res.failed_count > 0 {
-        let first_err = res
-            .outcomes
-            .iter()
-            .find_map(|o| o.error.clone())
-            .unwrap_or_else(|| "Unable to move items to Trash.".to_string());
-        return Err(first_err);
-    }
-    Ok(res.moved_count)
+        let res = crate::cleanup::execute_guarded_trash_plan(&sched.db, &plan.plan_id)?;
+        sched.emit_snapshot_changed();
+        if res.moved_count == 0 && res.failed_count > 0 {
+            let first_err = res
+                .outcomes
+                .iter()
+                .find_map(|o| o.error.clone())
+                .unwrap_or_else(|| "Unable to move items to Trash.".to_string());
+            return Err(first_err);
+        }
+        Ok(res.moved_count)
+    })
+    .await
+    .map_err(|e| format!("trash_tab_specific_items task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -3467,7 +3541,7 @@ pub fn tab_label_face_and_tag(
 }
 
 #[tauri::command]
-pub fn tab_move_by_tag(
+pub async fn tab_move_by_tag(
     state: State<'_, AppState>,
     queue_id: String,
     tag_name: String,
@@ -3478,29 +3552,39 @@ pub fn tab_move_by_tag(
     collision_policy: Option<String>,
     plan_id: Option<String>,
 ) -> Result<MoveByTagResult, String> {
-    let _guard = state.scheduler.cleanup_lock.lock();
     if dry_run {
         let overview = tab_get_organize_overview(state.clone(), queue_id.clone())?;
-        return crate::organize::preview_tab_move_by_tag(
-            &state.scheduler.db,
-            &queue_id,
-            &tag_name,
-            &dest_dir,
-            copy_only,
-            preserve_subfolders.unwrap_or(false),
-            collision_policy.as_deref().unwrap_or("keep_existing"),
-            &overview.job_tags,
-        );
+        let db = state.scheduler.db.clone();
+        return tokio::task::spawn_blocking(move || {
+            crate::organize::preview_tab_move_by_tag(
+                &db,
+                &queue_id,
+                &tag_name,
+                &dest_dir,
+                copy_only,
+                preserve_subfolders.unwrap_or(false),
+                collision_policy.as_deref().unwrap_or("keep_existing"),
+                &overview.job_tags,
+            )
+        })
+        .await
+        .map_err(|e| format!("tab_move_by_tag preview task failed: {e}"))?;
     }
 
-    let pid = plan_id
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "A reviewed preview plan is required before moving or copying files.".to_string())?;
-    let res = crate::organize::execute_tab_move_by_tag_plan(&state.scheduler.db, &pid)?;
-    if res.moved_count > 0 || res.retained_count > 0 {
-        state.scheduler.emit_snapshot_changed();
-    }
-    Ok(res)
+    let sched = state.scheduler.clone();
+    tokio::task::spawn_blocking(move || {
+        let _guard = sched.cleanup_lock.lock();
+        let pid = plan_id
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| "A reviewed preview plan is required before moving or copying files.".to_string())?;
+        let res = crate::organize::execute_tab_move_by_tag_plan(&sched.db, &pid)?;
+        if res.moved_count > 0 || res.retained_count > 0 {
+            sched.emit_snapshot_changed();
+        }
+        Ok(res)
+    })
+    .await
+    .map_err(|e| format!("tab_move_by_tag execute task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -3641,187 +3725,184 @@ fn validate_preflight_before_run(q: &QueueTab, jobs: &[&JobRecord]) -> Result<()
 }
 
 #[tauri::command]
-pub fn check_queue_preflight(
+pub async fn check_queue_preflight(
     state: State<'_, AppState>,
     queue_id: String,
     output_config_override: Option<OutputConfig>,
     destination_root_override: Option<String>,
 ) -> Result<QueuePreflightReport, String> {
-    let q = state
-        .scheduler
-        .db
-        .get_queue(&queue_id)?
-        .ok_or_else(|| "Queue not found".to_string())?;
-    let cfg = output_config_override.unwrap_or_else(|| q.output_config.clone());
-    let dest_root_opt = destination_root_override.or_else(|| q.destination_root.clone());
+    let db = state.scheduler.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let q = db
+            .get_queue(&queue_id)?
+            .ok_or_else(|| "Queue not found".to_string())?;
+        let cfg = output_config_override.unwrap_or_else(|| q.output_config.clone());
+        let dest_root_opt = destination_root_override.or_else(|| q.destination_root.clone());
 
-    if let Err(regex_err) = apply_output_regex_to_stem("check", &cfg) {
-        return Ok(QueuePreflightReport {
-            ok: false,
-            regex_error: Some(regex_err.clone()),
-            blocking_errors: vec![regex_err],
-            warnings: Vec::new(),
-            previews: Vec::new(),
-        });
-    }
-
-    let queue_jobs = state.scheduler.db.list_jobs_for_queue(&queue_id)?;
-    let pending: Vec<JobRecord> = queue_jobs
-        .into_iter()
-        .filter(|j| !matches!(j.status, JobStatus::Completed | JobStatus::BelowSavingsTarget))
-        .collect();
-    let mut reserved: HashSet<String> = HashSet::new();
-    let mut blocking_errors = Vec::new();
-    let mut warnings_set: HashSet<String> = HashSet::new();
-    let mut previews = Vec::new();
-    let mut dir_caps: HashMap<PathBuf, Result<DestinationCapabilities, String>> = HashMap::new();
-
-    for (idx, j) in pending.iter().enumerate() {
-        let src_path = Path::new(&j.source_path);
-        let root = dest_root_opt
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                src_path
-                    .parent()
-                    .filter(|p| !p.as_os_str().is_empty())
-                    .unwrap_or_else(|| Path::new("."))
-                    .to_path_buf()
+        if let Err(regex_err) = apply_output_regex_to_stem("check", &cfg) {
+            return Ok(QueuePreflightReport {
+                ok: false,
+                regex_error: Some(regex_err.clone()),
+                blocking_errors: vec![regex_err],
+                warnings: Vec::new(),
+                previews: Vec::new(),
             });
-        let resolved_res = resolve_destination_path_with_config(
-            src_path,
-            Path::new(&j.source_rel_path),
-            &root,
-            &j.recipe,
-            &cfg,
-            &mut reserved,
-        );
-        let mut item_warnings = Vec::new();
-        let mut item_error: Option<String> = None;
-
-        let dest_path = match resolved_res {
-            Ok(p) => p,
-            Err(e) => {
-                item_error = Some(e.clone());
-                if !blocking_errors.contains(&e) {
-                    blocking_errors.push(e);
-                }
-                PathBuf::from(&j.destination_path)
-            }
-        };
-
-        let collides_with_source = cfg.mode == OutputMode::TemplateFolder && dest_path == src_path;
-        if collides_with_source {
-            let msg = "Output path matches source path in Folder/Template mode.".to_string();
-            item_error = Some(msg.clone());
-            if !blocking_errors.contains(&msg) {
-                blocking_errors.push(msg);
-            }
-        }
-        let target_exists = dest_path.exists();
-        if target_exists && cfg.mode == OutputMode::ReplaceOriginal {
-            item_warnings.push("Original will be replaced via fault-tolerant staging".to_string());
-        } else if target_exists {
-            item_warnings.push("Target file already exists; next free suffix will be used".to_string());
         }
 
-        let parent = dest_path.parent().unwrap_or_else(|| Path::new("."));
-        let caps_res = dir_caps
-            .entry(parent.to_path_buf())
-            .or_insert_with(|| destination_capabilities(parent));
+        let queue_jobs = db.list_jobs_for_queue(&queue_id)?;
+        let pending: Vec<JobRecord> = queue_jobs
+            .into_iter()
+            .filter(|j| !matches!(j.status, JobStatus::Completed | JobStatus::BelowSavingsTarget))
+            .collect();
+        let mut reserved: HashSet<String> = HashSet::new();
+        let mut blocking_errors = Vec::new();
+        let mut warnings_set: HashSet<String> = HashSet::new();
+        let mut previews = Vec::new();
+        let mut dir_caps: HashMap<PathBuf, Result<DestinationCapabilities, String>> = HashMap::new();
 
-        let (fs_type, atomic_no_replace_supported, trash_supported) = match caps_res {
-            Ok(c) => {
-                if c.is_read_only || !c.is_writable {
-                    let msg = format!(
-                        "Destination '{}' on {} ({}) is read-only or not writable.",
-                        parent.display(),
-                        c.mount_point,
-                        c.fs_type
-                    );
-                    item_error = Some(msg.clone());
-                    if !blocking_errors.contains(&msg) {
-                        blocking_errors.push(msg);
+        for (idx, j) in pending.iter().enumerate() {
+            let src_path = Path::new(&j.source_path);
+            let root = dest_root_opt
+                .as_deref()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    src_path
+                        .parent()
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .unwrap_or_else(|| Path::new("."))
+                        .to_path_buf()
+                });
+            let resolved_res = resolve_destination_path_with_config(
+                src_path,
+                Path::new(&j.source_rel_path),
+                &root,
+                &j.recipe,
+                &cfg,
+                &mut reserved,
+            );
+            let mut item_warnings = Vec::new();
+            let mut item_error: Option<String> = None;
+
+            let dest_path = match resolved_res {
+                Ok(p) => p,
+                Err(e) => {
+                    item_error = Some(e.clone());
+                    if !blocking_errors.contains(&e) {
+                        blocking_errors.push(e);
                     }
+                    PathBuf::from(&j.destination_path)
                 }
-                if !c.supports_atomic_no_replace {
-                    let w = format!(
-                        "Filesystem '{}' ({}) does not support atomic no-replace rename — fault-tolerant safe publish will be used instead.",
-                        c.fs_type, c.mount_point
-                    );
-                    item_warnings.push(w.clone());
-                    warnings_set.insert(w);
-                }
-                if (cfg.mode == OutputMode::ReplaceOriginal
-                    || q.cleanup_policy == CleanupPolicy::TrashAfterEachFile)
-                    && !c.supports_trash
-                {
-                    let note = c
-                        .trash_note
-                        .clone()
-                        .unwrap_or_else(|| "OS Trash unavailable on destination filesystem.".to_string());
-                    let w = format!(
-                        "{note} Replacement will keep or permanently delete original only after verification."
-                    );
-                    item_warnings.push(w.clone());
-                    warnings_set.insert(w);
-                }
-                (
-                    Some(c.fs_type.clone()),
-                    Some(c.supports_atomic_no_replace),
-                    Some(c.supports_trash),
-                )
-            }
-            Err(e) => {
-                let w = format!("Destination check warning: {e}");
-                item_warnings.push(w.clone());
-                warnings_set.insert(w);
-                (None, None, None)
-            }
-        };
+            };
 
-        if idx < 25 {
-            previews.push(OutputPathPreviewItem {
-                job_id: j.id.clone(),
-                source_path: j.source_path.clone(),
-                destination_path: dest_path.to_string_lossy().to_string(),
-                collides_with_source,
-                target_exists,
-                fs_type,
-                atomic_no_replace_supported,
-                trash_supported,
-                warnings: item_warnings,
-                error: item_error,
-            });
+            let collides_with_source = cfg.mode == OutputMode::TemplateFolder && dest_path == src_path;
+            if collides_with_source {
+                let msg = "Output path matches source path in Folder/Template mode.".to_string();
+                item_error = Some(msg.clone());
+                if !blocking_errors.contains(&msg) {
+                    blocking_errors.push(msg);
+                }
+            }
+            let target_exists = dest_path.exists();
+            if target_exists && cfg.mode == OutputMode::ReplaceOriginal {
+                item_warnings.push("Original will be replaced via fault-tolerant staging".to_string());
+            } else if target_exists {
+                item_warnings.push("Target file already exists; next free suffix will be used".to_string());
+            }
+
+            let parent = dest_path.parent().unwrap_or_else(|| Path::new("."));
+            let caps_res = dir_caps
+                .entry(parent.to_path_buf())
+                .or_insert_with(|| destination_capabilities(parent));
+
+            let (fs_type, atomic_no_replace_supported, trash_supported) = match caps_res {
+                Ok(c) => {
+                    if c.is_read_only || !c.is_writable {
+                        let msg = format!(
+                            "Destination '{}' on {} ({}) is read-only or not writable.",
+                            parent.display(),
+                            c.mount_point,
+                            c.fs_type
+                        );
+                        item_error = Some(msg.clone());
+                        if !blocking_errors.contains(&msg) {
+                            blocking_errors.push(msg);
+                        }
+                    }
+                    if !c.supports_atomic_no_replace {
+                        let w = format!(
+                            "Filesystem '{}' ({}) does not support atomic no-replace rename — fault-tolerant safe publish will be used instead.",
+                            c.fs_type, c.mount_point
+                        );
+                        item_warnings.push(w.clone());
+                        warnings_set.insert(w);
+                    }
+                    if (cfg.mode == OutputMode::ReplaceOriginal
+                        || q.cleanup_policy == CleanupPolicy::TrashAfterEachFile)
+                        && !c.supports_trash
+                    {
+                        let note = c
+                            .trash_note
+                            .clone()
+                            .unwrap_or_else(|| "OS Trash unavailable on destination filesystem.".to_string());
+                        let w = format!(
+                            "{note} Replacement will keep or permanently delete original only after verification."
+                        );
+                        item_warnings.push(w.clone());
+                        warnings_set.insert(w);
+                    }
+                    (
+                        Some(c.fs_type.clone()),
+                        Some(c.supports_atomic_no_replace),
+                        Some(c.supports_trash),
+                    )
+                }
+                Err(e) => {
+                    let w = format!("Destination check warning: {e}");
+                    item_warnings.push(w.clone());
+                    warnings_set.insert(w);
+                    (None, None, None)
+                }
+            };
+
+            if idx < 25 {
+                previews.push(OutputPathPreviewItem {
+                    job_id: j.id.clone(),
+                    source_path: j.source_path.clone(),
+                    destination_path: dest_path.to_string_lossy().to_string(),
+                    collides_with_source,
+                    target_exists,
+                    fs_type,
+                    atomic_no_replace_supported,
+                    trash_supported,
+                    warnings: item_warnings,
+                    error: item_error,
+                });
+            }
         }
-    }
 
-    let mut warnings: Vec<String> = warnings_set.into_iter().collect();
-    warnings.sort();
+        let mut warnings: Vec<String> = warnings_set.into_iter().collect();
+        warnings.sort();
 
-    Ok(QueuePreflightReport {
-        ok: blocking_errors.is_empty(),
-        regex_error: None,
-        blocking_errors,
-        warnings,
-        previews,
+        Ok(QueuePreflightReport {
+            ok: blocking_errors.is_empty(),
+            regex_error: None,
+            blocking_errors,
+            warnings,
+            previews,
+        })
     })
+    .await
+    .map_err(|e| format!("check_queue_preflight task failed: {e}"))?
 }
 
-#[tauri::command]
-pub fn get_staged_output_info(
-    state: State<'_, AppState>,
-    job_id: String,
+fn build_staged_output_info(
+    db: &crate::db::Database,
+    job_id: &str,
 ) -> Result<StagedOutputInfo, String> {
-    let job = state
-        .scheduler
-        .db
-        .get_job(&job_id)?
+    let job = db
+        .get_job(job_id)?
         .ok_or_else(|| "Job not found".to_string())?;
-    let intent = state
-        .scheduler
-        .db
-        .get_latest_publish_intent_for_job(&job_id)?;
+    let intent = db.get_latest_publish_intent_for_job(job_id)?;
 
     let staged_path = job
         .staged_path
@@ -3857,19 +3938,35 @@ pub fn get_staged_output_info(
 }
 
 #[tauri::command]
-pub fn reveal_staged_file(state: State<'_, AppState>, job_id: String) -> Result<(), String> {
-    let info = get_staged_output_info(state, job_id)?;
-    let Some(sp) = info.staged_path else {
-        return Err("No staged output file recorded for this job.".to_string());
-    };
-    let p = Path::new(&sp);
-    if p.exists() {
-        reveal_in_file_manager(p)
-    } else if let Some(parent) = p.parent().filter(|d| d.exists()) {
-        reveal_folder(parent.to_string_lossy().to_string())
-    } else {
-        Err(format!("Staged file no longer exists at {sp}"))
-    }
+pub async fn get_staged_output_info(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> Result<StagedOutputInfo, String> {
+    let db = state.scheduler.db.clone();
+    tokio::task::spawn_blocking(move || build_staged_output_info(&db, &job_id))
+        .await
+        .map_err(|e| format!("get_staged_output_info task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn reveal_staged_file(state: State<'_, AppState>, job_id: String) -> Result<(), String> {
+    let db = state.scheduler.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let info = build_staged_output_info(&db, &job_id)?;
+        let Some(sp) = info.staged_path else {
+            return Err("No staged output file recorded for this job.".to_string());
+        };
+        let p = Path::new(&sp);
+        if p.exists() {
+            reveal_in_file_manager(p)
+        } else if let Some(parent) = p.parent().filter(|d| d.exists()) {
+            reveal_folder(parent.to_string_lossy().to_string())
+        } else {
+            Err(format!("Staged file no longer exists at {sp}"))
+        }
+    })
+    .await
+    .map_err(|e| format!("reveal_staged_file task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -4225,23 +4322,28 @@ fn execute_single_job_resolution(
 }
 
 #[tauri::command]
-pub fn resolve_staged_publish(
+pub async fn resolve_staged_publish(
     state: State<'_, AppState>,
     job_id: String,
     action: String,
     target_path: Option<String>,
     keep_original_backup: Option<bool>,
 ) -> Result<JobRecord, String> {
-    let _guard = state.scheduler.cleanup_lock.lock();
-    let job = execute_single_job_resolution(
-        &state.scheduler,
-        &job_id,
-        &action,
-        target_path.as_deref(),
-        keep_original_backup.unwrap_or(false),
-    )?;
-    state.scheduler.emit_snapshot_changed();
-    Ok(job)
+    let sched = state.scheduler.clone();
+    tokio::task::spawn_blocking(move || {
+        let _guard = sched.cleanup_lock.lock();
+        let job = execute_single_job_resolution(
+            &sched,
+            &job_id,
+            &action,
+            target_path.as_deref(),
+            keep_original_backup.unwrap_or(false),
+        )?;
+        sched.emit_snapshot_changed();
+        Ok(job)
+    })
+    .await
+    .map_err(|e| format!("resolve_staged_publish task failed: {e}"))?
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -4261,7 +4363,8 @@ pub struct BatchResolveResult {
 }
 
 #[tauri::command]
-pub fn batch_resolve_staged_publish(
+pub async fn batch_resolve_staged_publish(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     job_ids: Vec<String>,
     action: String,
@@ -4271,140 +4374,207 @@ pub fn batch_resolve_staged_publish(
     regex_replace: Option<String>,
     keep_original_backup: Option<bool>,
 ) -> Result<BatchResolveResult, String> {
-    let _guard = state.scheduler.cleanup_lock.lock();
-    let keep_backup = keep_original_backup.unwrap_or(false);
-    let custom_tmpl = path_template
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let custom_regex_find = regex_find
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+    let sched = state.scheduler.clone();
+    tokio::task::spawn_blocking(move || {
+        let _guard = sched.cleanup_lock.lock();
+        let keep_backup = keep_original_backup.unwrap_or(false);
+        let custom_tmpl = path_template
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let custom_regex_find = regex_find
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
 
-    let custom_cfg = OutputConfig {
-        mode: if action == "fault_tolerant_replace" {
-            OutputMode::ReplaceOriginal
-        } else {
-            OutputMode::TemplateFolder
-        },
-        replace_behavior: ReplaceBehavior::AutoDeleteOriginal,
-        path_template: custom_tmpl.clone(),
-        regex_find: custom_regex_find.clone(),
-        regex_replace: regex_replace.clone(),
-    };
-    if custom_regex_find.is_some() {
-        apply_output_regex_to_stem("check", &custom_cfg)?;
-    }
+        let custom_cfg = OutputConfig {
+            mode: if action == "fault_tolerant_replace" {
+                OutputMode::ReplaceOriginal
+            } else {
+                OutputMode::TemplateFolder
+            },
+            replace_behavior: ReplaceBehavior::AutoDeleteOriginal,
+            path_template: custom_tmpl.clone(),
+            regex_find: custom_regex_find.clone(),
+            regex_replace: regex_replace.clone(),
+        };
+        if custom_regex_find.is_some() {
+            apply_output_regex_to_stem("check", &custom_cfg)?;
+        }
 
-    let mut reserved: HashSet<String> = state
-        .scheduler
-        .db
-        .list_all_jobs()?
-        .into_iter()
-        .map(|j| j.destination_path.to_ascii_lowercase())
-        .collect();
+        let mut reserved: HashSet<String> = sched
+            .db
+            .list_all_jobs()?
+            .into_iter()
+            .map(|j| j.destination_path.to_ascii_lowercase())
+            .collect();
 
-    let mut succeeded = 0usize;
-    let mut failed = 0usize;
-    let mut results = Vec::with_capacity(job_ids.len());
+        let total = job_ids.len();
+        let mut succeeded = 0usize;
+        let mut failed = 0usize;
+        let mut results = Vec::with_capacity(total);
 
-    for jid in &job_ids {
-        let computed_target: Option<String> = match state.scheduler.db.get_job(jid)? {
-            Some(job) => {
-                reserved.remove(&job.destination_path.to_ascii_lowercase());
-                if custom_tmpl.is_some() || custom_regex_find.is_some() || target_dir.is_some() {
-                    let src_p = Path::new(&job.source_path);
-                    let dest_root = target_dir
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| {
-                            src_p
-                                .parent()
-                                .unwrap_or_else(|| Path::new("."))
-                                .to_path_buf()
-                        });
-                    let rel_p = if target_dir.is_some() && custom_tmpl.is_none() {
-                        src_p
-                            .file_name()
-                            .map(PathBuf::from)
-                            .unwrap_or_else(|| PathBuf::from(&job.source_rel_path))
+        for (idx, jid) in job_ids.iter().enumerate() {
+            let job_opt = sched.db.get_job(jid)?;
+            let current_file = job_opt
+                .as_ref()
+                .map(|j| {
+                    Path::new(&j.source_path)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| j.source_rel_path.clone())
+                })
+                .unwrap_or_else(|| jid.clone());
+
+            let _ = app.emit(
+                "batch_resolve_progress",
+                serde_json::json!({
+                    "total": total,
+                    "done": idx,
+                    "succeeded": succeeded,
+                    "failed": failed,
+                    "current_file": current_file,
+                    "phase": if action == "fault_tolerant_replace" {
+                        "Replacing & verifying"
+                    } else if action == "discard_staged" {
+                        "Discarding staged file"
                     } else {
-                        PathBuf::from(&job.source_rel_path)
-                    };
-                    match resolve_destination_path_with_config(
-                        src_p,
-                        &rel_p,
-                        &dest_root,
-                        &job.recipe,
-                        &custom_cfg,
-                        &mut reserved,
-                    ) {
-                        Ok(p) => Some(p.to_string_lossy().to_string()),
-                        Err(e) => {
-                            failed += 1;
-                            results.push(BatchResolveItemResult {
-                                job_id: jid.clone(),
-                                ok: false,
-                                destination_path: None,
-                                error: Some(e),
+                        "Publishing & verifying"
+                    },
+                }),
+            );
+
+            let computed_target: Option<String> = match job_opt {
+                Some(job) => {
+                    reserved.remove(&job.destination_path.to_ascii_lowercase());
+                    if custom_tmpl.is_some() || custom_regex_find.is_some() || target_dir.is_some() {
+                        let src_p = Path::new(&job.source_path);
+                        let dest_root = target_dir
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| {
+                                src_p
+                                    .parent()
+                                    .unwrap_or_else(|| Path::new("."))
+                                    .to_path_buf()
                             });
-                            continue;
+                        let rel_p = if target_dir.is_some() && custom_tmpl.is_none() {
+                            src_p
+                                .file_name()
+                                .map(PathBuf::from)
+                                .unwrap_or_else(|| PathBuf::from(&job.source_rel_path))
+                        } else {
+                            PathBuf::from(&job.source_rel_path)
+                        };
+                        match resolve_destination_path_with_config(
+                            src_p,
+                            &rel_p,
+                            &dest_root,
+                            &job.recipe,
+                            &custom_cfg,
+                            &mut reserved,
+                        ) {
+                            Ok(p) => Some(p.to_string_lossy().to_string()),
+                            Err(e) => {
+                                failed += 1;
+                                results.push(BatchResolveItemResult {
+                                    job_id: jid.clone(),
+                                    ok: false,
+                                    destination_path: None,
+                                    error: Some(e),
+                                });
+                                let _ = app.emit(
+                                    "batch_resolve_progress",
+                                    serde_json::json!({
+                                        "total": total,
+                                        "done": idx + 1,
+                                        "succeeded": succeeded,
+                                        "failed": failed,
+                                        "current_file": current_file,
+                                        "phase": "Failed",
+                                    }),
+                                );
+                                continue;
+                            }
                         }
+                    } else {
+                        None
                     }
-                } else {
-                    None
+                }
+                None => {
+                    failed += 1;
+                    results.push(BatchResolveItemResult {
+                        job_id: jid.clone(),
+                        ok: false,
+                        destination_path: None,
+                        error: Some("Job not found".to_string()),
+                    });
+                    let _ = app.emit(
+                        "batch_resolve_progress",
+                        serde_json::json!({
+                            "total": total,
+                            "done": idx + 1,
+                            "succeeded": succeeded,
+                            "failed": failed,
+                            "current_file": current_file,
+                            "phase": "Failed",
+                        }),
+                    );
+                    continue;
+                }
+            };
+
+            match execute_single_job_resolution(
+                &sched,
+                jid,
+                &action,
+                computed_target.as_deref(),
+                keep_backup,
+            ) {
+                Ok(updated_job) => {
+                    succeeded += 1;
+                    results.push(BatchResolveItemResult {
+                        job_id: jid.clone(),
+                        ok: true,
+                        destination_path: Some(updated_job.destination_path),
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    failed += 1;
+                    results.push(BatchResolveItemResult {
+                        job_id: jid.clone(),
+                        ok: false,
+                        destination_path: computed_target,
+                        error: Some(e),
+                    });
                 }
             }
-            None => {
-                failed += 1;
-                results.push(BatchResolveItemResult {
-                    job_id: jid.clone(),
-                    ok: false,
-                    destination_path: None,
-                    error: Some("Job not found".to_string()),
-                });
-                continue;
-            }
-        };
-
-        match execute_single_job_resolution(
-            &state.scheduler,
-            jid,
-            &action,
-            computed_target.as_deref(),
-            keep_backup,
-        ) {
-            Ok(updated_job) => {
-                succeeded += 1;
-                results.push(BatchResolveItemResult {
-                    job_id: jid.clone(),
-                    ok: true,
-                    destination_path: Some(updated_job.destination_path),
-                    error: None,
-                });
-            }
-            Err(e) => {
-                failed += 1;
-                results.push(BatchResolveItemResult {
-                    job_id: jid.clone(),
-                    ok: false,
-                    destination_path: computed_target,
-                    error: Some(e),
-                });
-            }
+            sched.emit_snapshot_changed();
+            let _ = app.emit(
+                "batch_resolve_progress",
+                serde_json::json!({
+                    "total": total,
+                    "done": idx + 1,
+                    "succeeded": succeeded,
+                    "failed": failed,
+                    "current_file": current_file,
+                    "phase": "Completed item",
+                }),
+            );
         }
-    }
 
-    state.scheduler.emit_snapshot_changed();
-    Ok(BatchResolveResult {
-        total: job_ids.len(),
-        succeeded,
-        failed,
-        results,
+        Ok(BatchResolveResult {
+            total,
+            succeeded,
+            failed,
+            results,
+        })
     })
+    .await
+    .map_err(|e| format!("batch_resolve_staged_publish task failed: {e}"))?
 }

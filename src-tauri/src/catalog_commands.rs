@@ -69,7 +69,7 @@ fn tool_paths(state: &AppState) -> (Option<PathBuf>, Option<PathBuf>) {
 // ============================================================================
 
 #[tauri::command]
-pub fn catalog_add_root(
+pub async fn catalog_add_root(
     state: State<'_, AppState>,
     path: String,
     label: Option<String>,
@@ -78,16 +78,20 @@ pub fn catalog_add_root(
     include_hidden: Option<bool>,
     auto_analysis_level: Option<i32>,
 ) -> Result<LibraryRoot, String> {
-    let root = add_library_root(
-        &state.scheduler.db,
-        Path::new(&path),
-        label.as_deref(),
-        recursive.unwrap_or(true),
-        exclusions.unwrap_or_default(),
-        include_hidden.unwrap_or(false),
-        auto_analysis_level.unwrap_or(1),
-    )?;
-    Ok(root)
+    let db = state.scheduler.db.clone();
+    tokio::task::spawn_blocking(move || {
+        add_library_root(
+            &db,
+            Path::new(&path),
+            label.as_deref(),
+            recursive.unwrap_or(true),
+            exclusions.unwrap_or_default(),
+            include_hidden.unwrap_or(false),
+            auto_analysis_level.unwrap_or(1),
+        )
+    })
+    .await
+    .map_err(|e| format!("catalog_add_root task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -302,16 +306,19 @@ pub fn collections_evaluate(state: State<'_, AppState>, id: String) -> Result<Ca
 }
 
 #[tauri::command]
-pub fn organize_preview_rename(
+pub async fn organize_preview_rename(
     state: State<'_, AppState>,
     file_keys: Vec<String>,
     options: RenameOptions,
 ) -> Result<FileOpPreviewResult, String> {
-    preview_batch_rename(&state.scheduler.db, &file_keys, &options)
+    let db = state.scheduler.db.clone();
+    tokio::task::spawn_blocking(move || preview_batch_rename(&db, &file_keys, &options))
+        .await
+        .map_err(|e| format!("organize_preview_rename task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn organize_preview_move_copy(
+pub async fn organize_preview_move_copy(
     state: State<'_, AppState>,
     file_keys: Vec<String>,
     dest_root: String,
@@ -319,32 +326,42 @@ pub fn organize_preview_move_copy(
     is_copy: bool,
     multi_value_policy: Option<String>,
 ) -> Result<FileOpPreviewResult, String> {
-    preview_batch_move_or_copy(
-        &state.scheduler.db,
-        &file_keys,
-        Path::new(&dest_root),
-        folder_template.as_deref(),
-        is_copy,
-        multi_value_policy.as_deref(),
-    )
+    let db = state.scheduler.db.clone();
+    tokio::task::spawn_blocking(move || {
+        preview_batch_move_or_copy(
+            &db,
+            &file_keys,
+            Path::new(&dest_root),
+            folder_template.as_deref(),
+            is_copy,
+            multi_value_policy.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("organize_preview_move_copy task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn organize_execute_batch(
+pub async fn organize_execute_batch(
     state: State<'_, AppState>,
     items: Option<Vec<FileOpPreviewItem>>,
     summary: String,
     plan_id: Option<String>,
 ) -> Result<BatchOpExecResult, String> {
-    let _guard = state.scheduler.cleanup_lock.lock();
-    let res = if let Some(pid) = plan_id.filter(|s| !s.trim().is_empty()) {
-        crate::organize::execute_batch_plan_by_id(&state.scheduler.db, &pid, &summary)?
-    } else {
-        let list = items.unwrap_or_default();
-        execute_batch_file_operations(&state.scheduler.db, &list, &summary)?
-    };
-    state.scheduler.emit_snapshot_changed();
-    Ok(res)
+    let sched = state.scheduler.clone();
+    tokio::task::spawn_blocking(move || {
+        let _guard = sched.cleanup_lock.lock();
+        let res = if let Some(pid) = plan_id.filter(|s| !s.trim().is_empty()) {
+            crate::organize::execute_batch_plan_by_id(&sched.db, &pid, &summary)?
+        } else {
+            let list = items.unwrap_or_default();
+            execute_batch_file_operations(&sched.db, &list, &summary)?
+        };
+        sched.emit_snapshot_changed();
+        Ok(res)
+    })
+    .await
+    .map_err(|e| format!("organize_execute_batch task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -353,11 +370,16 @@ pub fn organize_list_history(state: State<'_, AppState>) -> Result<Vec<Operation
 }
 
 #[tauri::command]
-pub fn organize_undo(state: State<'_, AppState>, operation_id: String) -> Result<BatchOpExecResult, String> {
-    let _guard = state.scheduler.cleanup_lock.lock();
-    let res = undo_operation(&state.scheduler.db, &operation_id)?;
-    state.scheduler.emit_snapshot_changed();
-    Ok(res)
+pub async fn organize_undo(state: State<'_, AppState>, operation_id: String) -> Result<BatchOpExecResult, String> {
+    let sched = state.scheduler.clone();
+    tokio::task::spawn_blocking(move || {
+        let _guard = sched.cleanup_lock.lock();
+        let res = undo_operation(&sched.db, &operation_id)?;
+        sched.emit_snapshot_changed();
+        Ok(res)
+    })
+    .await
+    .map_err(|e| format!("organize_undo task failed: {e}"))?
 }
 
 // ============================================================================
@@ -447,38 +469,43 @@ pub fn duplicates_merge_tags(
 }
 
 #[tauri::command]
-pub fn duplicates_trash_copies(
+pub async fn duplicates_trash_copies(
     state: State<'_, AppState>,
     file_keys: Vec<String>,
 ) -> Result<Vec<(String, Result<String, String>)>, String> {
-    let _guard = state.scheduler.cleanup_lock.lock();
-    let plan = crate::cleanup::preview_guarded_trash(
-        &state.scheduler.db,
-        None,
-        &file_keys,
-        crate::models::RemovalReason::LibraryDuplicateCopy,
-    )?;
-    if !plan.trash_supported && plan.eligible_count == 0 {
-        if let Some(err) = plan.trash_support_error {
-            return Err(err);
-        }
-    }
-    let res = crate::cleanup::execute_guarded_trash_plan(&state.scheduler.db, &plan.plan_id)?;
-    state.scheduler.emit_snapshot_changed();
-    Ok(res
-        .outcomes
-        .into_iter()
-        .map(|o| {
-            if o.moved {
-                (o.item_id, Ok("Moved to Trash".to_string()))
-            } else {
-                (
-                    o.item_id,
-                    Err(o.error.unwrap_or_else(|| "Trash failed".to_string())),
-                )
+    let sched = state.scheduler.clone();
+    tokio::task::spawn_blocking(move || {
+        let _guard = sched.cleanup_lock.lock();
+        let plan = crate::cleanup::preview_guarded_trash(
+            &sched.db,
+            None,
+            &file_keys,
+            crate::models::RemovalReason::LibraryDuplicateCopy,
+        )?;
+        if !plan.trash_supported && plan.eligible_count == 0 {
+            if let Some(err) = plan.trash_support_error {
+                return Err(err);
             }
-        })
-        .collect())
+        }
+        let res = crate::cleanup::execute_guarded_trash_plan(&sched.db, &plan.plan_id)?;
+        sched.emit_snapshot_changed();
+        Ok(res
+            .outcomes
+            .into_iter()
+            .map(|o| {
+                if o.moved {
+                    (o.item_id, Ok("Moved to Trash".to_string()))
+                } else {
+                    (
+                        o.item_id,
+                        Err(o.error.unwrap_or_else(|| "Trash failed".to_string())),
+                    )
+                }
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| format!("duplicates_trash_copies task failed: {e}"))?
 }
 
 // ============================================================================

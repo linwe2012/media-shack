@@ -5225,41 +5225,135 @@
   }
 
   async function openReviewOriginalsModal(queueId) {
-    const candidates = await invoke("get_cleanup_candidates", { queueId });
+    let candidates;
+    try {
+      candidates = await invoke("get_cleanup_candidates", { queueId });
+    } catch (err) {
+      return showToast(String(err), "warn");
+    }
     const selectedIds = new Set();
+    let isRunning = false;
+    const isRowSelectable = (c) => c.eligible && c.cleanup_outcome !== "trashed" && !isProtectedSource(c.source_path);
+    const selectableIds = candidates.filter(isRowSelectable).map((c) => c.job_id);
+
     const draw = () => {
       const wrap = document.createElement("div");
-      const totalSelectedBytes = candidates.filter((c) => selectedIds.has(c.job_id)).reduce((acc, c) => acc + c.input_bytes, 0);
-      wrap.innerHTML = `<p style="font-size:12px;">Move verified originals to recoverable OS Trash. Nothing is selected by default.</p>`;
+      const selectedCands = candidates.filter((c) => selectedIds.has(c.job_id));
+      const totalSelectedBytes = selectedCands.reduce((acc, c) => acc + c.input_bytes, 0);
+      const nonTrashCount = selectedCands.filter((c) => !c.trash_supported).length;
+      wrap.innerHTML = `
+        <div class="inline-row" style="justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
+          <p style="font-size:12px;margin:0;">Select verified originals to delete. Recoverable OS Trash is used where supported; network / exFAT volumes delete permanently only on your confirmation.</p>
+          <div class="inline-row" style="gap:6px;">
+            <button type="button" id="rev-select-all" class="btn btn-sm btn-secondary" ${isRunning || selectableIds.length === 0 ? "disabled" : ""}>Select All (${selectableIds.length})</button>
+            <button type="button" id="rev-clear-all" class="btn btn-sm btn-ghost" ${isRunning || selectedIds.size === 0 ? "disabled" : ""}>Clear</button>
+          </div>
+        </div>
+        <div id="rev-progress-card" class="resolve-card hidden" style="margin-bottom:8px;">
+          <div class="inline-row" style="justify-content:space-between;font-size:12px;">
+            <strong id="rev-prog-title">Deleting originals…</strong>
+            <span id="rev-prog-pct" class="muted tabular-nums">0%</span>
+          </div>
+          <div style="height:6px;border-radius:999px;background:var(--surface-2);overflow:hidden;margin:6px 0;">
+            <div id="rev-prog-fill" style="height:100%;width:0%;background:var(--err);transition:width .15s ease;"></div>
+          </div>
+          <div id="rev-prog-detail" class="muted truncate" style="font-size:11px;">Preparing…</div>
+        </div>`;
+
       const tbl = document.createElement("table");
       tbl.className = "table-simple";
-      tbl.innerHTML = `<thead><tr><th>Trash</th><th>Source</th><th>Original → Output</th><th>Status</th></tr></thead><tbody></tbody>`;
+      tbl.innerHTML = `<thead><tr><th>Delete</th><th>Source</th><th>Original → Output</th><th>Status</th></tr></thead><tbody></tbody>`;
       const tbody = tbl.querySelector("tbody");
       for (const c of candidates) {
         const prot = isProtectedSource(c.source_path);
-        const canSelect = c.eligible && c.cleanup_outcome !== "trashed" && !prot;
+        const canSelect = isRowSelectable(c) && !isRunning;
         const tr = document.createElement("tr");
+        let statusHtml = "";
+        if (prot) statusHtml = "Protected ★ Locked";
+        else if (c.cleanup_outcome === "trashed") statusHtml = "Deleted / Trashed";
+        else if (!c.eligible) statusHtml = escapeHtml(c.ineligibility_reason || "Ineligible");
+        else if (!c.trash_supported) statusHtml = `${escapeHtml(c.codec_label)} · <span style="color:var(--warn);">Direct delete (no OS Trash)</span>`;
+        else statusHtml = `${escapeHtml(c.codec_label)} · OS Trash`;
         tr.innerHTML = `<td><input type="checkbox" ${selectedIds.has(c.job_id) ? "checked" : ""} ${canSelect ? "" : "disabled"}/></td>
-          <td class="mono truncate" style="max-width:210px;">${escapeHtml(c.source_path)}</td>
+          <td class="mono truncate" style="max-width:210px;" title="${escapeHtml(c.source_path)}">${escapeHtml(c.source_path)}</td>
           <td class="tabular-nums">${fmtBytes(c.input_bytes)} → ${fmtBytes(c.output_bytes)}</td>
-          <td>${prot ? "Protected ★ Locked" : escapeHtml(c.cleanup_outcome === "trashed" ? "Moved to Trash" : c.eligible ? c.codec_label : (c.ineligibility_reason || "Ineligible"))}</td>`;
-        tr.querySelector("input").addEventListener("change", (e) => { if (e.target.checked) selectedIds.add(c.job_id); else selectedIds.delete(c.job_id); draw(); });
+          <td>${statusHtml}</td>`;
+        tr.querySelector("input").addEventListener("change", (e) => {
+          if (e.target.checked) selectedIds.add(c.job_id);
+          else selectedIds.delete(c.job_id);
+          draw();
+        });
         tbody.appendChild(tr);
       }
       wrap.appendChild(tbl);
+      const actionLabel = nonTrashCount > 0
+        ? `Delete ${selectedIds.size} selected (${fmtBytes(totalSelectedBytes)}; ${nonTrashCount} permanent)`
+        : `Move ${selectedIds.size} selected (${fmtBytes(totalSelectedBytes)}) to Trash`;
       openModalEl("Review Originals", wrap, [
-        { label: "Keep remaining & Close", cls: "btn btn-primary", onClick: closeModal },
+        { label: "Keep remaining & Close", cls: "btn btn-primary", disabled: isRunning, onClick: closeModal },
         {
-          label: `Move ${selectedIds.size} selected (${fmtBytes(totalSelectedBytes)}) to Trash`,
+          label: actionLabel,
           cls: "btn btn-danger",
-          disabled: selectedIds.size === 0,
+          disabled: isRunning || selectedIds.size === 0,
           onClick: async () => {
-            await invoke("trash_selected_originals", { jobIds: Array.from(selectedIds) });
-            await refreshSnapshot();
-            openReviewOriginalsModal(queueId);
+            if (isRunning) return;
+            if (nonTrashCount > 0) {
+              const ok = window.confirm(
+                `${nonTrashCount} selected original(s) are on a network or non-Trash volume and will be PERMANENTLY deleted after verifying the encoded outputs. Continue?`
+              );
+              if (!ok) return;
+            }
+            isRunning = true;
+            wrap.querySelectorAll("button, input").forEach((el) => { el.disabled = true; });
+            const pCard = wrap.querySelector("#rev-progress-card");
+            const pTitle = wrap.querySelector("#rev-prog-title");
+            const pPct = wrap.querySelector("#rev-prog-pct");
+            const pFill = wrap.querySelector("#rev-prog-fill");
+            const pDet = wrap.querySelector("#rev-prog-detail");
+            pCard?.classList.remove("hidden");
+            let unlisten = null;
+            try {
+              unlisten = await event.listen("review_originals_progress", (ev) => {
+                const p = ev.payload || {};
+                const tot = Math.max(1, p.total || selectedIds.size);
+                const done = Math.min(tot, p.done || 0);
+                const pct = Math.round((done / tot) * 100);
+                if (pTitle) pTitle.textContent = `Deleting ${done} / ${tot}… (${p.succeeded || 0} done${p.failed ? `, ${p.failed} failed` : ""})`;
+                if (pPct) pPct.textContent = `${pct}%`;
+                if (pFill) pFill.style.width = `${pct}%`;
+                if (pDet) pDet.textContent = p.current_file ? `Working on ${p.current_file}…` : "";
+              });
+              const res = await invoke("trash_selected_originals", {
+                jobIds: Array.from(selectedIds),
+                allowPermanentDelete: nonTrashCount > 0,
+              });
+              const errs = (res || []).filter((r) => r[1] && r[1].Err).map((r) => r[1].Err);
+              const okCnt = (res || []).length - errs.length;
+              await refreshSnapshot();
+              if (errs.length > 0) {
+                showToast(`Deleted ${okCnt}/${res.length} original(s): ${errs[0]}`, "warn");
+              } else {
+                showToast(`Deleted ${okCnt} verified original(s).`, "success");
+              }
+              openReviewOriginalsModal(queueId);
+            } catch (err) {
+              isRunning = false;
+              showToast(String(err), "warn");
+              draw();
+            } finally {
+              if (unlisten) unlisten();
+            }
           },
         },
       ]);
+      wrap.querySelector("#rev-select-all")?.addEventListener("click", () => {
+        selectableIds.forEach((id) => selectedIds.add(id));
+        draw();
+      });
+      wrap.querySelector("#rev-clear-all")?.addEventListener("click", () => {
+        selectedIds.clear();
+        draw();
+      });
     };
     draw();
   }
@@ -5632,13 +5726,24 @@
           <button type="button" id="res-mark-done" class="btn btn-sm btn-ghost">I Moved It Manually (Mark Done)</button>
           ${info.staged_exists ? `<button type="button" id="res-discard" class="btn btn-sm btn-danger-outline">Discard Staged &amp; Re-encode</button>` : ""}
         </div>
+        <div id="res-busy-banner" class="banner-card hidden" style="margin-top:8px;">
+          <span id="res-busy-text" style="font-size:12px;">Applying output action on destination volume…</span>
+        </div>
       </div>
     `;
 
     openModalEl("Resolve Encoded Output", wrap, [{ label: "Close", cls: "btn", onClick: closeModal }]);
 
+    let busy = false;
     const runAction = async (action, extra = {}) => {
+      if (busy) return;
+      busy = true;
       const keepBackup = Boolean($("res-keep-backup")?.checked);
+      wrap.querySelectorAll("button, input").forEach((el) => { el.disabled = true; });
+      const banner = wrap.querySelector("#res-busy-banner");
+      const bTxt = wrap.querySelector("#res-busy-text");
+      if (banner) banner.classList.remove("hidden");
+      if (bTxt) bTxt.textContent = "Applying action & verifying on destination volume…";
       try {
         await invoke("resolve_staged_publish", {
           jobId,
@@ -5650,6 +5755,10 @@
         showToast("Updated output resolution.", "success");
       } catch (err) {
         showToast(String(err), "warn");
+        wrap.querySelectorAll("button, input").forEach((el) => { el.disabled = false; });
+        if (banner) banner.classList.add("hidden");
+      } finally {
+        busy = false;
       }
     };
 
@@ -5726,6 +5835,16 @@
           <button type="button" id="bres-replace" class="btn btn-sm btn-secondary">Fault-Tolerant Replace All</button>
           <button type="button" id="bres-discard" class="btn btn-sm btn-danger-outline">Discard Staged &amp; Reset</button>
         </div>
+        <div id="bres-progress-card" class="hidden" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+          <div class="inline-row" style="justify-content:space-between;font-size:12px;">
+            <strong id="bres-prog-title">Starting batch resolve…</strong>
+            <span id="bres-prog-pct" class="muted tabular-nums">0%</span>
+          </div>
+          <div style="height:6px;border-radius:999px;background:var(--surface-2);overflow:hidden;margin:6px 0;">
+            <div id="bres-prog-fill" style="height:100%;width:0%;background:var(--accent);transition:width .15s ease;"></div>
+          </div>
+          <div id="bres-prog-detail" class="muted truncate" style="font-size:11px;">Preparing…</div>
+        </div>
       </div>
     `;
 
@@ -5745,12 +5864,38 @@
       $("bres-clear-dir")?.classList.add("hidden");
     });
 
+    let batchRunning = false;
     const runBatch = async (action) => {
+      if (batchRunning) return;
+      batchRunning = true;
       const tmpl = ($("bres-tmpl")?.value || "").trim() || null;
       const rgxFind = ($("bres-rgx-find")?.value || "").trim() || null;
       const rgxRep = ($("bres-rgx-rep")?.value || "");
       const keepBackup = Boolean($("bres-keep-backup")?.checked);
+
+      wrap.querySelectorAll("button, input").forEach((el) => { el.disabled = true; });
+      const closeBtn = document.querySelector("#modal-actions button");
+      if (closeBtn) closeBtn.disabled = true;
+      const pCard = wrap.querySelector("#bres-progress-card");
+      const pTitle = wrap.querySelector("#bres-prog-title");
+      const pPct = wrap.querySelector("#bres-prog-pct");
+      const pFill = wrap.querySelector("#bres-prog-fill");
+      const pDet = wrap.querySelector("#bres-prog-detail");
+      pCard?.classList.remove("hidden");
+
+      let unlisten = null;
       try {
+        unlisten = await event.listen("batch_resolve_progress", (ev) => {
+          const p = ev.payload || {};
+          const tot = Math.max(1, p.total || jobs.length);
+          const done = Math.min(tot, p.done || 0);
+          const pct = Math.round((done / tot) * 100);
+          if (pTitle) pTitle.textContent = `Resolved ${done} / ${tot}… (${p.succeeded || 0} ok${p.failed ? `, ${p.failed} failed` : ""})`;
+          if (pPct) pPct.textContent = `${pct}%`;
+          if (pFill) pFill.style.width = `${pct}%`;
+          if (pDet) pDet.textContent = p.current_file ? `${p.phase || "Working"}: ${p.current_file}` : "";
+        });
+
         const res = await invoke("batch_resolve_staged_publish", {
           jobIds: jobs.map((x) => x.id),
           action,
@@ -5770,6 +5915,11 @@
         }
       } catch (err) {
         showToast(String(err), "warn");
+        wrap.querySelectorAll("button, input").forEach((el) => { el.disabled = false; });
+        if (closeBtn) closeBtn.disabled = false;
+      } finally {
+        if (unlisten) unlisten();
+        batchRunning = false;
       }
     };
 

@@ -832,6 +832,10 @@ pub struct MorningSummary {
     pub recoverable_bytes_by_volume: HashMap<String, u64>,
 }
 
+fn default_cleanup_trash_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CleanupCandidate {
     pub job_id: String,
@@ -847,6 +851,10 @@ pub struct CleanupCandidate {
     pub ineligibility_reason: Option<String>,
     pub has_approved_conversions: bool,
     pub cleanup_outcome: CleanupOutcome,
+    #[serde(default = "default_cleanup_trash_true")]
+    pub trash_supported: bool,
+    #[serde(default)]
+    pub trash_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

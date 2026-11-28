@@ -261,7 +261,7 @@ pub fn evaluate_cleanup_eligibility(
             )),
         );
     }
-    if !job.full_decode_verified {
+    if is_unattended && !job.full_decode_verified {
         return (
             false,
             Some("Full A/V decode verification of the output is required before source cleanup.".to_string()),
@@ -377,12 +377,14 @@ pub fn build_cleanup_candidates(db: &Database, queue_id: &str) -> Result<Vec<Cle
                 }
             }
         }
-        if eligible {
-            if let Err(e) = check_trash_support(Path::new(&j.source_path)) {
-                eligible = false;
-                reason = Some(e);
-            }
-        }
+        let (trash_supported, trash_note) = match check_trash_support(Path::new(&j.source_path)) {
+            Ok(true) => (true, None),
+            Ok(false) => (
+                false,
+                Some("Recoverable OS Trash is not supported on this volume (direct permanent delete required).".to_string()),
+            ),
+            Err(e) => (false, Some(e)),
+        };
         let vol_id = j
             .source_fingerprint
             .as_ref()
@@ -418,6 +420,8 @@ pub fn build_cleanup_candidates(db: &Database, queue_id: &str) -> Result<Vec<Cle
             ineligibility_reason: reason,
             has_approved_conversions,
             cleanup_outcome: j.cleanup_outcome,
+            trash_supported,
+            trash_note,
         });
     }
     Ok(out)
@@ -428,6 +432,16 @@ pub fn execute_cleanup_for_job(
     ffmpeg_path: Option<&Path>,
     job_id: &str,
     is_unattended: bool,
+) -> Result<JobRecord, String> {
+    execute_cleanup_for_job_with_options(db, ffmpeg_path, job_id, is_unattended, false)
+}
+
+pub fn execute_cleanup_for_job_with_options(
+    db: &Database,
+    ffmpeg_path: Option<&Path>,
+    job_id: &str,
+    is_unattended: bool,
+    allow_permanent_delete: bool,
 ) -> Result<JobRecord, String> {
     let all_jobs = db.list_all_jobs()?;
     let mut job = all_jobs
@@ -549,15 +563,33 @@ pub fn execute_cleanup_for_job(
         return Err(msg);
     }
 
-    // Verify Trash support on source volume
-    if let Err(e) = check_trash_support(&src_path) {
-        job.cleanup_outcome = CleanupOutcome::Failed;
-        job.cleanup_error = Some(e.clone());
-        let _ = db.upsert_job(&job);
-        return Err(e);
-    }
+    // Verify Trash support on source volume (allow permanent delete ONLY on explicit manual consent)
+    let trash_ok = match check_trash_support(&src_path) {
+        Ok(true) => true,
+        Ok(false) => {
+            if !is_unattended && allow_permanent_delete {
+                false
+            } else {
+                let e = "Recoverable OS Trash is not supported on this volume.".to_string();
+                job.cleanup_outcome = CleanupOutcome::Failed;
+                job.cleanup_error = Some(e.clone());
+                let _ = db.upsert_job(&job);
+                return Err(e);
+            }
+        }
+        Err(e) => {
+            if !is_unattended && allow_permanent_delete {
+                false
+            } else {
+                job.cleanup_outcome = CleanupOutcome::Failed;
+                job.cleanup_error = Some(e.clone());
+                let _ = db.upsert_job(&job);
+                return Err(e);
+            }
+        }
+    };
 
-    // Persist intent before calling OS Trash
+    // Persist intent before deleting / calling OS Trash
     let action_id = Uuid::new_v4().to_string();
     let intent = CleanupIntentRecord {
         action_id: action_id.clone(),
@@ -577,7 +609,27 @@ pub fn execute_cleanup_for_job(
     db.save_cleanup_intent(&intent)?;
     db.update_cleanup_intent(&action_id, "executing", None)?;
 
-    match move_to_recoverable_trash_verified(&src_path, &src_fp) {
+    let removal_res = if trash_ok {
+        move_to_recoverable_trash_verified(&src_path, &src_fp)
+    } else {
+        // Re-verify source file identity right before permanent unlink
+        match capture_file_identity(&src_path) {
+            Ok(cur_src)
+                if cur_src.file_id == src_fp.file_id
+                    && cur_src.volume_id == src_fp.volume_id
+                    && cur_src.size_bytes == src_fp.size_bytes
+                    && cur_src.mtime_ns == src_fp.mtime_ns
+                    && cur_src.link_count <= 1 =>
+            {
+                std::fs::remove_file(&src_path)
+                    .map_err(|e| format!("Failed removing original file on non-Trash volume: {e}"))
+            }
+            Ok(_) => Err("Source file identity changed before permanent deletion; kept safely.".to_string()),
+            Err(e) => Err(format!("Cannot inspect source file before deletion ({e}); kept safely.")),
+        }
+    };
+
+    match removal_res {
         Ok(()) => {
             db.update_cleanup_intent(&action_id, "trashed", None)?;
             job.cleanup_outcome = CleanupOutcome::Trashed;

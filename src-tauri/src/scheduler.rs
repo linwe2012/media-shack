@@ -1176,7 +1176,11 @@ impl Scheduler {
         job.status = JobStatus::Completed;
         job.destination_path = final_dest.to_string_lossy().to_string();
         job.output_bytes = Some(output_bytes);
-        job.output_fingerprint = capture_file_identity_with_blake3(final_dest).ok();
+        job.output_fingerprint = if replaced_original {
+            capture_file_identity(final_dest).ok()
+        } else {
+            capture_file_identity_with_blake3(final_dest).ok()
+        };
         job.full_decode_verified = full_decode_verified;
         job.error_stage = None;
         job.error_message = None;
