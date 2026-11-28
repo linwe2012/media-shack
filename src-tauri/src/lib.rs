@@ -109,10 +109,8 @@ pub fn run() {
                 .unwrap()
         })
         .setup(|app| {
-            let app_data_dir: PathBuf = app
-                .path()
-                .app_data_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("media-shack"));
+            let app_data_dir: PathBuf = resolve_app_data_dir(app);
+            let _ = std::fs::create_dir_all(&app_data_dir);
             let instance_lock = acquire_instance_lock(&app_data_dir)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::AlreadyExists, e))?;
             let database = Database::open(&app_data_dir)
@@ -294,6 +292,28 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Media Shack");
+}
+
+fn resolve_app_data_dir(app: &tauri::App) -> PathBuf {
+    if let Some(custom) = std::env::var_os("MEDIA_SHACK_DATA_DIR") {
+        let p = PathBuf::from(custom);
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            if exe_dir.join("portable.flag").is_file()
+                || exe_dir.join("portable.txt").is_file()
+                || exe_dir.join("data").is_dir()
+            {
+                return exe_dir.join("data");
+            }
+        }
+    }
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("media-shack"))
 }
 
 fn parse_byte_range(header: &str, total_len: usize) -> Option<(usize, usize)> {

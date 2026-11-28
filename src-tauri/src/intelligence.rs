@@ -100,9 +100,6 @@ pub struct LlmOrganizationProposal {
 
 pub fn discover_ml_worker() -> Option<PathBuf> {
     let mut dirs = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        dirs.push(cwd);
-    }
     if let Ok(exe) = std::env::current_exe() {
         let mut cur = exe.parent().map(Path::to_path_buf);
         for _ in 0..5 {
@@ -111,6 +108,9 @@ pub fn discover_ml_worker() -> Option<PathBuf> {
                 cur = d.parent().map(Path::to_path_buf);
             }
         }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        dirs.push(cwd);
     }
     for base in dirs {
         for rel in ["workers/ml_worker.py", "../workers/ml_worker.py", "../../workers/ml_worker.py"] {
