@@ -242,13 +242,21 @@ impl Scheduler {
             }
         }
 
-        // 4. Pause previously running queues so user explicitly resumes or inspects
+        // 4. Pause previously running or queued tabs on launch so user explicitly resumes instead of auto-encoding on startup
         for mut q in self.db.list_queues()? {
-            if q.is_running {
+            let has_waiting_ready = !q.is_running
+                && !q.is_paused
+                && q.tab_type == TabType::Encode
+                && self
+                    .db
+                    .list_jobs_for_queue(&q.id)
+                    .map(|js| js.iter().any(|j| matches!(j.status, JobStatus::Ready | JobStatus::Queued)))
+                    .unwrap_or(false);
+            if q.is_running || has_waiting_ready {
                 q.is_running = false;
                 q.is_paused = true;
                 q.pause_after_current = false;
-                q.waiting_reason = Some("Interrupted on last run — click Start/Resume queue".to_string());
+                q.waiting_reason = Some("Paused after app restart — click Resume Queue to continue".to_string());
                 let _ = self.db.upsert_queue(&q);
             }
         }

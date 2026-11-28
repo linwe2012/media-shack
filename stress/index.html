@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Media Shack UI stress harness</title>
+  <style>
+    :root{color-scheme:dark;font:14px/1.45 system-ui,sans-serif;background:#111;color:#eee}*{box-sizing:border-box}body{margin:0}.harness{position:sticky;top:0;z-index:99999;display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:9px 14px;background:#20201e;border-bottom:1px solid #555;box-shadow:0 2px 8px #0008}.harness label{display:flex;align-items:center;gap:6px}.harness select,.harness input,.harness button{background:#333;color:#eee;border:1px solid #666;border-radius:4px;padding:5px 8px}.harness button{cursor:pointer}.metric{color:#bdbdbd}.metric strong{color:#fff}.safe{color:#76d58c}.frame{width:100%;height:calc(100vh - 49px);border:0;background:#141414}body{overflow:hidden}
+  </style>
+</head>
+<body>
+  <header class="harness" aria-label="Stress harness controls">
+    <strong>UI stress harness</strong>
+    <label>Dataset <select id="size"><option value="smoke">Smoke (1,000)</option><option value="10k">10,000</option><option value="50k">50,000</option></select></label>
+    <button id="reload">Load dataset</button>
+    <button id="progress">Progress churn</button>
+    <label>Find <input id="finder" placeholder="Unique path or filename"><button id="find">Find</button></label>
+    <span class="metric" id="status">Preparing…</span>
+    <span class="metric safe">100% local mock · no media writes</span>
+  </header>
+  <iframe id="app" class="frame" title="Media Shack under test"></iframe>
+  <script>
+    const params=new URLSearchParams(location.search), size=params.get('size')||'smoke';
+    const frame=document.querySelector('#app'); document.querySelector('#size').value=['smoke','10k','50k'].includes(size)?size:'smoke';
+    const load=()=>{const u=new URL('/ui/index.html',location.origin);u.searchParams.set('stress','1');u.searchParams.set('size',document.querySelector('#size').value);frame.src=u;};
+    document.querySelector('#reload').onclick=load; load();
+    document.querySelector('#progress').onclick=()=>frame.contentWindow.__stressHarness?.setScenario('progress');
+    document.querySelector('#find').onclick=()=>frame.contentWindow.__stressHarness?.find(document.querySelector('#finder').value);
+    document.querySelector('#finder').addEventListener('keydown',e=>{if(e.key==='Enter')document.querySelector('#find').click()});
+    const update=()=>{const h=frame.contentWindow.__stressHarness;if(!h){setTimeout(update,100);return}document.querySelector('#status').textContent=`${h.metrics().fileCount.toLocaleString()} files · ${h.metrics().visibleRows.toLocaleString()} visible · ${h.metrics().bytes.toLocaleString()} B · ready`};
+    frame.addEventListener('load',()=>setTimeout(update,100));
+    window.__stressHarness={frame,metrics:()=>frame.contentWindow.__stressHarness?.metrics(),setScenario:n=>frame.contentWindow.__stressHarness?.setScenario(n),find:s=>frame.contentWindow.__stressHarness?.find(s)};
+  </script>
+</body>
+</html>

@@ -1307,7 +1307,8 @@ pub fn start_queue(
     })
 }
 
-/// Add ONLY the explicitly selected video items from a tab's Video List to the Encode Queue.
+/// Add ONLY the explicitly selected video items from a tab's Video List to the Encode Queue,
+/// and immediately ensure the ongoing Queue processor starts running them.
 /// Unselected items stay untouched in the Video List (`JobStatus::Listed`).
 #[tauri::command]
 pub fn enqueue_jobs(
@@ -1317,6 +1318,7 @@ pub fn enqueue_jobs(
     start_now: Option<bool>,
     consent_confirmed: Option<bool>,
 ) -> Result<StartQueueResponse, String> {
+    let _ = start_now; // Queue is always an ongoing process; adding items starts processing automatically.
     let _guard = state.scheduler.cleanup_lock.lock();
     let mut q = state
         .scheduler
@@ -1336,41 +1338,26 @@ pub fn enqueue_jobs(
         }
     }
 
-    let mut next_pos = state.scheduler.db.next_job_position(&queue_id)?;
-    let now = Utc::now().timestamp();
-    let mut enqueued_count = 0usize;
+    let candidate_ids: Vec<String> = job_ids
+        .iter()
+        .filter(|jid| {
+            jobs.iter().any(|j| {
+                &j.id == *jid
+                    && matches!(
+                        j.status,
+                        JobStatus::Listed
+                            | JobStatus::Canceled
+                            | JobStatus::Failed
+                            | JobStatus::Interrupted
+                            | JobStatus::BelowSavingsTarget
+                    )
+                    && j.plan.as_ref().map(|p| p.is_ready).unwrap_or(false)
+            })
+        })
+        .cloned()
+        .collect();
 
-    // Preserve explicit selection order when appending to Queue
-    for jid in &job_ids {
-        let Some(j) = jobs.iter_mut().find(|x| &x.id == jid) else {
-            continue;
-        };
-        let is_ready_plan = j.plan.as_ref().map(|p| p.is_ready).unwrap_or(false);
-        if matches!(
-            j.status,
-            JobStatus::Listed
-                | JobStatus::Canceled
-                | JobStatus::Failed
-                | JobStatus::Interrupted
-                | JobStatus::BelowSavingsTarget
-        ) && is_ready_plan
-        {
-            j.status = JobStatus::Ready;
-            j.status_reason = None;
-            j.error_stage = None;
-            j.error_message = None;
-            j.output_bytes = None;
-            j.output_fingerprint = None;
-            j.consent_id = None;
-            j.position = next_pos;
-            next_pos += 1;
-            j.updated_at = now;
-            state.scheduler.db.upsert_job(j)?;
-            enqueued_count += 1;
-        }
-    }
-
-    if enqueued_count == 0
+    if candidate_ids.is_empty()
         && !jobs
             .iter()
             .any(|j| sel_set.contains(&j.id) && matches!(j.status, JobStatus::Ready | JobStatus::Queued))
@@ -1378,47 +1365,86 @@ pub fn enqueue_jobs(
         return Err("No checked ready videos could be added to the Queue.".to_string());
     }
 
-    if start_now == Some(true) {
-        let ready_jobs: Vec<JobRecord> = jobs
+    // Check TrashAfterEachFile batch consent BEFORE moving Listed items into the Queue so
+    // dismissing the prompt leaves them unselected in the Video List.
+    if q.cleanup_policy == CleanupPolicy::TrashAfterEachFile && consent_confirmed != Some(true) {
+        let mut unconsented: Vec<JobRecord> = jobs
             .iter()
-            .filter(|j| matches!(j.status, JobStatus::Ready | JobStatus::Queued))
+            .filter(|j| {
+                (candidate_ids.contains(&j.id)
+                    || matches!(j.status, JobStatus::Ready | JobStatus::Queued))
+                    && j.consent_id.is_none()
+            })
             .cloned()
             .collect();
-        if q.cleanup_policy == CleanupPolicy::TrashAfterEachFile && !ready_jobs.is_empty() {
-            let unconsented: Vec<JobRecord> = ready_jobs
-                .iter()
-                .filter(|j| j.consent_id.is_none())
-                .cloned()
-                .collect();
-            if !unconsented.is_empty() && consent_confirmed != Some(true) {
-                let total_bytes = unconsented.iter().map(|j| j.input_bytes).sum();
-                state.scheduler.emit_snapshot_changed();
-                return Ok(StartQueueResponse {
-                    started: false,
-                    requires_cleanup_consent: true,
-                    consent_batch_id: Some(Uuid::new_v4().to_string()),
-                    consent_jobs: unconsented,
-                    consent_total_bytes: total_bytes,
-                    destination_root: q.destination_root,
-                });
-            }
-            if !unconsented.is_empty() && consent_confirmed == Some(true) {
-                let batch_id = Uuid::new_v4().to_string();
-                let ids: Vec<String> = unconsented.iter().map(|j| j.id.clone()).collect();
-                let _ = record_batch_cleanup_consent(&state.scheduler.db, &queue_id, &batch_id, &ids)?;
-            }
+        if !unconsented.is_empty() {
+            // Preserve selection order
+            unconsented.sort_by_key(|j| {
+                job_ids
+                    .iter()
+                    .position(|id| id == &j.id)
+                    .unwrap_or(usize::MAX)
+            });
+            let total_bytes = unconsented.iter().map(|j| j.input_bytes).sum();
+            return Ok(StartQueueResponse {
+                started: false,
+                requires_cleanup_consent: true,
+                consent_batch_id: Some(Uuid::new_v4().to_string()),
+                consent_jobs: unconsented,
+                consent_total_bytes: total_bytes,
+                destination_root: q.destination_root,
+            });
         }
-        q.is_running = true;
-        q.is_paused = false;
-        q.pause_after_current = false;
-        q.waiting_reason = None;
-        state.scheduler.db.upsert_queue(&q)?;
-        state.scheduler.wake_scheduler();
     }
 
+    let mut next_pos = state.scheduler.db.next_job_position(&queue_id)?;
+    let now = Utc::now().timestamp();
+
+    // Preserve explicit selection order when appending to Queue
+    for jid in &candidate_ids {
+        let Some(j) = jobs.iter_mut().find(|x| &x.id == jid) else {
+            continue;
+        };
+        j.status = JobStatus::Ready;
+        j.status_reason = None;
+        j.error_stage = None;
+        j.error_message = None;
+        j.output_bytes = None;
+        j.output_fingerprint = None;
+        j.consent_id = None;
+        j.position = next_pos;
+        next_pos += 1;
+        j.updated_at = now;
+        state.scheduler.db.upsert_job(j)?;
+    }
+
+    if q.cleanup_policy == CleanupPolicy::TrashAfterEachFile && consent_confirmed == Some(true) {
+        let unconsented_ids: Vec<String> = jobs
+            .iter()
+            .filter(|j| matches!(j.status, JobStatus::Ready | JobStatus::Queued) && j.consent_id.is_none())
+            .map(|j| j.id.clone())
+            .collect();
+        if !unconsented_ids.is_empty() {
+            let batch_id = Uuid::new_v4().to_string();
+            let _ = record_batch_cleanup_consent(
+                &state.scheduler.db,
+                &queue_id,
+                &batch_id,
+                &unconsented_ids,
+            )?;
+        }
+    }
+
+    q.is_running = true;
+    q.is_paused = false;
+    q.pause_after_current = false;
+    q.waiting_reason = None;
+    state.scheduler.db.upsert_queue(&q)?;
+    state.scheduler.wake_scheduler();
     state.scheduler.emit_snapshot_changed();
+
     Ok(StartQueueResponse {
-        started: start_now == Some(true),
+        started: true,
         requires_cleanup_consent: false,
         consent_batch_id: None,
         consent_jobs: Vec::new(),
@@ -1494,7 +1520,7 @@ pub fn dequeue_jobs(state: State<'_, AppState>, job_ids: Vec<String>) -> Result<
     Ok(removed)
 }
 
-/// Start processing all tabs that currently have `Ready | Queued` items in the Encode Queue.
+/// Resume processing for tabs that are paused with waiting/interrupted items in the Encode Queue.
 #[tauri::command]
 pub fn start_all_ready_queues(
     state: State<'_, AppState>,
@@ -1502,6 +1528,18 @@ pub fn start_all_ready_queues(
 ) -> Result<StartQueueResponse, String> {
     let _guard = state.scheduler.cleanup_lock.lock();
     let queues = state.scheduler.db.list_queues()?;
+
+    // Re-queue Interrupted items on paused Encode tabs first so Resume continues cleanly
+    for q in &queues {
+        if q.tab_type == TabType::Encode && q.is_paused {
+            for j in state.scheduler.db.list_jobs_for_queue(&q.id)? {
+                if j.status == JobStatus::Interrupted {
+                    let _ = state.scheduler.retry_job_with_fresh_preflight(&j.id);
+                }
+            }
+        }
+    }
+
     let all_jobs = state.scheduler.db.list_all_jobs()?;
 
     let mut candidate_queues: Vec<(QueueTab, Vec<JobRecord>)> = Vec::new();
@@ -1689,12 +1727,41 @@ pub fn retry_jobs(state: State<'_, AppState>, job_ids: Vec<String>) -> Result<us
     let _guard = state.scheduler.cleanup_lock.lock();
     let mut count = 0usize;
     let mut errors = Vec::new();
+    let mut touched_queues = HashSet::new();
     for id in job_ids {
         match state.scheduler.retry_job_with_fresh_preflight(&id) {
-            Ok(_) => count += 1,
+            Ok(job) => {
+                if job.status == JobStatus::Ready {
+                    touched_queues.insert(job.queue_id);
+                }
+                count += 1;
+            }
             Err(e) => errors.push(e),
         }
     }
+    for qid in touched_queues {
+        if let Ok(Some(mut q)) = state.scheduler.db.get_queue(&qid) {
+            let needs_consent = q.cleanup_policy == CleanupPolicy::TrashAfterEachFile
+                && state
+                    .scheduler
+                    .db
+                    .list_jobs_for_queue(&qid)
+                    .map(|js| {
+                        js.iter()
+                            .any(|j| matches!(j.status, JobStatus::Ready | JobStatus::Queued) && j.consent_id.is_none())
+                    })
+                    .unwrap_or(false);
+            if !needs_consent {
+                q.is_running = true;
+                q.is_paused = false;
+                q.pause_after_current = false;
+                q.waiting_reason = None;
+                let _ = state.scheduler.db.upsert_queue(&q);
+            }
+        }
+    }
+    state.scheduler.wake_scheduler();
+    state.scheduler.emit_snapshot_changed();
     if count == 0 && !errors.is_empty() {
         return Err(errors.join("\n"));
     }

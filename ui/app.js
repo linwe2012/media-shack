@@ -591,11 +591,6 @@
         cancelBtn.classList.remove("hidden");
       }
 
-      const queueAndStartBtn = $("btn-queue-and-start");
-      if (queueAndStartBtn) {
-        queueAndStartBtn.classList.toggle("hidden", selectedReadyCount === 0);
-      }
-
       startBtn.disabled = selectedReadyCount === 0;
       startBtn.textContent = selectedReadyCount > 0
         ? `Add ${selectedReadyCount} to Queue`
@@ -605,8 +600,6 @@
     } else {
       const prevViewBtn = $("btn-view-encode-queue");
       if (prevViewBtn) prevViewBtn.classList.add("hidden");
-      const qStartBtn = $("btn-queue-and-start");
-      if (qStartBtn) qStartBtn.classList.add("hidden");
     }
     if (mode === "explore") {
       const compCount = jobs.filter((j) => ["compress_balanced", "compress_compact"].includes(jobDecision(j))).length;
@@ -2085,11 +2078,16 @@
     cell.innerHTML = `<div class="tabular-nums" style="min-width:140px;"><div style="font-size:11px;font-weight:600;color:var(--accent-text);">${pct.toFixed(1)}%${progress.speed ? ` · ${progress.speed.toFixed(2)}x` : ""} · ETA ${progress.eta_secs ? fmtDuration(progress.eta_secs) : "—"}</div><div class="progress-track" style="height:5px;margin-top:3px;"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div></div>`;
   }
 
-  function openEnqueueConsentModal(q, resp, jobIds, startNow) {
+  function openEnqueueConsentModal(q, resp, jobIds) {
     openModal(
       "Confirm Batch Source Cleanup",
       `<p><strong>Automatic Trash is enabled for "${escapeHtml(q.name)}".</strong> Move ${resp.consent_jobs.length} verified originals (${fmtBytes(resp.consent_total_bytes)}) to OS Trash after full decode verification?</p>`,
       [
+        {
+          label: "Cancel",
+          cls: "btn btn-ghost",
+          onClick: closeModal,
+        },
         {
           label: "Keep originals (recommended)",
           cls: "btn btn-primary",
@@ -2099,7 +2097,9 @@
               patch: { ...q, cleanup_policy: "keep_originals" },
             });
             closeModal();
-            await invoke("enqueue_jobs", { queueId: q.id, jobIds, startNow, consentConfirmed: false });
+            await invoke("enqueue_jobs", { queueId: q.id, jobIds, startNow: true, consentConfirmed: false });
+            jobIds.forEach((id) => checkedJobIds.delete(id));
+            showToast(`Added ${jobIds.length} video${jobIds.length === 1 ? "" : "s"} to the Encode Queue — processing started.`, "success");
           },
         },
         {
@@ -2107,16 +2107,18 @@
           cls: "btn btn-danger",
           onClick: async () => {
             closeModal();
-            await invoke("enqueue_jobs", { queueId: q.id, jobIds, startNow, consentConfirmed: true });
+            await invoke("enqueue_jobs", { queueId: q.id, jobIds, startNow: true, consentConfirmed: true });
+            jobIds.forEach((id) => checkedJobIds.delete(id));
+            showToast(`Added ${jobIds.length} video${jobIds.length === 1 ? "" : "s"} to the Encode Queue — processing started.`, "success");
           },
         },
       ]
     );
   }
 
-  function openStartAllConsentModal(resp) {
+  function openResumeQueueConsentModal(resp) {
     openModal(
-      "Confirm Automatic Cleanup for Queued Jobs",
+      "Confirm Automatic Cleanup to Resume Queue",
       `<p><strong>Trash after verification is enabled</strong> on ${resp.consent_jobs.length} queued file(s) (${fmtBytes(resp.consent_total_bytes)}).</p>`,
       [
         {
@@ -2125,7 +2127,7 @@
           onClick: closeModal,
         },
         {
-          label: `Confirm & Start Queue`,
+          label: "Confirm & Resume Queue",
           cls: "btn btn-danger",
           onClick: async () => {
             closeModal();
@@ -2171,7 +2173,10 @@
     const someChecked = removableVisible.some((j) => queueCheckedIds.has(j.id)) && !allChecked;
 
     const isEncodingNow = allQueued.find((j) => ["encoding", "verifying", "publishing"].includes(j.status));
-    const waitingReadyCount = allQueued.filter((j) => ["ready", "queued"].includes(j.status)).length;
+    const hasPausedWaiting = allQueued.some((j) => {
+      const qq = queuesById.get(j.queue_id);
+      return qq?.is_paused && ["ready", "queued", "interrupted"].includes(j.status);
+    });
     const retryableIds = allQueued.filter((j) => ["failed", "interrupted", "canceled", "needs_attention"].includes(j.status)).map((j) => j.id);
     const finishedIds = allQueued.filter((j) => ["completed", "below_savings_target", "canceled"].includes(j.status)).map((j) => j.id);
     const activeProg = snapshot.active_progress;
@@ -2183,14 +2188,14 @@
             <h2 style="margin:0;font-size:17px;">Encode Queue</h2>
             <span class="counts-pill tabular-nums">${activeList.length} active/waiting · ${completedList.length} completed${failedList.length ? ` · ${failedList.length} failed` : ""}</span>
           </div>
-          <div class="muted" style="font-size:12px;margin-top:3px;">Only files explicitly added to the Queue appear here. Removing an item takes it off the Queue while keeping it in your Video List.</div>
+          <div class="muted" style="font-size:12px;margin-top:3px;">Items added to the Queue start processing automatically. Removing an item takes it off the Queue while keeping it in your Video List.</div>
         </div>
         <div class="inline-row" style="gap:6px;flex-wrap:wrap;">
           <button type="button" id="qp-back-videos" class="btn btn-sm btn-secondary">← Back to Video List</button>
           ${isEncodingNow ? `<button type="button" id="qp-live" class="btn btn-sm btn-secondary"><span class="dot pulse"></span> Live Preview</button>` : ""}
           ${isEncodingNow ? `<button type="button" id="qp-pause" class="btn btn-sm btn-warn-outline">Pause After File</button>` : ""}
           ${isEncodingNow ? `<button type="button" id="qp-cancel" class="btn btn-sm btn-danger-outline">Cancel Current</button>` : ""}
-          ${(!isEncodingNow && waitingReadyCount > 0) ? `<button type="button" id="qp-start" class="btn btn-sm btn-primary">Start Queue (${waitingReadyCount})</button>` : ""}
+          ${(!isEncodingNow && hasPausedWaiting) ? `<button type="button" id="qp-resume" class="btn btn-sm btn-primary">Resume Queue</button>` : ""}
           ${retryableIds.length > 0 ? `<button type="button" id="qp-retry-all" class="btn btn-sm btn-secondary">Retry Failed (${retryableIds.length})</button>` : ""}
           ${checkedRemovable.length > 0 ? `<button type="button" id="qp-remove-checked" class="btn btn-sm btn-danger-outline">Remove ${checkedRemovable.length} from Queue</button>` : ""}
           ${finishedIds.length > 0 ? `<button type="button" id="qp-clear-finished" class="btn btn-sm btn-ghost">Clear Finished (${finishedIds.length})</button>` : ""}
@@ -2209,7 +2214,7 @@
       ${visible.length === 0 ? `
         <div class="queue-empty-box">
           <strong>${allQueued.length === 0 ? "Your Encode Queue is empty" : "No queued items match this filter"}</strong>
-          <p class="muted" style="font-size:12px;margin:6px 0 12px;">${allQueued.length === 0 ? "Select videos on the Transcode page and click \"Add to Queue\" to schedule them here." : "Switch filter pills above to inspect other queued items."}</p>
+          <p class="muted" style="font-size:12px;margin:6px 0 12px;">${allQueued.length === 0 ? "Select videos on the Transcode page and click \"Add to Queue\" — they enter here and begin processing right away." : "Switch filter pills above to inspect other queued items."}</p>
           ${allQueued.length === 0 ? `<button type="button" id="qp-empty-back" class="btn btn-sm btn-primary">Browse Videos to Transcode</button>` : ""}
         </div>
       ` : `<div id="qp-table-wrap" class="transcode-table-wrap"></div>`}
@@ -2224,10 +2229,10 @@
     el.querySelectorAll("[data-qp-flt]").forEach((b) => {
       b.onclick = () => { queuePageFilter = b.getAttribute("data-qp-flt"); renderQueuePage(); };
     });
-    el.querySelector("#qp-start")?.addEventListener("click", async () => {
+    el.querySelector("#qp-resume")?.addEventListener("click", async () => {
       try {
         const resp = await invoke("start_all_ready_queues", { consentConfirmed: null });
-        if (resp && resp.requires_cleanup_consent) openStartAllConsentModal(resp);
+        if (resp && resp.requires_cleanup_consent) openResumeQueueConsentModal(resp);
       } catch (err) {
         showToast(String(err), "warn");
       }
@@ -2306,7 +2311,9 @@
       } else if (["encoding", "verifying", "publishing", "probing"].includes(j.status)) {
         stHtml = `<span class="badge badge-active">${escapeHtml(statusLabel(j.status))}</span>`;
       } else if (["ready", "queued"].includes(j.status)) {
-        stHtml = `<span class="badge badge-active">${qObj?.is_running && !qObj?.is_paused ? "Queued (Running)" : "Queued"}</span>`;
+        stHtml = qObj?.is_paused
+          ? `<span class="badge">Paused</span>`
+          : `<span class="badge badge-active">Queued</span>`;
       } else {
         stHtml = `<span class="badge ${statusBadgeClass(j.status)}">${escapeHtml(statusLabel(j.status))}</span>`;
       }
@@ -4600,31 +4607,17 @@
       return showToast("Check at least one video in the list before adding to the Queue.", "warn");
     }
     try {
-      await invoke("enqueue_jobs", { queueId: q.id, jobIds: selectedIds, startNow: false, consentConfirmed: null });
-      selectedIds.forEach((id) => checkedJobIds.delete(id));
-      showToast(`Added ${selectedIds.length} video${selectedIds.length === 1 ? "" : "s"} to the Encode Queue.`, "success");
+      const resp = await invoke("enqueue_jobs", { queueId: q.id, jobIds: selectedIds, startNow: true, consentConfirmed: null });
+      if (resp && resp.requires_cleanup_consent) {
+        openEnqueueConsentModal(q, resp, selectedIds);
+      } else {
+        selectedIds.forEach((id) => checkedJobIds.delete(id));
+        showToast(`Added ${selectedIds.length} video${selectedIds.length === 1 ? "" : "s"} to the Encode Queue — processing started.`, "success");
+      }
     } catch (err) {
       showToast(String(err), "warn");
     }
   };
-
-  $("btn-queue-and-start")?.addEventListener("click", async () => {
-    const q = activeQueue();
-    if (!q) return;
-    const jobs = activeQueueJobs();
-    const selectedIds = jobs.filter((j) => checkedJobIds.has(j.id) && isEncodeSelectableJob(j) && j.plan?.is_ready).map((j) => j.id);
-    if (selectedIds.length === 0) {
-      return showToast("Check at least one video first.", "warn");
-    }
-    try {
-      const resp = await invoke("enqueue_jobs", { queueId: q.id, jobIds: selectedIds, startNow: true, consentConfirmed: null });
-      selectedIds.forEach((id) => checkedJobIds.delete(id));
-      if (resp && resp.requires_cleanup_consent) openEnqueueConsentModal(q, resp, selectedIds, true);
-      else showToast(`Added ${selectedIds.length} video(s) and started Queue.`, "success");
-    } catch (err) {
-      showToast(String(err), "warn");
-    }
-  });
 
   $("btn-view-encode-queue")?.addEventListener("click", () => {
     window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "queue" } }));
