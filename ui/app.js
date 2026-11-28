@@ -67,6 +67,8 @@
   let exploreFilterMode = "all"; // "all" | "unreviewed" | "compress" | "protected" | "repair"
   let sortMode = "manual"; // "manual" | "largest" | "bitrate" (Explore)
   let encodeSort = { col: null, dir: "desc" }; // Transcode table column sort
+  let liveSpeedJobId = null;
+  let liveSpeedHistory = [];
   const encodeFilters = {
     search: "",
     searchMode: "name", // "name" | "path" | "regex"
@@ -285,8 +287,40 @@
     return snapshot.volumes[0] || null;
   }
 
+  function recordLiveSpeedPoint(ev) {
+    if (!ev?.job_id) return;
+    if (liveSpeedJobId !== ev.job_id) {
+      liveSpeedJobId = ev.job_id;
+      liveSpeedHistory = [];
+    }
+    if (ev.speed != null && ev.speed > 0) {
+      liveSpeedHistory.push({
+        elapsed_secs: ev.elapsed_secs || 0,
+        out_time_secs: ev.out_time_secs || 0,
+        speed: ev.speed,
+        fps: ev.fps ?? null,
+        bytes_written: ev.bytes_written || 0,
+        est_final_ratio: ev.est_final_ratio ?? null,
+      });
+      if (liveSpeedHistory.length > 240) {
+        liveSpeedHistory = liveSpeedHistory.filter((_, i, a) => i % 2 === 0 || i === a.length - 1);
+      }
+    }
+  }
+
   async function refreshSnapshot() {
     snapshot = await invoke("get_snapshot");
+    const ap = snapshot.active_progress;
+    const srvHist = snapshot.active_speed_history || [];
+    if (ap?.job_id) {
+      if (liveSpeedJobId !== ap.job_id || srvHist.length >= liveSpeedHistory.length) {
+        liveSpeedJobId = ap.job_id;
+        liveSpeedHistory = srvHist.slice();
+      }
+    } else {
+      liveSpeedJobId = null;
+      liveSpeedHistory = [];
+    }
     rebuildSourceLookups();
     const jobs = activeQueueJobs();
     if (!selectedJobId || !jobs.some((j) => j.id === selectedJobId)) {
@@ -1879,14 +1913,7 @@
       if (j.status === "completed" && j.output_bytes) {
         statusHtml = `<span class="badge badge-ok">Done ${fmtRatio(j.input_bytes, j.output_bytes)}</span>`;
       } else if (prog) {
-        const dur = prog.duration_secs || 1;
-        const pct = Math.min(100, (prog.out_time_secs / dur) * 100);
-        statusHtml = `
-          <div class="tabular-nums" style="min-width:120px;">
-            <div style="font-size:11px;font-weight:600;color:var(--accent-text);">${pct.toFixed(1)}% · ETA ${prog.eta_secs ? fmtDuration(prog.eta_secs) : "—"}</div>
-            <div class="progress-track" style="height:5px;margin-top:3px;"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div>
-          </div>
-        `;
+        statusHtml = buildInlineProgressHtml(j, prog, false);
       } else if (["verifying", "publishing"].includes(j.status)) {
         statusHtml = `<span class="badge badge-active">${escapeHtml(statusLabel(j.status))}</span>`;
       } else if (info.isPendingStats) {
@@ -2052,6 +2079,174 @@
     }
   }
 
+  function buildInlineProgressHtml(job, prog, detailed = true) {
+    const dur = prog.duration_secs || 1;
+    const pct = Math.min(100, (prog.out_time_secs / dur) * 100);
+    const outSz = prog.bytes_written > 0 ? fmtBytes(prog.bytes_written) : "0 B";
+    const ratioStr = prog.est_final_ratio ? `${prog.est_final_ratio.toFixed(2)}:1` : null;
+    const spStr = prog.speed ? `${prog.speed.toFixed(2)}x` : null;
+    const topParts = [`${pct.toFixed(1)}%`];
+    if (spStr) topParts.push(spStr);
+    topParts.push(outSz);
+    if (detailed && ratioStr) topParts.push(ratioStr);
+    topParts.push(`ETA ${prog.eta_secs ? fmtDuration(prog.eta_secs) : "—"}`);
+    return `<div class="tabular-nums" style="min-width:${detailed ? 175 : 145}px;"><div style="font-size:11px;font-weight:600;color:var(--accent-text);">${topParts.join(" · ")}</div><div class="progress-track" style="height:5px;margin-top:3px;"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+  }
+
+  function renderSpeedChartSvg(history) {
+    const pts = (history || []).filter((p) => p && typeof p.speed === "number" && p.speed > 0);
+    if (pts.length < 2) {
+      return `<div class="muted" style="font-size:11px;padding:18px 0;text-align:center;">Collecting live speed samples… diagram renders once 2+ progress ticks arrive.</div>`;
+    }
+    const W = 640;
+    const H = 118;
+    const padL = 40;
+    const padR = 12;
+    const padT = 10;
+    const padB = 20;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+
+    const minT = pts[0].elapsed_secs;
+    const maxT = Math.max(minT + 1, pts[pts.length - 1].elapsed_secs);
+    const rawMaxSp = Math.max(...pts.map((p) => p.speed));
+    const maxSp = Math.max(0.25, rawMaxSp * 1.15);
+
+    const xOf = (t) => padL + ((t - minT) / (maxT - minT)) * plotW;
+    const yOf = (sp) => padT + plotH - (Math.min(sp, maxSp) / maxSp) * plotH;
+
+    const polyCoords = pts.map((p) => `${xOf(p.elapsed_secs).toFixed(1)},${yOf(p.speed).toFixed(1)}`);
+    const linePath = `M ${polyCoords.join(" L ")}`;
+    const areaPath = `${linePath} L ${xOf(pts[pts.length - 1].elapsed_secs).toFixed(1)},${(padT + plotH).toFixed(1)} L ${xOf(pts[0].elapsed_secs).toFixed(1)},${(padT + plotH).toFixed(1)} Z`;
+
+    const last = pts[pts.length - 1];
+    const peak = pts.reduce((a, b) => (b.speed > a.speed ? b : a), pts[0]);
+
+    const yTicks = [0, maxSp * 0.5, maxSp];
+    const gridSvg = yTicks.map((v) => {
+      const y = yOf(v).toFixed(1);
+      return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="currentColor" stroke-opacity="0.12" stroke-dasharray="3 3" /><text x="${padL - 5}" y="${Number(y) + 3}" text-anchor="end" font-size="9.5" fill="currentColor" fill-opacity="0.6">${v.toFixed(v >= 2 ? 1 : 2)}x</text>`;
+    }).join("");
+
+    const ref1x = maxSp >= 1.0
+      ? `<line x1="${padL}" y1="${yOf(1.0).toFixed(1)}" x2="${W - padR}" y2="${yOf(1.0).toFixed(1)}" stroke="currentColor" stroke-opacity="0.32" stroke-dasharray="4 3" /><text x="${W - padR - 2}" y="${(yOf(1.0) - 3).toFixed(1)}" text-anchor="end" font-size="9" fill="currentColor" fill-opacity="0.65">1.0x realtime</text>`
+      : "";
+
+    const midT = (minT + maxT) * 0.5;
+    const xAxisSvg = `
+      <text x="${padL}" y="${H - 4}" text-anchor="start" font-size="9.5" fill="currentColor" fill-opacity="0.6">${fmtDuration(minT)}</text>
+      <text x="${(padL + plotW * 0.5).toFixed(1)}" y="${H - 4}" text-anchor="middle" font-size="9.5" fill="currentColor" fill-opacity="0.6">${fmtDuration(midT)}</text>
+      <text x="${W - padR}" y="${H - 4}" text-anchor="end" font-size="9.5" fill="currentColor" fill-opacity="0.6">${fmtDuration(maxT)}</text>
+    `;
+
+    return `
+      <svg class="qp-speed-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="color:var(--text);">
+        <defs>
+          <linearGradient id="qpSpeedGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--accent, #3b82f6)" stop-opacity="0.32" />
+            <stop offset="100%" stop-color="var(--accent, #3b82f6)" stop-opacity="0.02" />
+          </linearGradient>
+        </defs>
+        ${gridSvg}
+        ${ref1x}
+        <path d="${areaPath}" fill="url(#qpSpeedGrad)" />
+        <path d="${linePath}" fill="none" stroke="var(--accent-text, var(--accent, #3b82f6))" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+        <circle cx="${xOf(peak.elapsed_secs).toFixed(1)}" cy="${yOf(peak.speed).toFixed(1)}" r="2.8" fill="var(--ok, #10b981)" />
+        <circle cx="${xOf(last.elapsed_secs).toFixed(1)}" cy="${yOf(last.speed).toFixed(1)}" r="3.6" fill="var(--accent-text, var(--accent, #3b82f6))" />
+        ${xAxisSvg}
+      </svg>
+    `;
+  }
+
+  function buildQueueTelemetryHtml(job, prog, history) {
+    if (!job) return "";
+    const p = prog && prog.job_id === job.id ? prog : null;
+    const dur = p?.duration_secs || jobVideoInfo(job).dur || 0;
+    const outTime = p?.out_time_secs || 0;
+    const pct = dur > 0 ? Math.min(100, (outTime / dur) * 100) : 0;
+    const bytesOut = p?.bytes_written || 0;
+    const ratio = p?.est_final_ratio || null;
+    const estFinalBytes = ratio && ratio > 0 ? Math.round(job.input_bytes / ratio) : null;
+    const savedPct = ratio && ratio > 0 ? Math.round((1 - 1 / ratio) * 100) : null;
+    const outMbps = outTime > 1 && bytesOut > 0 ? ((bytesOut * 8) / outTime / 1_000_000).toFixed(2) : null;
+
+    const pts = (history || []).filter((x) => typeof x.speed === "number" && x.speed > 0);
+    const curSpeed = p?.speed ?? (pts.length ? pts[pts.length - 1].speed : null);
+    const avgSpeed = pts.length ? pts.reduce((s, x) => s + x.speed, 0) / pts.length : curSpeed;
+    const peakSpeed = pts.length ? Math.max(...pts.map((x) => x.speed)) : curSpeed;
+
+    const ratioMain = ratio ? `${ratio.toFixed(2)}:1` : "Estimating…";
+    const ratioSub = ratio
+      ? `${savedPct}% smaller · Est. ${fmtBytes(estFinalBytes)}${dur > 0 && outTime / dur < 0.10 ? " (early)" : ""}`
+      : (outTime > 0 ? "Waiting for ≥2s output data" : `Source: ${fmtBytes(job.input_bytes)}`);
+
+    const outMain = bytesOut > 0 ? fmtBytes(bytesOut) : "0 B";
+    const outSub = `of ${fmtBytes(job.input_bytes)}${outMbps ? ` · ~${outMbps} Mbps out` : ""}`;
+
+    const speedMain = curSpeed ? `${curSpeed.toFixed(2)}x` : "—";
+    const speedSubParts = [];
+    if (p?.fps) speedSubParts.push(`${p.fps.toFixed(1)} fps`);
+    if (avgSpeed) speedSubParts.push(`Avg ${avgSpeed.toFixed(2)}x`);
+    if (peakSpeed) speedSubParts.push(`Peak ${peakSpeed.toFixed(2)}x`);
+
+    const progMain = `${pct.toFixed(1)}%`;
+    const progSub = `${fmtDuration(outTime)} / ${dur > 0 ? fmtDuration(dur) : "—"} · ETA ${p?.eta_secs ? fmtDuration(p.eta_secs) : "—"}`;
+
+    return `
+      <div class="qp-telemetry-card">
+        <div class="qp-tel-head">
+          <div class="inline-row" style="gap:8px;min-width:0;flex-wrap:wrap;">
+            <span class="badge badge-active">${escapeHtml(statusLabel(job.status))}</span>
+            <strong class="truncate" style="font-size:13px;" title="${escapeHtml(job.source_path)}">${escapeHtml(jobFileName(job))}</strong>
+            <span class="muted tabular-nums" style="font-size:11.5px;">Elapsed ${p ? fmtDuration(p.elapsed_secs) : "—"}</span>
+          </div>
+          <div class="progress-track" style="width:200px;height:6px;max-width:100%;">
+            <div class="progress-fill" style="width:${pct.toFixed(1)}%"></div>
+          </div>
+        </div>
+
+        <div class="qp-tel-grid">
+          <div class="qp-tel-kpi">
+            <div class="qp-tel-label">Est. Compression Ratio</div>
+            <div class="qp-tel-value">${ratioMain}</div>
+            <div class="qp-tel-sub" title="${escapeHtml(ratioSub)}">${escapeHtml(ratioSub)}</div>
+          </div>
+          <div class="qp-tel-kpi">
+            <div class="qp-tel-label">Current Output Size</div>
+            <div class="qp-tel-value">${outMain}</div>
+            <div class="qp-tel-sub" title="${escapeHtml(outSub)}">${escapeHtml(outSub)}</div>
+          </div>
+          <div class="qp-tel-kpi">
+            <div class="qp-tel-label">Encode Speed</div>
+            <div class="qp-tel-value">${speedMain}</div>
+            <div class="qp-tel-sub">${speedSubParts.length ? speedSubParts.join(" · ") : "Measuring speed…"}</div>
+          </div>
+          <div class="qp-tel-kpi">
+            <div class="qp-tel-label">Progress &amp; ETA</div>
+            <div class="qp-tel-value">${progMain}</div>
+            <div class="qp-tel-sub">${progSub}</div>
+          </div>
+        </div>
+
+        <div class="qp-chart-box">
+          <div class="qp-chart-head">
+            <strong>Encode Speed Over Time (realtime multiplier)</strong>
+            <span class="muted tabular-nums">● Current ${curSpeed ? curSpeed.toFixed(2) + "x" : "—"} · Peak ${peakSpeed ? peakSpeed.toFixed(2) + "x" : "—"} · Avg ${avgSpeed ? avgSpeed.toFixed(2) + "x" : "—"}</span>
+          </div>
+          ${renderSpeedChartSvg(pts)}
+        </div>
+      </div>
+    `;
+  }
+
+  function updateQueueTelemetryDom(prog) {
+    const wrap = $("qp-telemetry-wrap");
+    if (!wrap || !prog?.job_id) return;
+    const job = queueJobsById.get(prog.job_id) || (snapshot?.jobs || []).find((x) => x.id === prog.job_id);
+    if (!job || !["encoding", "verifying", "publishing"].includes(job.status)) return;
+    wrap.innerHTML = buildQueueTelemetryHtml(job, prog, liveSpeedHistory);
+  }
+
   function updateEncodeProgressDom(progress) {
     if (!progress?.job_id) return;
     const row = encodeRowNodes.get(progress.job_id);
@@ -2060,12 +2255,11 @@
     if (!job || job.status !== "encoding") return;
     const cell = row.querySelector("[data-status-cell]");
     if (!cell) return;
-    const duration = progress.duration_secs || 1;
-    const pct = Math.min(100, (progress.out_time_secs / duration) * 100);
-    cell.innerHTML = `<div class="tabular-nums" style="min-width:120px;"><div style="font-size:11px;font-weight:600;color:var(--accent-text);">${pct.toFixed(1)}% · ETA ${progress.eta_secs ? fmtDuration(progress.eta_secs) : "—"}</div><div class="progress-track" style="height:5px;margin-top:3px;"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+    cell.innerHTML = buildInlineProgressHtml(job, progress, false);
   }
 
   function updateQueuePageProgressDom(progress) {
+    updateQueueTelemetryDom(progress);
     if (!progress?.job_id) return;
     const row = queuePageNodes.get(progress.job_id);
     if (!row) return;
@@ -2073,9 +2267,7 @@
     if (!job || job.status !== "encoding") return;
     const cell = row.querySelector("[data-q-status-cell]");
     if (!cell) return;
-    const duration = progress.duration_secs || 1;
-    const pct = Math.min(100, (progress.out_time_secs / duration) * 100);
-    cell.innerHTML = `<div class="tabular-nums" style="min-width:140px;"><div style="font-size:11px;font-weight:600;color:var(--accent-text);">${pct.toFixed(1)}%${progress.speed ? ` · ${progress.speed.toFixed(2)}x` : ""} · ETA ${progress.eta_secs ? fmtDuration(progress.eta_secs) : "—"}</div><div class="progress-track" style="height:5px;margin-top:3px;"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+    cell.innerHTML = buildInlineProgressHtml(job, progress, true);
   }
 
   function openEnqueueConsentModal(q, resp, jobIds) {
@@ -2211,6 +2403,8 @@
         </div>
       </div>
 
+      ${isEncodingNow ? `<div id="qp-telemetry-wrap">${buildQueueTelemetryHtml(isEncodingNow, activeProg, liveSpeedHistory)}</div>` : `<div id="qp-telemetry-wrap" class="hidden"></div>`}
+
       ${visible.length === 0 ? `
         <div class="queue-empty-box">
           <strong>${allQueued.length === 0 ? "Your Encode Queue is empty" : "No queued items match this filter"}</strong>
@@ -2305,9 +2499,7 @@
       if (j.status === "completed" && j.output_bytes) {
         stHtml = `<span class="badge badge-ok">Done ${fmtRatio(j.input_bytes, j.output_bytes)} · ${fmtBytes(j.output_bytes)}</span>`;
       } else if (prog) {
-        const dur = prog.duration_secs || 1;
-        const pct = Math.min(100, (prog.out_time_secs / dur) * 100);
-        stHtml = `<div class="tabular-nums" style="min-width:140px;"><div style="font-size:11px;font-weight:600;color:var(--accent-text);">${pct.toFixed(1)}%${prog.speed ? ` · ${prog.speed.toFixed(2)}x` : ""} · ETA ${prog.eta_secs ? fmtDuration(prog.eta_secs) : "—"}</div><div class="progress-track" style="height:5px;margin-top:3px;"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+        stHtml = buildInlineProgressHtml(j, prog, true);
       } else if (["encoding", "verifying", "publishing", "probing"].includes(j.status)) {
         stHtml = `<span class="badge badge-active">${escapeHtml(statusLabel(j.status))}</span>`;
       } else if (["ready", "queued"].includes(j.status)) {
@@ -4337,8 +4529,19 @@
       try {
         const snap = await invoke("get_snapshot");
         const li = snap.live_preview;
+        const ap = snap.active_progress && snap.active_progress.job_id === jobId ? snap.active_progress : null;
         const bytes = await invoke("get_live_preview_frame");
-        if (li && $("lp-meta")) $("lp-meta").textContent = li.waiting_first_frame ? "Waiting for first encoded frame…" : `${fmtDuration(li.media_time_secs)} · Frame #${li.frame_seq} · ${li.mode}`;
+        if ($("lp-meta")) {
+          const lpParts = [];
+          if (li && !li.waiting_first_frame) lpParts.push(`${fmtDuration(li.media_time_secs)} · Frame #${li.frame_seq} · ${li.mode}`);
+          else lpParts.push("Waiting for first encoded frame…");
+          if (ap) {
+            if (ap.bytes_written > 0) lpParts.push(`Output ${fmtBytes(ap.bytes_written)}`);
+            if (ap.est_final_ratio) lpParts.push(`Est. Ratio ${ap.est_final_ratio.toFixed(2)}:1`);
+            if (ap.speed) lpParts.push(`${ap.speed.toFixed(2)}x${ap.fps ? ` (${ap.fps.toFixed(1)} fps)` : ""}`);
+          }
+          $("lp-meta").textContent = lpParts.join(" · ");
+        }
         if (bytes && bytes.byteLength > 0 && $("lp-img")) {
           const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }));
           if (prevUrl) URL.revokeObjectURL(prevUrl);
@@ -4949,6 +5152,7 @@
   event.listen("job_progress", (e) => {
     if (!snapshot) return;
     snapshot.active_progress = e.payload;
+    recordLiveSpeedPoint(e.payload);
     if (currentPlatformView === "queue") updateQueuePageProgressDom(e.payload);
     if (activeMode(activeQueue()) === "encode") updateEncodeProgressDom(e.payload);
   });

@@ -385,25 +385,24 @@ pub fn run_ffmpeg_attempt(params: RunEncodeParams<'_>) -> EncodeRunOutcome {
                             saw_progress_end = true;
                         }
                         if last_emit.elapsed() >= Duration::from_millis(450) || val == "end" {
-                            let bytes_written = total_size
-                                .filter(|b| *b > 0)
-                                .unwrap_or_else(|| {
-                                    std::fs::metadata(&partial_clone)
-                                        .map(|m| m.len())
-                                        .unwrap_or(0)
-                                });
+                            let fs_bytes = std::fs::metadata(&partial_clone)
+                                .map(|m| m.len())
+                                .unwrap_or(0);
+                            let bytes_written = total_size.unwrap_or(0).max(fs_bytes);
                             let eta_secs = match (duration_secs, speed) {
                                 (Some(d), Some(sp)) if sp > 0.001 && d > out_time_secs => {
                                     Some((d - out_time_secs) / sp)
                                 }
                                 _ => None,
                             };
-                            // Estimate final ratio only after >= 10% of known timeline when advancing; smooth over transient ticks
+                            // Estimate final ratio once >= 2s of encoded media & non-zero output exists,
+                            // smoothing over ticks where muxer buffers before flushing.
                             let est_final_ratio = match duration_secs {
-                                Some(d) if d > 0.0 && out_time_secs / d >= 0.10 => {
-                                    let advancing = out_time_secs > prev_out_time && bytes_written > prev_bytes;
-                                    if advancing || (val == "end" && bytes_written > 0) {
-                                        let frac = (out_time_secs / d).clamp(0.10, 1.0);
+                                Some(d) if d > 0.0 && out_time_secs >= 2.0 && bytes_written > 0 => {
+                                    let advancing = (out_time_secs > prev_out_time && bytes_written > prev_bytes)
+                                        || last_est_ratio.is_none();
+                                    if advancing || val == "end" {
+                                        let frac = (out_time_secs / d).clamp(0.0005, 1.0);
                                         let est_out = (bytes_written as f64) / frac;
                                         if est_out > 0.0 && input_bytes > 0 {
                                             last_est_ratio = Some((input_bytes as f64) / est_out);

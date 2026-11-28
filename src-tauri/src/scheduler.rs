@@ -28,6 +28,7 @@ pub struct Scheduler {
     pub previews: PreviewManager,
     pub tool_status: Arc<Mutex<ToolStatus>>,
     pub active_progress: Arc<Mutex<Option<JobProgressEvent>>>,
+    pub active_speed_history: Arc<Mutex<Vec<SpeedSample>>>,
     pub active_cancel_flag: Arc<Mutex<Option<(String, Arc<AtomicBool>)>>>,
     pub blocked_volumes: Arc<Mutex<HashMap<String, String>>>,
     pub cleanup_lock: Arc<Mutex<()>>,
@@ -51,6 +52,7 @@ impl Scheduler {
                 repair_hint: None,
             })),
             active_progress: Arc::new(Mutex::new(None)),
+            active_speed_history: Arc::new(Mutex::new(Vec::new())),
             active_cancel_flag: Arc::new(Mutex::new(None)),
             blocked_volumes: Arc::new(Mutex::new(HashMap::new())),
             cleanup_lock: Arc::new(Mutex::new(())),
@@ -629,6 +631,10 @@ impl Scheduler {
         );
 
         let progress_arc = self.active_progress.clone();
+        let speed_hist_arc = self.active_speed_history.clone();
+        if let Ok(mut sh) = speed_hist_arc.lock() {
+            sh.clear();
+        }
         let previews_for_cb = self.previews.clone();
         let sink_arc = self.event_sink.clone();
         let preview_pipe_dir = self.previews.preview_dir.clone();
@@ -649,6 +655,28 @@ impl Scheduler {
                 if let Ok(mut ap) = progress_arc.lock() {
                     *ap = Some(ev.clone());
                 }
+                if let Some(sp) = ev.speed {
+                    if let Ok(mut sh) = speed_hist_arc.lock() {
+                        sh.push(SpeedSample {
+                            elapsed_secs: ev.elapsed_secs,
+                            out_time_secs: ev.out_time_secs,
+                            speed: sp,
+                            fps: ev.fps,
+                            bytes_written: ev.bytes_written,
+                            est_final_ratio: ev.est_final_ratio,
+                        });
+                        if sh.len() > 240 {
+                            // Thin older points by keeping every 2nd sample so timeline stays full-range
+                            let mut compacted = Vec::with_capacity(140);
+                            for (i, item) in sh.iter().enumerate() {
+                                if i % 2 == 0 || i + 1 == sh.len() {
+                                    compacted.push(item.clone());
+                                }
+                            }
+                            *sh = compacted;
+                        }
+                    }
+                }
                 if let Ok(sink) = sink_arc.lock() {
                     if let Some(ref f) = *sink {
                         f("job_progress", serde_json::to_value(&ev).unwrap_or_default());
@@ -663,6 +691,9 @@ impl Scheduler {
         }
         if let Ok(mut ap) = self.active_progress.lock() {
             *ap = None;
+        }
+        if let Ok(mut sh) = self.active_speed_history.lock() {
+            sh.clear();
         }
 
         match outcome {
@@ -1261,6 +1292,11 @@ impl Scheduler {
         let volumes = self.collect_volume_infos();
         let morning_summary = self.build_morning_summary(&active_queue_id)?;
         let active_progress = self.active_progress.lock().ok().and_then(|g| g.clone());
+        let active_speed_history = self
+            .active_speed_history
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
         let sample_preview = self.previews.sample_state.lock().ok().and_then(|g| g.clone());
         let live_preview = self.previews.live_info.lock().ok().and_then(|g| g.clone());
         let power_assertion_active = self
@@ -1297,6 +1333,7 @@ impl Scheduler {
             volumes,
             morning_summary,
             active_progress,
+            active_speed_history,
             sample_preview,
             live_preview,
             power_assertion_active,

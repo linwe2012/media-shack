@@ -638,6 +638,16 @@ pub struct JobProgressEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpeedSample {
+    pub elapsed_secs: f64,
+    pub out_time_secs: f64,
+    pub speed: f64,
+    pub fps: Option<f64>,
+    pub bytes_written: u64,
+    pub est_final_ratio: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmokeTestResult {
     pub name: String,
     pub passed: bool,
@@ -988,6 +998,8 @@ pub struct AppSnapshot {
     pub volumes: Vec<VolumeSpaceInfo>,
     pub morning_summary: MorningSummary,
     pub active_progress: Option<JobProgressEvent>,
+    #[serde(default)]
+    pub active_speed_history: Vec<SpeedSample>,
     pub sample_preview: Option<SamplePreviewState>,
     pub live_preview: Option<LivePreviewInfo>,
     pub power_assertion_active: bool,

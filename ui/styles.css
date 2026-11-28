@@ -3862,6 +3862,93 @@ input[type="radio"] {
   color: var(--muted);
 }
 
+.qp-telemetry-card {
+  border: 1px solid var(--border);
+  background: var(--surface-1, var(--surface));
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.qp-tel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.qp-tel-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(135px, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 820px) {
+  .qp-tel-grid {
+    grid-template-columns: repeat(2, minmax(135px, 1fr));
+  }
+}
+
+.qp-tel-kpi {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.qp-tel-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.qp-tel-value {
+  font-size: 16px;
+  font-weight: 700;
+  margin-top: 2px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.qp-tel-sub {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qp-chart-box {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 8px 10px 6px;
+}
+
+.qp-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.qp-speed-svg {
+  width: 100%;
+  height: 118px;
+  display: block;
+}
+
 .help-q-btn {
   display: inline-flex;
   align-items: center;
