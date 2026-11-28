@@ -61,6 +61,8 @@
   let encodeSort = { col: null, dir: "desc" }; // Transcode table column sort
   const encodeFilters = {
     search: "",
+    searchMode: "name", // "name" | "path" | "regex"
+    searchInvert: false,
     codec: "all",
     res: "all",
     duration: "all",
@@ -902,6 +904,8 @@
 
   function resetAllEncodeFilters() {
     encodeFilters.search = "";
+    encodeFilters.searchMode = "name";
+    encodeFilters.searchInvert = false;
     encodeFilters.codec = "all";
     encodeFilters.res = "all";
     encodeFilters.duration = "all";
@@ -910,17 +914,53 @@
     encodeFilters.target = "all";
     encodeFilters.status = "all";
     if ($("enc-search-input")) $("enc-search-input").value = "";
+    if ($("mf-search-mode")) $("mf-search-mode").value = "name";
+    if ($("mf-search-invert")) $("mf-search-invert").checked = false;
     if ($("mf-size")) $("mf-size").value = "0";
     $("mf-size-custom-wrap")?.classList.add("hidden");
   }
 
-  function encodeFilterColumnMatch(j) {
-    const info = jobVideoInfo(j);
-    if (encodeFilters.search.trim()) {
-      const qLower = encodeFilters.search.trim().toLowerCase();
-      const hay = `${jobFileName(j)} ${j.source_rel_path || ""}`.toLowerCase();
-      if (!hay.includes(qLower)) return false;
+  function compileEncodeSearchMatcher() {
+    const raw = encodeFilters.search.trim();
+    if (!raw) return { active: false, valid: true, error: null, test: () => true };
+    const mode = encodeFilters.searchMode || "name";
+    const inv = !!encodeFilters.searchInvert;
+    if (mode === "regex") {
+      try {
+        const re = new RegExp(raw, "i");
+        return {
+          active: true,
+          valid: true,
+          error: null,
+          test: (j) => {
+            const hay = `${j.source_path || ""} ${j.source_rel_path || ""} ${jobFileName(j)}`;
+            const matched = re.test(hay);
+            return inv ? !matched : matched;
+          },
+        };
+      } catch (err) {
+        return { active: true, valid: false, error: err.message || "Invalid regex", test: () => false };
+      }
     }
+    const qLower = raw.toLowerCase();
+    return {
+      active: true,
+      valid: true,
+      error: null,
+      test: (j) => {
+        const hay = mode === "path"
+          ? `${j.source_path || ""} ${j.source_rel_path || ""}`.toLowerCase()
+          : jobFileName(j).toLowerCase();
+        const matched = hay.includes(qLower);
+        return inv ? !matched : matched;
+      },
+    };
+  }
+
+  function encodeFilterColumnMatch(j, searchMatcher = null) {
+    const info = jobVideoInfo(j);
+    const sm = searchMatcher || compileEncodeSearchMatcher();
+    if (sm.active && !sm.test(j)) return false;
     const codec = (info.codec || "").toUpperCase();
     if (encodeFilters.codec === "non_modern" && (!j.probe || isModernCodec(codec))) return false;
     if (encodeFilters.codec === "only_h264" && !["H264", "AVC", "AVC1"].includes(codec)) return false;
@@ -1004,10 +1044,25 @@
     return `≥ ${mb} MB`;
   }
 
-  function syncEncodeFilterControls() {
-    if ($("enc-search-input") && document.activeElement !== $("enc-search-input")) {
-      $("enc-search-input").value = encodeFilters.search;
+  function syncEncodeFilterControls(searchMatcher = null) {
+    const sm = searchMatcher || compileEncodeSearchMatcher();
+    const inp = $("enc-search-input");
+    if (inp) {
+      if (document.activeElement !== inp) inp.value = encodeFilters.search;
+      const ph = {
+        name: "Search file name…",
+        path: "Search full file path…",
+        regex: "Regex pattern (e.g. s01e\\d+.*1080p)…",
+      };
+      inp.placeholder = ph[encodeFilters.searchMode] || ph.name;
+      inp.classList.toggle("has-error", !sm.valid);
+      inp.title = sm.error ? `Invalid regex: ${sm.error}` : "";
     }
+    $("enc-search-mode-seg")?.querySelectorAll("[data-search-mode]").forEach((b) => {
+      b.classList.toggle("active", b.getAttribute("data-search-mode") === encodeFilters.searchMode);
+    });
+    if ($("mf-search-mode")) $("mf-search-mode").value = encodeFilters.searchMode;
+    if ($("mf-search-invert")) $("mf-search-invert").checked = !!encodeFilters.searchInvert;
     if ($("mf-codec")) $("mf-codec").value = encodeFilters.codec;
     if ($("mf-res")) $("mf-res").value = encodeFilters.res;
     if ($("mf-dur")) $("mf-dur").value = encodeFilters.duration;
@@ -1039,7 +1094,12 @@
     if ($("mf-status")) $("mf-status").value = encodeFilters.status;
 
     const chips = [];
-    if (encodeFilters.search.trim()) chips.push({ key: "search", col: "file", label: `Name: "${encodeFilters.search.trim()}"` });
+    if (encodeFilters.search.trim()) {
+      const modeLbl = encodeFilters.searchMode === "path" ? "Path" : encodeFilters.searchMode === "regex" ? "Regex" : "Name";
+      const opLbl = encodeFilters.searchInvert ? " ≠ " : ": ";
+      const errTag = !sm.valid ? " (invalid regex)" : "";
+      chips.push({ key: "search", col: "file", label: `${modeLbl}${opLbl}"${encodeFilters.search.trim()}"${errTag}` });
+    }
     if (encodeFilters.codec !== "all") {
       const m = { non_modern: "Exclude HEVC & AV1", only_h264: "Only H.264", only_legacy: "Only Legacy", modern_only: "HEVC / AV1 only" };
       chips.push({ key: "codec", col: "codec", label: `Codec: ${m[encodeFilters.codec] || encodeFilters.codec}` });
@@ -1094,8 +1154,10 @@
           e.stopPropagation();
           closeColFilterPopover();
           const k = btn.getAttribute("data-clear-chip");
-          if (k === "search") encodeFilters.search = "";
-          else if (k === "minMb") {
+          if (k === "search") {
+            encodeFilters.search = "";
+            encodeFilters.searchInvert = false;
+          } else if (k === "minMb") {
             encodeFilters.minMb = 0;
             if ($("mf-size")) $("mf-size").value = "0";
             $("mf-size-custom-wrap")?.classList.add("hidden");
@@ -1216,9 +1278,24 @@
     if (!cfg) return;
 
     if (cfg.type === "search") {
+      const sm = compileEncodeSearchMatcher();
+      pop.style.minWidth = "250px";
       pop.innerHTML = `
         <div class="col-filter-popover-title">${cfg.title}</div>
-        <input id="col-pop-search" class="full-input" type="search" value="${escapeHtml(encodeFilters.search)}" placeholder="Contains text…" style="height:28px;font-size:12px;" />
+        <input id="col-pop-search" class="full-input ${!sm.valid ? "has-error" : ""}" type="search" value="${escapeHtml(encodeFilters.search)}" placeholder="Pattern or substring…" style="height:28px;font-size:12px;" />
+        ${!sm.valid ? `<div id="col-pop-regex-err" style="font-size:11px;color:var(--danger,#e5484d);">${escapeHtml(sm.error)}</div>` : `<div id="col-pop-regex-err" class="hidden" style="font-size:11px;color:var(--danger,#e5484d);"></div>`}
+        <div class="col-filter-popover-title" style="margin-top:2px;">Match Scope</div>
+        <div class="inline-row" style="gap:4px;">
+          ${[
+            ["name", "File name"],
+            ["path", "Full path"],
+            ["regex", "Regex"],
+          ].map(([m, lbl]) => `<button type="button" class="pill-filter-btn ${encodeFilters.searchMode === m ? "active" : ""}" data-pop-smode="${m}" style="flex:1;justify-content:center;font-size:11px;padding:3px 6px;">${lbl}</button>`).join("")}
+        </div>
+        <label class="inline-row" style="gap:6px;font-size:11.5px;margin-top:2px;cursor:pointer;">
+          <input id="col-pop-sinv" type="checkbox" class="switch-chk" ${encodeFilters.searchInvert ? "checked" : ""} />
+          <span>Exclude matching files (invert)</span>
+        </label>
       `;
     } else {
       const curVal = encodeFilters[cfg.field];
@@ -1253,10 +1330,32 @@
 
     if (cfg.type === "search") {
       const inp = pop.querySelector("#col-pop-search");
+      const errBox = pop.querySelector("#col-pop-regex-err");
       inp.focus();
       inp.select();
+      const refreshRegexHint = () => {
+        const smNow = compileEncodeSearchMatcher();
+        inp.classList.toggle("has-error", !smNow.valid);
+        if (errBox) {
+          errBox.textContent = smNow.error || "";
+          errBox.classList.toggle("hidden", smNow.valid);
+        }
+      };
       inp.addEventListener("input", () => {
         encodeFilters.search = inp.value;
+        refreshRegexHint();
+        renderQueueList(activeQueue(), activeQueueJobs());
+      });
+      pop.querySelectorAll("[data-pop-smode]").forEach((mb) => {
+        mb.onclick = () => {
+          encodeFilters.searchMode = mb.getAttribute("data-pop-smode");
+          pop.querySelectorAll("[data-pop-smode]").forEach((x) => x.classList.toggle("active", x === mb));
+          refreshRegexHint();
+          renderQueueList(activeQueue(), activeQueueJobs());
+        };
+      });
+      pop.querySelector("#col-pop-sinv")?.addEventListener("change", (ev) => {
+        encodeFilters.searchInvert = !!ev.target.checked;
         renderQueueList(activeQueue(), activeQueueJobs());
       });
     } else {
@@ -1305,7 +1404,8 @@
   }
 
   function renderQueueList(q, allJobs) {
-    let jobs = sortEncodeJobs(allJobs.filter(encodeFilterColumnMatch));
+    const searchMatcher = compileEncodeSearchMatcher();
+    let jobs = sortEncodeJobs(allJobs.filter((j) => encodeFilterColumnMatch(j, searchMatcher)));
 
     const totalBytes = allJobs.reduce((a, b) => a + (b.input_bytes || 0), 0);
     const visibleBytes = jobs.reduce((a, b) => a + (b.input_bytes || 0), 0);
@@ -1321,7 +1421,7 @@
     if ($("btn-desel-all")) {
       $("btn-desel-all").classList.toggle("hidden", checkedJobs.length === 0);
     }
-    syncEncodeFilterControls();
+    syncEncodeFilterControls(searchMatcher);
 
     const alreadyHevc = allJobs.filter((j) => ["queued", "ready"].includes(j.status) && isModernCodec(jobVideoInfo(j).codec));
     const skipBtn = $("btn-triage-skip-hevc");
@@ -3812,12 +3912,26 @@
     encodeFilters.search = e.target.value;
     renderQueueList(activeQueue(), activeQueueJobs());
   });
+  $("enc-search-mode-seg")?.querySelectorAll("[data-search-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      encodeFilters.searchMode = btn.getAttribute("data-search-mode");
+      renderQueueList(activeQueue(), activeQueueJobs());
+    });
+  });
+  $("mf-search-mode")?.addEventListener("change", (e) => {
+    encodeFilters.searchMode = e.target.value;
+    renderQueueList(activeQueue(), activeQueueJobs());
+  });
+  $("mf-search-invert")?.addEventListener("change", (e) => {
+    encodeFilters.searchInvert = !!e.target.checked;
+    renderQueueList(activeQueue(), activeQueueJobs());
+  });
   $("btn-more-filters")?.addEventListener("click", () => {
     const dr = $("encode-more-filter-drawer");
     if (!dr) return;
     const isHidden = dr.classList.toggle("hidden");
     $("btn-more-filters").setAttribute("aria-expanded", String(!isHidden));
-    syncEncodeFilterControls();
+    syncEncodeFilterControls(searchMatcher);
   });
   $("btn-clear-more-filters")?.addEventListener("click", () => {
     resetAllEncodeFilters();

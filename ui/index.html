@@ -395,12 +395,31 @@
               <div class="enc-filter-bar">
                 <div class="enc-search-wrap">
                   <svg class="enc-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                  <input id="enc-search-input" class="enc-search-input" type="search" placeholder="Search files by name…" autocomplete="off" />
+                  <input id="enc-search-input" class="enc-search-input" type="search" placeholder="Search file name…" autocomplete="off" />
+                  <div id="enc-search-mode-seg" class="enc-search-mode-seg" role="group" aria-label="Search target">
+                    <button type="button" class="enc-mode-btn active" data-search-mode="name" title="Match file name only">Name</button>
+                    <button type="button" class="enc-mode-btn" data-search-mode="path" title="Match full file path">Path</button>
+                    <button type="button" class="enc-mode-btn" data-search-mode="regex" title="Match regular expression (against full path)">.*</button>
+                  </div>
                 </div>
                 <div id="enc-active-chips" class="enc-active-chips"></div>
                 <button id="btn-more-filters" class="btn btn-sm btn-ghost" type="button" aria-expanded="false">More Filter ▾</button>
               </div>
               <div id="encode-more-filter-drawer" class="enc-more-drawer hidden">
+                <label class="enc-mf-field">
+                  <span>File Match Mode</span>
+                  <div class="inline-row" style="gap:6px;">
+                    <select id="mf-search-mode" class="compact-sel">
+                      <option value="name">File Name</option>
+                      <option value="path">Full Path</option>
+                      <option value="regex">Regex (Path)</option>
+                    </select>
+                    <label class="inline-row" style="gap:4px;font-weight:500;cursor:pointer;" title="Invert file match (exclude matching files)">
+                      <input id="mf-search-invert" type="checkbox" class="switch-chk" />
+                      <span>Exclude</span>
+                    </label>
+                  </div>
+                </label>
                 <label class="enc-mf-field">
                   <span>Codec</span>
                   <select id="mf-codec" class="compact-sel">

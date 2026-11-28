@@ -3559,8 +3559,8 @@ input[type="radio"] {
   position: relative;
   display: inline-flex;
   align-items: center;
-  min-width: 190px;
-  flex: 0 1 230px;
+  min-width: 245px;
+  flex: 0 1 300px;
 }
 
 .enc-search-icon {
@@ -3573,7 +3573,7 @@ input[type="radio"] {
 .enc-search-input {
   width: 100%;
   height: 28px;
-  padding: 0 8px 0 27px;
+  padding: 0 112px 0 27px;
   border-radius: 7px;
   border: 1px solid var(--border);
   background: var(--surface);
@@ -3582,9 +3582,47 @@ input[type="radio"] {
   font-family: inherit;
 }
 
+.enc-search-input.has-error {
+  border-color: var(--danger, #e5484d);
+}
+
 .enc-search-input:focus {
   outline: none;
   border-color: var(--accent-solid);
+}
+
+.enc-search-mode-seg {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.enc-mode-btn {
+  all: unset;
+  cursor: pointer;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.enc-mode-btn:hover {
+  color: var(--text);
+}
+
+.enc-mode-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
 }
 
 .enc-active-chips {
