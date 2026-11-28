@@ -3479,22 +3479,84 @@ pub async fn download_and_install_update(
     asset_url: String,
     asset_name: String,
     auto_launch: Option<bool>,
+    auto_install: Option<bool>,
+    force_quit_active: Option<bool>,
 ) -> Result<crate::updater::UpdateDownloadResult, String> {
-    let app_data_dir = state.scheduler.db.app_data_dir.clone();
     let launch = auto_launch.unwrap_or(true);
-    tokio::task::spawn_blocking(move || {
-        crate::updater::download_release_asset(
-            &app_data_dir,
-            &asset_url,
-            &asset_name,
-            launch,
-            |prog| {
-                let _ = app.emit("update_download_progress", prog);
-            },
-        )
+    let self_install = auto_install.unwrap_or(launch);
+
+    if self_install {
+        let has_active = state
+            .scheduler
+            .active_cancel_flag
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false);
+        let any_running = state
+            .scheduler
+            .db
+            .list_queues()?
+            .iter()
+            .any(|q| q.is_running && !q.is_paused);
+        if (has_active || any_running) && force_quit_active != Some(true) {
+            return Err(
+                "An encode or active queue is currently running. Pause or finish it before installing the update."
+                    .to_string(),
+            );
+        }
+        if force_quit_active == Some(true) {
+            if let Ok(cf) = state.scheduler.active_cancel_flag.lock() {
+                if let Some((_, ref flag)) = *cf {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }
+            for mut q in state.scheduler.db.list_queues()? {
+                if q.is_running {
+                    q.is_running = false;
+                    q.is_paused = true;
+                    q.waiting_reason = Some("Paused for update".to_string());
+                    let _ = state.scheduler.db.upsert_queue(&q);
+                }
+            }
+        }
+    }
+
+    let app_data_dir = state.scheduler.db.app_data_dir.clone();
+    let app_emit = app.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        if self_install {
+            crate::updater::prepare_and_launch_self_update(
+                &app_data_dir,
+                &asset_url,
+                &asset_name,
+                |prog| {
+                    let _ = app_emit.emit("update_download_progress", prog);
+                },
+            )
+        } else {
+            crate::updater::download_release_asset(
+                &app_data_dir,
+                &asset_url,
+                &asset_name,
+                launch,
+                |prog| {
+                    let _ = app_emit.emit("update_download_progress", prog);
+                },
+            )
+        }
     })
     .await
-    .map_err(|e| format!("Update download task failed: {e}"))?
+    .map_err(|e| format!("Update download task failed: {e}"))??;
+
+    if res.requires_restart {
+        let app_exit = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            app_exit.exit(0);
+        });
+    }
+
+    Ok(res)
 }
 
 #[tauri::command]

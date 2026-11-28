@@ -57,6 +57,7 @@
     updateCheck: null,
     updateChecking: false,
     updateError: null,
+    updateStatusMessage: null,
     updateDownloading: false,
     updateProgress: null,
     updateDownloadedPath: null,
@@ -1607,7 +1608,7 @@
   function renderUpdatesCardHtml() {
     const upd = state.updateCheck;
     const prog = state.updateProgress;
-    const curVer = upd?.current_version || "0.3.0";
+    const curVer = upd?.current_version || "0.3.4";
     const pct = prog?.percent != null ? Math.max(0, Math.min(100, prog.percent)) : null;
 
     let statusLine = `<span class="muted">Check GitHub Releases for newer builds.</span>`;
@@ -1615,6 +1616,8 @@
       statusLine = `<span>Checking GitHub Releases…</span>`;
     } else if (state.updateError) {
       statusLine = `<span style="color:var(--err);">${esc(state.updateError)}</span>`;
+    } else if (state.updateStatusMessage) {
+      statusLine = `<span style="color:var(--ok);font-weight:600;">${esc(state.updateStatusMessage)}</span>`;
     } else if (upd && upd.update_available) {
       statusLine = `<span style="color:var(--ok);font-weight:600;">Update available: ${esc(upd.tag_name)}</span>` +
         (upd.asset_size ? ` <span class="muted">(${fmtBytes(upd.asset_size)} · ${esc(upd.platform_label)})</span>` : "");
@@ -1623,14 +1626,22 @@
     }
 
     const downloadBtn = upd && upd.update_available && upd.asset_url && upd.asset_name
-      ? `<button id="btn-download-update" class="btn btn-primary btn-sm" type="button" ${state.updateDownloading ? "disabled" : ""}>${state.updateDownloading ? "Downloading…" : "Download &amp; Open Installer"}</button>`
+      ? `<button id="btn-download-update" class="btn btn-primary btn-sm" type="button" ${state.updateDownloading ? "disabled" : ""}>${state.updateDownloading ? "Updating…" : "Download, Install &amp; Relaunch"}</button>`
+      : "";
+    const dlOnlyBtn = upd && upd.update_available && upd.asset_url && upd.asset_name && !state.updateDownloading
+      ? `<button id="btn-download-only" class="btn btn-ghost btn-sm" type="button" title="Download & open installer without auto-replacing">Open Installer</button>`
       : "";
     const revealBtn = state.updateDownloadedPath
       ? `<button id="btn-reveal-update" class="btn btn-secondary btn-sm" type="button">Reveal Installer</button>`
       : "";
+    const progStageTxt = prog?.status === "preparing"
+      ? `Preparing bundle &amp; stripping quarantine attributes for ${esc(upd?.asset_name || "")}…`
+      : prog?.status === "installing"
+        ? `Applying update and restarting Media Shack…`
+        : `Downloading ${esc(upd?.asset_name || "")}: ${fmtBytes(prog?.downloaded_bytes || 0)}${prog?.total_bytes ? ` / ${fmtBytes(prog.total_bytes)}` : ""}${pct != null ? ` (${pct.toFixed(0)}%)` : ""}`;
     const progressHtml = state.updateDownloading && prog
       ? `<div style="margin-top:8px;">
-           <div class="muted" style="font-size:12px;">Downloading ${esc(upd?.asset_name || "")}: ${fmtBytes(prog.downloaded_bytes)}${prog.total_bytes ? ` / ${fmtBytes(prog.total_bytes)}` : ""}${pct != null ? ` (${pct.toFixed(0)}%)` : ""}</div>
+           <div class="muted" style="font-size:12px;">${progStageTxt}</div>
            <div class="update-progress-track"><div class="update-progress-fill" style="width:${pct != null ? pct.toFixed(1) : 35}%;"></div></div>
          </div>`
       : "";
@@ -1654,6 +1665,7 @@
           </label>
           <button id="btn-check-updates" class="btn btn-secondary btn-sm" type="button" ${state.updateChecking ? "disabled" : ""}>${state.updateChecking ? "Checking…" : "Check for Updates"}</button>
           ${downloadBtn}
+          ${dlOnlyBtn}
           ${revealBtn}
           <button id="btn-open-releases" class="btn btn-ghost btn-sm" type="button">GitHub Releases</button>
         </div>
@@ -1684,29 +1696,34 @@
         invoke("open_external_url", { url }).catch((e) => alert(String(e)));
       };
     }
-    const btnDl = $("btn-download-update");
-    if (btnDl && state.updateCheck?.asset_url && state.updateCheck?.asset_name) {
-      btnDl.onclick = async () => {
-        if (state.updateDownloading) return;
-        state.updateDownloading = true;
-        state.updateError = null;
-        state.updateProgress = { downloaded_bytes: 0, total_bytes: state.updateCheck.asset_size || null, percent: 0, status: "downloading" };
+    const startUpdate = async (autoInstall) => {
+      if (state.updateDownloading || !state.updateCheck?.asset_url || !state.updateCheck?.asset_name) return;
+      state.updateDownloading = true;
+      state.updateError = null;
+      state.updateStatusMessage = null;
+      state.updateProgress = { downloaded_bytes: 0, total_bytes: state.updateCheck.asset_size || null, percent: 0, status: "downloading" };
+      refreshSettingsCardUpdatesOnly();
+      try {
+        const res = await invoke("download_and_install_update", {
+          assetUrl: state.updateCheck.asset_url,
+          assetName: state.updateCheck.asset_name,
+          autoLaunch: true,
+          autoInstall,
+          forceQuitActive: false,
+        });
+        state.updateDownloadedPath = res.downloaded_path;
+        if (res.message) state.updateStatusMessage = res.message;
+      } catch (e) {
+        state.updateError = String(e);
+      } finally {
+        state.updateDownloading = false;
         refreshSettingsCardUpdatesOnly();
-        try {
-          const res = await invoke("download_and_install_update", {
-            assetUrl: state.updateCheck.asset_url,
-            assetName: state.updateCheck.asset_name,
-            autoLaunch: true,
-          });
-          state.updateDownloadedPath = res.downloaded_path;
-        } catch (e) {
-          state.updateError = String(e);
-        } finally {
-          state.updateDownloading = false;
-          refreshSettingsCardUpdatesOnly();
-        }
-      };
-    }
+      }
+    };
+    const btnDl = $("btn-download-update");
+    if (btnDl) btnDl.onclick = () => startUpdate(true);
+    const btnDlOnly = $("btn-download-only");
+    if (btnDlOnly) btnDlOnly.onclick = () => startUpdate(false);
     const btnRev = $("btn-reveal-update");
     if (btnRev && state.updateDownloadedPath) {
       btnRev.onclick = () => invoke("reveal_output", { path: state.updateDownloadedPath }).catch((e) => alert(String(e)));
