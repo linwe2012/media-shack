@@ -2585,6 +2585,7 @@ pub fn forward_resources_to_tab(
 
 #[tauri::command]
 pub async fn run_tab_dedupe_scan(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     queue_id: String,
     also_sha256: bool,
@@ -2597,13 +2598,44 @@ pub async fn run_tab_dedupe_scan(
         .lock()
         .ok()
         .and_then(|t| t.capabilities.as_ref().map(|c| PathBuf::from(&c.ffmpeg_path)));
+    let qid_ev = queue_id.clone();
 
     let groups = tokio::task::spawn_blocking(move || -> Result<Vec<TabDedupeGroup>, String> {
         let mut by_hash: HashMap<String, Vec<JobRecord>> = HashMap::new();
         let mut cached_perceptual: HashMap<String, Vec<(u64, u64)>> = HashMap::new();
+        let total_jobs = jobs.len();
+        let hash_span = if include_perceptual { 55.0 } else { 95.0 };
 
-        for j in &jobs {
+        let _ = app.emit(
+            "tab_dedupe_progress",
+            serde_json::json!({
+                "queue_id": qid_ev,
+                "phase": "Exact hashing",
+                "done": 0,
+                "total": total_jobs,
+                "pct": 0.0,
+                "current_file": ""
+            }),
+        );
+
+        for (idx, j) in jobs.iter().enumerate() {
             let p = Path::new(&j.source_path);
+            let fname = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&j.source_rel_path);
+            let frac = if total_jobs > 0 { (idx + 1) as f64 / total_jobs as f64 } else { 1.0 };
+            let _ = app.emit(
+                "tab_dedupe_progress",
+                serde_json::json!({
+                    "queue_id": qid_ev,
+                    "phase": "Exact hashing",
+                    "done": idx + 1,
+                    "total": total_jobs,
+                    "pct": frac * hash_span,
+                    "current_file": fname
+                }),
+            );
             if !p.is_file() {
                 continue;
             }
@@ -2682,13 +2714,30 @@ pub async fn run_tab_dedupe_scan(
                 .filter(|j| !grouped_ids.contains(&j.id) && Path::new(&j.source_path).is_file())
                 .cloned()
                 .collect();
+            let rem_total = remaining.len();
             let mut sigs: Vec<(JobRecord, Vec<(u64, u64)>)> = Vec::new();
-            for j in remaining {
+            for (ridx, j) in remaining.into_iter().enumerate() {
+                let p = Path::new(&j.source_path);
+                let fname = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&j.source_rel_path);
+                let frac = if rem_total > 0 { (ridx + 1) as f64 / rem_total as f64 } else { 1.0 };
+                let _ = app.emit(
+                    "tab_dedupe_progress",
+                    serde_json::json!({
+                        "queue_id": qid_ev,
+                        "phase": "Perceptual frames",
+                        "done": ridx + 1,
+                        "total": rem_total,
+                        "pct": 55.0 + frac * 42.0,
+                        "current_file": fname
+                    }),
+                );
                 if let Some(cached_sig) = cached_perceptual.remove(&j.id) {
                     sigs.push((j, cached_sig));
                     continue;
                 }
-                let p = Path::new(&j.source_path);
                 let mut hashes = Vec::new();
                 if crate::catalog::classify_media_type(p) == "image" {
                     if let Ok(img) = image::open(p) {
@@ -2795,6 +2844,17 @@ pub async fn run_tab_dedupe_scan(
                 }
             }
         }
+        let _ = app.emit(
+            "tab_dedupe_progress",
+            serde_json::json!({
+                "queue_id": qid_ev,
+                "phase": "Completed",
+                "done": jobs.len(),
+                "total": jobs.len(),
+                "pct": 100.0,
+                "current_file": ""
+            }),
+        );
         Ok(out_groups)
     })
     .await

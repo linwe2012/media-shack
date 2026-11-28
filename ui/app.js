@@ -132,6 +132,11 @@
   };
   let ocrScanning = false;
   let faceScanning = false;
+  const tabDedupeProgressByQueue = new Map(); // queue_id -> { phase, done, total, pct, current_file }
+  const tabDedupeCompletedQueues = new Set();
+  const tabOcrCompletedQueues = new Set();
+  const tabFacesCompletedQueues = new Set();
+  let catalogDupStatus = { status: "idle", pct: 0, count: null, scanned: false };
   const orgSelectedByQueue = new Map(); // queue_id -> Set<job_id>
   function getOrgSelectedSet(qid = activeQueueId) {
     if (!qid) return new Set();
@@ -3393,12 +3398,12 @@
     loadFrame(seekT);
   }
 
-  function renderJobTagsHtml(jobId, tags) {
+  function renderJobTagsHtml(jobId, tags, inline = false) {
     const list = tags || [];
     return `
-      <div class="inline-row" style="gap:4px;flex-wrap:wrap;margin-top:4px;">
+      <div class="${inline ? "org-largest-tags" : "inline-row"}" style="${inline ? "" : "gap:4px;flex-wrap:wrap;margin-top:4px;"}">
         ${list.map((t) => `<span class="tag-chip">${escapeHtml(t)}<button type="button" class="tag-chip-x" data-untag="${escapeHtml(jobId)}::${escapeHtml(t)}" title="Remove tag">×</button></span>`).join("")}
-        <button type="button" class="btn-link" style="font-size:11px;" data-add-tag-job="${escapeHtml(jobId)}">+ Tag</button>
+        <button type="button" class="btn-link" style="font-size:11px;white-space:nowrap;" data-add-tag-job="${escapeHtml(jobId)}">+ Tag</button>
       </div>
     `;
   }
@@ -3421,27 +3426,62 @@
     const groups = snapshot.tab_dedupe_groups?.[q.id] || [];
     const jobById = new Map(jobs.map((j) => [j.id, j]));
 
-    const dupItemCount = groups.reduce((acc, g) => acc + g.items.length, 0);
+    const dedupeProg = tabDedupeProgressByQueue.get(q.id);
+    const dedupeStatus = dedupeScanning
+      ? { text: `Running ${Math.round(dedupeProg?.pct || 0)}%`, cls: "is-running" }
+      : groups.length > 0
+        ? { text: `${groups.length} grp`, cls: "is-done" }
+        : tabDedupeCompletedQueues.has(q.id)
+          ? { text: "Clean · 0", cls: "is-done" }
+          : { text: "Not started", cls: "is-idle" };
+
+    const ocrCount = (ov.ocr_detections || []).length;
+    const ocrStatus = ocrScanning
+      ? { text: "Running…", cls: "is-running" }
+      : ocrCount > 0
+        ? { text: `${ocrCount} found`, cls: "is-done" }
+        : tabOcrCompletedQueues.has(q.id)
+          ? { text: "Clean · 0", cls: "is-done" }
+          : { text: "Not started", cls: "is-idle" };
+
+    const faceCount = (ov.face_groups || []).length;
+    const faceStatus = faceScanning
+      ? { text: "Running…", cls: "is-running" }
+      : faceCount > 0
+        ? { text: `${faceCount} ppl`, cls: "is-done" }
+        : tabFacesCompletedQueues.has(q.id)
+          ? { text: "Clean · 0", cls: "is-done" }
+          : { text: "Not started", cls: "is-idle" };
+
+    const tagCount = (ov.available_tags || []).length;
+    const catDupBadge = catalogDupStatus.status === "running"
+      ? { text: `Running ${Math.round(catalogDupStatus.pct || 0)}%`, cls: "is-running" }
+      : catalogDupStatus.status === "failed"
+        ? { text: "Failed", cls: "is-err" }
+        : catalogDupStatus.scanned
+          ? { text: `${catalogDupStatus.count ?? 0} grp`, cls: "is-done" }
+          : { text: "Not started", cls: "is-idle" };
+
     const tabSideItems = [
-      { id: "largest", label: "Largest Files", count: jobs.length },
-      { id: "duplicates", label: "Duplicates & Similar", count: dupItemCount || groups.length },
-      { id: "watermarks", label: "Watermarks & Tags", count: (ov.ocr_detections || []).length },
-      { id: "faces", label: "People & Faces", count: (ov.face_groups || []).length },
-      { id: "folder", label: "Sort to Folder", count: (ov.available_tags || []).length },
+      { id: "largest", label: "Largest Files", statusText: `${jobs.length}`, statusCls: "is-idle" },
+      { id: "duplicates", label: "Duplicates & Similar", statusText: dedupeStatus.text, statusCls: dedupeStatus.cls },
+      { id: "watermarks", label: "Watermarks & Tags", statusText: ocrStatus.text, statusCls: ocrStatus.cls },
+      { id: "faces", label: "People & Faces", statusText: faceStatus.text, statusCls: faceStatus.cls },
+      { id: "folder", label: "Sort to Folder", statusText: tagCount > 0 ? `${tagCount} tags` : "No tags", statusCls: tagCount > 0 ? "is-done" : "is-idle" },
     ];
     const toolSideItems = [
-      { id: "library", label: "Catalog Library", count: null },
-      { id: "catalog_dups", label: "Catalog Duplicates", count: null },
-      { id: "batch", label: "Batch Rename & AI", count: null },
-      ...(catalogFacesEnabled ? [{ id: "catalog_people", label: "Catalog People", count: null }] : []),
-      { id: "integrity", label: "Integrity & PAR2", count: null },
-      { id: "tasks", label: "Tasks & Budgets", count: latestTasksCount > 0 ? latestTasksCount : null },
+      { id: "library", label: "Catalog Library", statusText: null, statusCls: "" },
+      { id: "catalog_dups", label: "Catalog Duplicates", statusText: catDupBadge.text, statusCls: catDupBadge.cls },
+      { id: "batch", label: "Batch Rename & AI", statusText: null, statusCls: "" },
+      ...(catalogFacesEnabled ? [{ id: "catalog_people", label: "Catalog People", statusText: null, statusCls: "" }] : []),
+      { id: "integrity", label: "Integrity & PAR2", statusText: null, statusCls: "" },
+      { id: "tasks", label: "Tasks & Budgets", statusText: latestTasksCount > 0 ? `Running ${latestTasksCount}` : "Idle", statusCls: latestTasksCount > 0 ? "is-running" : "is-idle" },
     ];
 
     const renderSideBtn = (s) => `
       <button type="button" class="org-side-tab ${organizeSideTab === s.id ? "active" : ""}" data-org-side="${s.id}">
-        <span>${escapeHtml(s.label)}</span>
-        ${s.count !== null && s.count !== undefined ? `<span class="org-side-count">${s.count}</span>` : ""}
+        <span class="truncate">${escapeHtml(s.label)}</span>
+        ${s.statusText !== null && s.statusText !== undefined ? `<span class="org-side-status ${s.statusCls}">${escapeHtml(s.statusText)}</span>` : ""}
       </button>
     `;
     sideRail.innerHTML = `
@@ -3533,35 +3573,32 @@
             const isImg = isImagePath(j.source_path);
             const prot = isProtectedSource(j.source_path);
             const tags = ov.job_tags?.[j.id] || [];
-            const pct = Math.max(4, Math.round(((j.input_bytes || 0) / maxBytes) * 100));
+            const pct = Math.max(3, Math.round(((j.input_bytes || 0) / maxBytes) * 100));
+            const subLine = isImg ? "Photo / Image" : `${fmtDuration(info.dur)}${info.mbps > 0 ? ` · ${info.mbps} Mbps` : ""}`;
             return `
-              <div class="job-card ${selectedJobId === j.id ? "selected" : ""}" data-org-job-card="${escapeHtml(j.id)}">
-                <div class="job-top-row" style="align-items:flex-start;">
-                  <div class="inline-row min-w-0" style="gap:10px;flex:1;align-items:flex-start;">
-                    <input type="checkbox" class="org-del-chk" data-org-del-id="${escapeHtml(j.id)}" ${orgSel.has(j.id) ? "checked" : ""} ${prot ? "disabled" : ""} style="margin-top:4px;" />
-                    <div class="min-w-0" style="flex:1;">
-                      <div class="inline-row" style="gap:6px;flex-wrap:wrap;">
-                        <span class="muted tabular-nums" style="font-size:11px;font-weight:700;">#${idx + 1}</span>
-                        <strong style="font-size:13px;" class="truncate">${escapeHtml(name)}</strong>
-                        <span class="badge">${isImg ? "Image" : escapeHtml(info.res)}</span>
-                        ${prot ? `<span class="badge badge-warn">Protected ★</span>` : ""}
-                      </div>
-                      <div class="mono muted truncate" style="font-size:11px;margin-top:2px;">${escapeHtml(j.source_path)}</div>
-                      <div style="height:4px;border-radius:999px;background:var(--surface-2);overflow:hidden;margin-top:6px;max-width:340px;">
-                        <div style="height:100%;width:${pct}%;background:var(--accent);"></div>
-                      </div>
-                      ${renderJobTagsHtml(j.id, tags)}
+              <article class="org-largest-row ${selectedJobId === j.id ? "selected" : ""}" data-org-job-card="${escapeHtml(j.id)}">
+                <div class="org-size-fill" style="width:${pct}%"></div>
+                <div class="org-largest-inner">
+                  <input type="checkbox" class="org-del-chk" data-org-del-id="${escapeHtml(j.id)}" ${orgSel.has(j.id) ? "checked" : ""} ${prot ? "disabled" : ""} />
+                  <div class="org-largest-meta">
+                    <div class="org-largest-line1">
+                      <span class="muted tabular-nums" style="font-size:11px;font-weight:700;flex-shrink:0;">#${idx + 1}</span>
+                      <strong style="font-size:13px;" class="truncate">${escapeHtml(name)}</strong>
+                      <span class="badge" style="flex-shrink:0;">${isImg ? "Image" : escapeHtml(info.res)}</span>
+                      ${prot ? `<span class="badge badge-warn" style="flex-shrink:0;">Protected ★</span>` : ""}
+                      ${renderJobTagsHtml(j.id, tags, true)}
                     </div>
+                    <div class="mono muted truncate" style="font-size:11px;" title="${escapeHtml(j.source_path)}">${escapeHtml(j.source_path)}</div>
                   </div>
-                  <div class="inline-row tabular-nums" style="gap:8px;flex-shrink:0;">
-                    <div style="text-align:right;">
+                  <div class="org-largest-right">
+                    <div class="org-largest-stats">
                       <div style="font-size:13px;font-weight:700;">${fmtBytes(j.input_bytes)}</div>
-                      <div class="muted" style="font-size:10.5px;">${isImg ? "Photo / Image" : `${info.dur} · ${info.mbps} Mbps`}</div>
+                      <div class="muted" style="font-size:11px;">${escapeHtml(subLine)}</div>
                     </div>
                     <button type="button" class="btn btn-sm btn-secondary" data-preview-job="${escapeHtml(j.id)}">Preview</button>
                   </div>
                 </div>
-              </div>
+              </article>
             `;
           }).join("")}
         </div>
@@ -3590,11 +3627,23 @@
             <div class="muted" style="font-size:12px;margin-top:3px;">Uses cached BLAKE3/SHA-256 + perceptual frame/image hashes in SQLite. Exact copies can be bulk-selected safely; visually similar clips require manual review before Trashing.</div>
           </div>
           <div class="inline-row" style="gap:8px;flex-wrap:wrap;">
-            <button type="button" id="btn-tab-dedupe-scan" class="btn btn-sm btn-secondary" ${dedupeScanning || jobs.length < 2 ? "disabled" : ""}>${dedupeScanning ? "Scanning…" : "Scan Duplicates & Similar"}</button>
+            <button type="button" id="btn-tab-dedupe-scan" class="btn btn-sm btn-secondary" ${dedupeScanning || jobs.length < 2 ? "disabled" : ""}>${dedupeScanning ? `Scanning (${Math.round(dedupeProg?.pct || 0)}%)…` : "Scan Duplicates & Similar"}</button>
             ${redundant.length > 0 ? `<button type="button" id="org-select-redundant" class="btn btn-sm btn-secondary">Select Recommended (${redundant.length})</button>` : ""}
             ${selectedCount > 0 ? `<button type="button" id="org-trash-selected" class="btn btn-sm btn-danger">Review Trash (${selectedCount} · ${fmtBytes(selectedBytes)})</button>` : ""}
           </div>
         </div>
+        ${dedupeScanning ? `
+          <div id="org-dedupe-progress" class="setup-card" style="padding:10px 14px;">
+            <div class="inline-row" style="justify-content:space-between;font-size:12px;">
+              <strong id="org-dedupe-prog-title">${escapeHtml(dedupeProg?.phase || "Scanning files…")}${dedupeProg?.total ? ` (${dedupeProg.done || 0}/${dedupeProg.total})` : ""}</strong>
+              <span id="org-dedupe-prog-pct" class="muted tabular-nums">${Math.round(dedupeProg?.pct || 0)}%</span>
+            </div>
+            <div style="height:5px;border-radius:999px;background:var(--surface-2);overflow:hidden;margin:6px 0;">
+              <div id="org-dedupe-prog-fill" style="height:100%;width:${Math.max(2, Math.min(100, Math.round(dedupeProg?.pct || 0)))}%;background:var(--accent-solid);transition:width .15s ease;"></div>
+            </div>
+            <div id="org-dedupe-prog-file" class="mono muted truncate" style="font-size:11px;">${escapeHtml(dedupeProg?.current_file || "Preparing…")}</div>
+          </div>
+        ` : ""}
         ${groups.length === 0 ? `
           <div class="setup-card" style="padding:24px;text-align:center;">
             <strong style="font-size:13px;">${jobs.length < 2 ? "Attach at least 2 videos or images to find duplicates" : "No exact or similar duplicates computed yet (or every file is unique)"}</strong>
@@ -6239,6 +6288,7 @@
     renderAll();
     try {
       const count = await invoke("tab_extract_watermarks", { queueId: q.id });
+      tabOcrCompletedQueues.add(q.id);
       showToast(`Extracted ${count} watermark / text hit${count === 1 ? "" : "s"}.`, count > 0 ? "success" : "info");
       await loadOrganizeOverview(q.id, true);
     } catch (err) {
@@ -6255,6 +6305,7 @@
     renderAll();
     try {
       const count = await invoke("tab_run_face_grouping", { queueId: q.id });
+      tabFacesCompletedQueues.add(q.id);
       showToast(`Detected ${count} face observation${count === 1 ? "" : "s"}.`, count > 0 ? "success" : "info");
       await loadOrganizeOverview(q.id, true);
     } catch (err) {
@@ -6304,6 +6355,7 @@
   async function triggerTabDedupeScan(q) {
     if (!q || dedupeScanning) return;
     dedupeScanning = true;
+    tabDedupeProgressByQueue.set(q.id, { phase: "Starting", done: 0, total: 0, pct: 0, current_file: "" });
     renderAll();
     try {
       const res = await invoke("run_tab_dedupe_scan", {
@@ -6311,6 +6363,7 @@
         alsoSha256: dedupeAlsoSha256,
         includePerceptual: dedupePerceptual,
       });
+      tabDedupeCompletedQueues.add(q.id);
       showToast(
         `Scan finished: ${res.length} exact / similar group${res.length === 1 ? "" : "s"} found.`,
         res.length > 0 ? "success" : "info"
@@ -6350,6 +6403,57 @@
     latestTasksCount = Number(e.detail?.count || 0);
     const q = activeQueue();
     if (q && activeMode(q) === "organize") renderOrganizeView(q, activeQueueJobs());
+  });
+  window.addEventListener("ms-catalog-dup-status", (e) => {
+    const d = e.detail || {};
+    catalogDupStatus = {
+      status: d.status || catalogDupStatus.status,
+      pct: d.pct ?? catalogDupStatus.pct,
+      count: d.count !== undefined ? d.count : catalogDupStatus.count,
+      scanned: Boolean(d.scanned || catalogDupStatus.scanned),
+    };
+    const pill = document.querySelector('#org-side-rail [data-org-side="catalog_dups"] .org-side-status');
+    if (pill) {
+      pill.className = `org-side-status ${
+        catalogDupStatus.status === "running"
+          ? "is-running"
+          : catalogDupStatus.status === "failed"
+            ? "is-err"
+            : catalogDupStatus.scanned
+              ? "is-done"
+              : "is-idle"
+      }`;
+      pill.textContent = catalogDupStatus.status === "running"
+        ? `Running ${Math.round(catalogDupStatus.pct || 0)}%`
+        : catalogDupStatus.status === "failed"
+          ? "Failed"
+          : catalogDupStatus.scanned
+            ? `${catalogDupStatus.count ?? 0} grp`
+            : "Not started";
+    }
+  });
+  event.listen("tab_dedupe_progress", (e) => {
+    const p = e.payload || {};
+    if (!p.queue_id) return;
+    tabDedupeProgressByQueue.set(p.queue_id, p);
+    const q = activeQueue();
+    if (!q || q.id !== p.queue_id || activeMode(q) !== "organize") return;
+    const pill = document.querySelector('#org-side-rail [data-org-side="duplicates"] .org-side-status');
+    if (pill && dedupeScanning) {
+      pill.className = "org-side-status is-running";
+      pill.textContent = `Running ${Math.round(p.pct || 0)}%`;
+    }
+    const titleEl = $("org-dedupe-prog-title");
+    const pctEl = $("org-dedupe-prog-pct");
+    const fillEl = $("org-dedupe-prog-fill");
+    const fileEl = $("org-dedupe-prog-file");
+    const btnEl = $("btn-tab-dedupe-scan");
+    const pct = Math.max(0, Math.min(100, Math.round(p.pct || 0)));
+    if (titleEl) titleEl.textContent = `${p.phase || "Scanning"}${p.total ? ` (${p.done || 0}/${p.total})` : ""}`;
+    if (pctEl) pctEl.textContent = `${pct}%`;
+    if (fillEl) fillEl.style.width = `${Math.max(2, pct)}%`;
+    if (fileEl) fileEl.textContent = p.current_file || "";
+    if (btnEl && dedupeScanning) btnEl.textContent = `Scanning (${pct}%)…`;
   });
   window.addEventListener("ms-faces-enabled-changed", (e) => {
     const nextEnabled = Boolean(e.detail?.enabled);

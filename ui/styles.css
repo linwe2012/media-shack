@@ -3141,6 +3141,120 @@ body {
   color: var(--accent-text);
 }
 
+.org-side-status {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.org-side-status.is-running {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border: 1px solid var(--accent-border);
+}
+
+.org-side-status.is-done {
+  background: rgba(16, 185, 129, 0.14);
+  color: var(--ok, #10b981);
+}
+
+.org-side-status.is-err {
+  background: rgba(239, 68, 68, 0.14);
+  color: var(--err, #ef4444);
+}
+
+.org-largest-row {
+  position: relative;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.org-largest-row:hover {
+  border-color: var(--border-strong);
+}
+
+.org-largest-row.selected {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+
+.org-size-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent-solid) 11%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--accent-solid) 20%, transparent);
+  transition: width 260ms ease;
+}
+
+.org-largest-inner {
+  position: relative;
+  z-index: 1;
+  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.org-largest-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.org-largest-line1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.org-largest-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.org-largest-right {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.org-largest-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.dup-progress-banner {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
 .org-main-pane {
   flex: 1;
   min-width: 0;
@@ -3436,13 +3550,15 @@ input[type="checkbox"]:not(.switch-chk) {
 /* Slightly calmer when unchecked in tables, clearly discoverable */
 tr.tc-row .job-chk:not(:checked),
 .dedupe-member-row .org-del-chk:not(:checked),
-.job-card .org-del-chk:not(:checked) {
+.job-card .org-del-chk:not(:checked),
+.org-largest-row .org-del-chk:not(:checked) {
   opacity: 0.72;
 }
 
 tr.tc-row:hover .job-chk:not(:checked),
 .dedupe-member-row:hover .org-del-chk:not(:checked),
 .job-card:hover .org-del-chk:not(:checked),
+.org-largest-row:hover .org-del-chk:not(:checked),
 input[type="checkbox"]:not(.switch-chk):hover {
   opacity: 1;
   border-color: color-mix(in srgb, var(--text) 56%, transparent);

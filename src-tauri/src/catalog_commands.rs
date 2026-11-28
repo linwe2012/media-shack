@@ -9,8 +9,8 @@ use crate::catalog::{
 };
 use crate::commands::AppState;
 use crate::duplicates::{
-    dismiss_similarity_edge, list_duplicate_groups, merge_tags_from_copies, run_full_duplicate_scan,
-    DuplicateGroup,
+    dismiss_similarity_edge, list_duplicate_groups, merge_tags_from_copies,
+    run_full_duplicate_scan_with_progress, DuplicateGroup, DuplicateProgressCb,
 };
 use crate::integrity::{
     create_par2_parity_if_available, discover_par2, export_checksum_manifest_file,
@@ -413,9 +413,62 @@ pub fn duplicates_run_scan(
     let perc = include_perceptual.unwrap_or(true);
 
     std::thread::spawn(move || {
-        let _ = tm.update_task_progress(&tid, "running", 10.0, Some("Analyzing duplicates…"), None);
+        let _ = tm.update_task_progress(&tid, "running", 2.0, Some("Starting duplicate scan…"), None);
+        let _ = app.emit(
+            "catalog_dup_progress",
+            serde_json::json!({
+                "task_id": tid,
+                "state": "running",
+                "pct": 2.0,
+                "phase": "Starting",
+                "done": 0,
+                "total": 0,
+                "current_file": "",
+                "label": "Starting duplicate scan…"
+            }),
+        );
         let _ = app.emit("tasks_changed", ());
-        match run_full_duplicate_scan(&db, ffmpeg_opt.as_deref(), sha, perc, &cancel) {
+
+        let app_ev = app.clone();
+        let tm_ev = tm.clone();
+        let tid_ev = tid.clone();
+        let last_emit = std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1)));
+        let cb: DuplicateProgressCb = std::sync::Arc::new(move |phase, pct, done, total, current_file| {
+            let mut should_emit = done == 0 || (total > 0 && done >= total);
+            if !should_emit {
+                if let Ok(mut last) = last_emit.lock() {
+                    if last.elapsed() >= std::time::Duration::from_millis(160) {
+                        *last = std::time::Instant::now();
+                        should_emit = true;
+                    }
+                }
+            }
+            if !should_emit {
+                return;
+            }
+            let lbl = if total > 0 {
+                format!("{phase}: {done}/{total}")
+            } else {
+                phase.to_string()
+            };
+            let _ = tm_ev.update_task_progress(&tid_ev, "running", pct, Some(&lbl), None);
+            let _ = app_ev.emit(
+                "catalog_dup_progress",
+                serde_json::json!({
+                    "task_id": tid_ev,
+                    "state": "running",
+                    "pct": pct,
+                    "phase": phase,
+                    "done": done,
+                    "total": total,
+                    "current_file": current_file,
+                    "label": lbl
+                }),
+            );
+            let _ = app_ev.emit("tasks_changed", ());
+        });
+
+        match run_full_duplicate_scan_with_progress(&db, ffmpeg_opt.as_deref(), sha, perc, &cancel, Some(&cb)) {
             Ok(sum) => {
                 let mb_s = if sum.elapsed_ms > 0 {
                     ((sum.bytes_hashed as f64) / (1024.0 * 1024.0))
@@ -432,10 +485,36 @@ pub fn duplicates_run_scan(
                     sum.partial_overlaps_found
                 );
                 let _ = tm.update_task_progress(&tid, "completed", 100.0, Some(&label), None);
+                let _ = app.emit(
+                    "catalog_dup_progress",
+                    serde_json::json!({
+                        "task_id": tid,
+                        "state": "completed",
+                        "pct": 100.0,
+                        "phase": "Completed",
+                        "done": 1,
+                        "total": 1,
+                        "current_file": "",
+                        "label": label
+                    }),
+                );
                 let _ = app.emit("duplicates_changed", sum);
             }
             Err(e) => {
                 let _ = tm.update_task_progress(&tid, "failed", 0.0, None, Some(&e));
+                let _ = app.emit(
+                    "catalog_dup_progress",
+                    serde_json::json!({
+                        "task_id": tid,
+                        "state": "failed",
+                        "pct": 0.0,
+                        "phase": "Failed",
+                        "done": 0,
+                        "total": 0,
+                        "current_file": "",
+                        "label": e
+                    }),
+                );
             }
         }
         let _ = app.emit("tasks_changed", ());

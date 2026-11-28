@@ -19,6 +19,8 @@ use uuid::Uuid;
 pub const PERCEPTUAL_ALGO_VERSION: &str = "phash_dhash_v1";
 pub const STREAM_HASH_ALGO_VERSION: &str = "normalized_stream_md5_v2";
 
+pub type DuplicateProgressCb = Arc<dyn Fn(&str, f64, usize, usize, &str) + Send + Sync>;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimedPerceptualHash {
     pub timestamp_secs: f64,
@@ -104,6 +106,16 @@ pub fn detect_exact_duplicates(
     max_workers: usize,
     cancel_flag: &Arc<AtomicBool>,
 ) -> Result<(usize, u64), String> {
+    detect_exact_duplicates_with_progress(db, also_sha256, max_workers, cancel_flag, None)
+}
+
+pub fn detect_exact_duplicates_with_progress(
+    db: &Database,
+    also_sha256: bool,
+    max_workers: usize,
+    cancel_flag: &Arc<AtomicBool>,
+    progress_cb: Option<&DuplicateProgressCb>,
+) -> Result<(usize, u64), String> {
     let entries = query_catalog(
         db,
         &CatalogFilter {
@@ -148,6 +160,11 @@ pub fn detect_exact_duplicates(
         candidate_groups.push(grp);
     }
 
+    let total_to_hash = to_hash.len();
+    if let Some(cb) = progress_cb {
+        cb("Exact hashing", 5.0, 0, total_to_hash, "");
+    }
+    let done_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let bytes_hashed = Arc::new(AtomicU64::new(0));
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(max_workers.clamp(1, 8))
@@ -163,12 +180,19 @@ pub fn detect_exact_duplicates(
                 }
                 let p = Path::new(path);
                 let sz = std::fs::metadata(to_long_fs_path(p)).map(|m| m.len()).unwrap_or(0);
-                if let Ok((b3, s2)) = compute_file_hashes(p, also_sha256) {
+                let out = if let Ok((b3, s2)) = compute_file_hashes(p, also_sha256) {
                     bytes_hashed.fetch_add(sz, Ordering::Relaxed);
                     Some((fkey.clone(), vol.clone(), oid.clone(), b3, s2))
                 } else {
                     None
+                };
+                let done_now = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(cb) = progress_cb {
+                    let frac = if total_to_hash > 0 { done_now as f64 / total_to_hash as f64 } else { 1.0 };
+                    let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    cb("Exact hashing", 5.0 + frac * 30.0, done_now, total_to_hash, fname);
                 }
+                out
             })
             .collect()
     });
@@ -311,6 +335,15 @@ pub fn detect_equivalent_encoded_media(
     ffmpeg_path: &Path,
     cancel_flag: &Arc<AtomicBool>,
 ) -> Result<usize, String> {
+    detect_equivalent_encoded_media_with_progress(db, ffmpeg_path, cancel_flag, None)
+}
+
+pub fn detect_equivalent_encoded_media_with_progress(
+    db: &Database,
+    ffmpeg_path: &Path,
+    cancel_flag: &Arc<AtomicBool>,
+    progress_cb: Option<&DuplicateProgressCb>,
+) -> Result<usize, String> {
     let entries = query_catalog(
         db,
         &CatalogFilter {
@@ -324,10 +357,15 @@ pub fn detect_equivalent_encoded_media(
 
     let mut stream_sigs: Vec<(CatalogEntry, String, Option<String>, Option<String>)> = Vec::new();
     let now = Utc::now().timestamp();
+    let total_entries = entries.len();
 
-    for e in entries {
+    for (idx, e) in entries.into_iter().enumerate() {
         if cancel_flag.load(Ordering::Relaxed) {
             break;
+        }
+        if let Some(cb) = progress_cb {
+            let frac = if total_entries > 0 { (idx + 1) as f64 / total_entries as f64 } else { 1.0 };
+            cb("Stream signatures", 35.0 + frac * 25.0, idx + 1, total_entries, &e.filename);
         }
         let cached: Option<String> = {
             let conn = db.lock_conn()?;
@@ -681,6 +719,15 @@ pub fn detect_perceptual_similarities(
     ffmpeg_path: &Path,
     cancel_flag: &Arc<AtomicBool>,
 ) -> Result<(usize, usize), String> {
+    detect_perceptual_similarities_with_progress(db, ffmpeg_path, cancel_flag, None)
+}
+
+pub fn detect_perceptual_similarities_with_progress(
+    db: &Database,
+    ffmpeg_path: &Path,
+    cancel_flag: &Arc<AtomicBool>,
+    progress_cb: Option<&DuplicateProgressCb>,
+) -> Result<(usize, usize), String> {
     let entries = query_catalog(
         db,
         &CatalogFilter {
@@ -691,13 +738,19 @@ pub fn detect_perceptual_similarities(
     )?
     .items;
 
+    let media_entries: Vec<CatalogEntry> = entries
+        .into_iter()
+        .filter(|e| e.media_type == "video" || e.media_type == "image")
+        .collect();
+    let total_media = media_entries.len();
     let mut items: Vec<(CatalogEntry, Vec<TimedPerceptualHash>)> = Vec::new();
-    for e in entries {
+    for (idx, e) in media_entries.into_iter().enumerate() {
         if cancel_flag.load(Ordering::Relaxed) {
             break;
         }
-        if e.media_type != "video" && e.media_type != "image" {
-            continue;
+        if let Some(cb) = progress_cb {
+            let frac = if total_media > 0 { (idx + 1) as f64 / total_media as f64 } else { 1.0 };
+            cb("Perceptual frames", 60.0 + frac * 32.0, idx + 1, total_media, &e.filename);
         }
         if let Ok(seq) = extract_or_load_perceptual_sequence(db, ffmpeg_path, &e.file_key) {
             if !seq.is_empty() {
@@ -835,6 +888,17 @@ pub fn run_full_duplicate_scan(
     include_perceptual: bool,
     cancel_flag: &Arc<AtomicBool>,
 ) -> Result<DuplicateScanSummary, String> {
+    run_full_duplicate_scan_with_progress(db, ffmpeg_path, also_sha256, include_perceptual, cancel_flag, None)
+}
+
+pub fn run_full_duplicate_scan_with_progress(
+    db: &Database,
+    ffmpeg_path: Option<&Path>,
+    also_sha256: bool,
+    include_perceptual: bool,
+    cancel_flag: &Arc<AtomicBool>,
+    progress_cb: Option<&DuplicateProgressCb>,
+) -> Result<DuplicateScanSummary, String> {
     let started = std::time::Instant::now();
     let workers = db
         .get_setting::<crate::tasks::ResourceBudgets>("resource_budgets")
@@ -842,20 +906,26 @@ pub fn run_full_duplicate_scan(
         .flatten()
         .map(|b| b.cpu_workers)
         .unwrap_or(4);
-    let (exact_groups_found, bytes_hashed) = detect_exact_duplicates(db, also_sha256, workers, cancel_flag)?;
+    let (exact_groups_found, bytes_hashed) =
+        detect_exact_duplicates_with_progress(db, also_sha256, workers, cancel_flag, progress_cb)?;
     let mut equivalent_pairs_found = 0usize;
     let mut perceptual_pairs_found = 0usize;
     let mut partial_overlaps_found = 0usize;
 
     if let Some(ff) = ffmpeg_path {
         if !cancel_flag.load(Ordering::Relaxed) {
-            equivalent_pairs_found = detect_equivalent_encoded_media(db, ff, cancel_flag)?;
+            equivalent_pairs_found =
+                detect_equivalent_encoded_media_with_progress(db, ff, cancel_flag, progress_cb)?;
         }
         if include_perceptual && !cancel_flag.load(Ordering::Relaxed) {
-            let (perc, part) = detect_perceptual_similarities(db, ff, cancel_flag)?;
+            let (perc, part) =
+                detect_perceptual_similarities_with_progress(db, ff, cancel_flag, progress_cb)?;
             perceptual_pairs_found = perc;
             partial_overlaps_found = part;
         }
+    }
+    if let Some(cb) = progress_cb {
+        cb("Finalizing", 99.0, 1, 1, "");
     }
 
     Ok(DuplicateScanSummary {

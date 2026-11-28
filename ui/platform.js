@@ -995,14 +995,85 @@
   // =========================================================================
 
   $("btn-dup-scan").onclick = async () => {
-    await invoke("duplicates_run_scan", {
-      alsoSha256: $("chk-dup-sha256").checked,
-      includePerceptual: $("chk-dup-perceptual").checked,
-    });
-    alert("Duplicate & similarity scan started in Tasks.");
-    refreshDuplicates();
+    const btn = $("btn-dup-scan");
+    try {
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Scanning…";
+      }
+      renderDupScanProgress({ state: "running", pct: 2, phase: "Starting", done: 0, total: 0, label: "Starting duplicate scan…" });
+      await invoke("duplicates_run_scan", {
+        alsoSha256: $("chk-dup-sha256").checked,
+        includePerceptual: $("chk-dup-perceptual").checked,
+      });
+    } catch (err) {
+      renderDupScanProgress({ state: "failed", pct: 0, label: String(err) });
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Scan Duplicates & Similar";
+      }
+    }
   };
   $("sel-dup-filter").onchange = () => refreshDuplicates();
+
+  function renderDupScanProgress(p) {
+    state.dupScanProgress = p || null;
+    const box = $("dup-scan-progress");
+    const btn = $("btn-dup-scan");
+    const title = $("dup-prog-title");
+    const pctEl = $("dup-prog-pct");
+    const fill = $("dup-prog-fill");
+    const detail = $("dup-prog-detail");
+    const pct = Math.max(0, Math.min(100, Math.round(p?.pct || 0)));
+
+    if (!p || p.state === "idle") {
+      if (box) box.classList.add("hidden");
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Scan Duplicates & Similar";
+      }
+      return;
+    }
+
+    if (p.state === "running") {
+      if (box) box.classList.remove("hidden");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = `Scanning (${pct}%)…`;
+      }
+      if (title) title.textContent = p.phase || "Scanning duplicates…";
+      if (pctEl) pctEl.textContent = `${pct}%`;
+      if (fill) fill.style.width = `${pct}%`;
+      if (detail) {
+        detail.textContent = p.current_file
+          ? `${p.label || p.phase} · ${p.current_file}`
+          : (p.label || "Working…");
+      }
+      window.dispatchEvent(new CustomEvent("ms-catalog-dup-status", {
+        detail: { status: "running", pct, phase: p.phase || "", count: state.dupGroups?.length ?? null },
+      }));
+    } else if (p.state === "completed") {
+      if (box) box.classList.add("hidden");
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Scan Duplicates & Similar";
+      }
+      refreshDuplicates();
+    } else if (p.state === "failed") {
+      if (box) box.classList.remove("hidden");
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Scan Duplicates & Similar";
+      }
+      if (title) title.textContent = "Duplicate scan failed";
+      if (pctEl) pctEl.textContent = "Error";
+      if (fill) fill.style.width = "0%";
+      if (detail) detail.textContent = p.label || "Scan error";
+      window.dispatchEvent(new CustomEvent("ms-catalog-dup-status", {
+        detail: { status: "failed", pct: 0, phase: p.label || "", count: state.dupGroups?.length ?? null },
+      }));
+    }
+  }
 
   let dupRefreshInFlight = false;
   let dupRefreshQueued = false;
@@ -1042,6 +1113,14 @@
         list.appendChild(card);
       });
       if (summaryEl) summaryEl.textContent = `${state.dupGroups.length} groups · Est. savings ${fmtBytes(totalSave)}`;
+      window.dispatchEvent(new CustomEvent("ms-catalog-dup-status", {
+        detail: {
+          status: state.dupScanProgress?.state === "running" ? "running" : "done",
+          pct: state.dupScanProgress?.pct || 100,
+          count: state.dupGroups.length,
+          scanned: true,
+        },
+      }));
       await renderDupDetail();
     } catch (err) {
       console.error("refreshDuplicates error:", err);
@@ -1662,7 +1741,7 @@
   function renderUpdatesCardHtml() {
     const upd = state.updateCheck;
     const prog = state.updateProgress;
-    const curVer = upd?.current_version || "0.3.8";
+    const curVer = upd?.current_version || "0.3.9";
     const pct = prog?.percent != null ? Math.max(0, Math.min(100, prog.percent)) : null;
 
     let statusLine = `<span class="muted">Check GitHub Releases for newer builds.</span>`;
@@ -1987,6 +2066,7 @@
   // Listen to backend catalog/tasks/duplicates events
   event.listen("catalog_changed", () => { if (state.currentView === "transcode" && state.activeOrgTool === "library") refreshLibrary(); });
   event.listen("duplicates_changed", () => { if (state.currentView === "transcode" && state.activeOrgTool === "catalog_dups") refreshDuplicates(); });
+  event.listen("catalog_dup_progress", (e) => renderDupScanProgress(e.payload));
   event.listen("tasks_changed", () => { refreshTasksView(); });
   event.listen("update_download_progress", (e) => {
     state.updateProgress = e.payload;

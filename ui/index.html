@@ -349,6 +349,16 @@
                         <span id="lbl-dup-summary" class="muted">0 groups</span>
                       </div>
                     </section>
+                    <div id="dup-scan-progress" class="dup-progress-banner hidden">
+                      <div class="inline-row" style="justify-content:space-between;font-size:12px;">
+                        <strong id="dup-prog-title">Scanning catalog duplicates…</strong>
+                        <span id="dup-prog-pct" class="muted tabular-nums">0%</span>
+                      </div>
+                      <div style="height:5px;border-radius:999px;background:var(--surface-2);overflow:hidden;">
+                        <div id="dup-prog-fill" style="height:100%;width:0%;background:var(--accent-solid);transition:width .15s ease;"></div>
+                      </div>
+                      <div id="dup-prog-detail" class="muted truncate" style="font-size:11px;">Preparing scan…</div>
+                    </div>
                     <main class="split-workspace">
                       <aside class="dup-groups-pane" id="dup-groups-list"></aside>
                       <section class="dup-detail-pane" id="dup-detail-pane">
