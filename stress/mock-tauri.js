@@ -29,6 +29,7 @@
     if (command === "set_queue_tab_type") { const q = queues.find(x => x.id === args.queueId); if (q) q.tab_type = args.tabType; fire("snapshot_changed"); return true; }
     if (command === "delete_queue_tab") { const i = queues.findIndex(x => x.id === args.queueId); if (i >= 0 && queues.length > 1) queues.splice(i, 1); snapshot.active_queue_id = queues[0].id; fire("snapshot_changed"); return true; }
     if (command === "locate_ffmpeg_tools" || command === "recheck_tools") return snapshot.tools;
+    if (command === "check_for_updates") return { current_version: "0.3.0", latest_version: "0.3.0", tag_name: "v0.3.0", update_available: false, release_name: "v0.3.0", release_notes: "", html_url: "https://github.com/linwe2012/media-shack/releases", published_at: null, asset_name: null, asset_url: null, asset_size: null, platform_label: "Mock" };
     if (command === "get_cleanup_candidates") return [];
     if (command === "check_close_status") return false;
     // Destructive commands deliberately remain in-memory no-ops.

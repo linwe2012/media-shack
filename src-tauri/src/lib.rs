@@ -20,6 +20,7 @@ pub mod scanner;
 pub mod scheduler;
 pub mod tasks;
 pub mod tools;
+pub mod updater;
 pub mod verify;
 
 use commands::AppState;
@@ -301,6 +302,9 @@ pub fn run() {
             commands::tab_run_face_grouping,
             commands::tab_label_face_and_tag,
             commands::tab_move_by_tag,
+            commands::check_for_updates,
+            commands::download_and_install_update,
+            commands::open_external_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Media Shack");

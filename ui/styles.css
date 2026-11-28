@@ -4274,3 +4274,45 @@ body.os-windows .window-controls-slot:empty {
   background-color: #e81123 !important;
   color: #ffffff;
 }
+
+/* Software Updates (GitHub Releases) */
+.update-pill-btn {
+  margin-bottom: 1px;
+  gap: 5px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border: 1px solid var(--accent-border);
+  font-weight: 600;
+}
+
+.update-pill-btn:hover {
+  filter: brightness(1.06);
+}
+
+.update-release-notes {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.update-progress-track {
+  margin-top: 8px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.update-progress-fill {
+  height: 100%;
+  background: var(--accent-progress, var(--accent));
+  transition: width 150ms ease;
+}

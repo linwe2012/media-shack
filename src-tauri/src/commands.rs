@@ -3392,3 +3392,40 @@ pub fn tab_move_by_tag(
     }
     Ok(res)
 }
+
+#[tauri::command]
+pub async fn check_for_updates() -> Result<crate::updater::UpdateCheckResult, String> {
+    tokio::task::spawn_blocking(crate::updater::check_latest_release)
+        .await
+        .map_err(|e| format!("Update check task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn download_and_install_update(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    asset_url: String,
+    asset_name: String,
+    auto_launch: Option<bool>,
+) -> Result<crate::updater::UpdateDownloadResult, String> {
+    let app_data_dir = state.scheduler.db.app_data_dir.clone();
+    let launch = auto_launch.unwrap_or(true);
+    tokio::task::spawn_blocking(move || {
+        crate::updater::download_release_asset(
+            &app_data_dir,
+            &asset_url,
+            &asset_name,
+            launch,
+            |prog| {
+                let _ = app.emit("update_download_progress", prog);
+            },
+        )
+    })
+    .await
+    .map_err(|e| format!("Update download task failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    crate::updater::open_github_url(&url)
+}

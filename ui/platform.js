@@ -54,6 +54,13 @@
     tasks: [],
     budgets: null,
     repairDiagnosis: null,
+    updateCheck: null,
+    updateChecking: false,
+    updateError: null,
+    updateDownloading: false,
+    updateProgress: null,
+    updateDownloadedPath: null,
+    autoUpdateCheck: localStorage.getItem("ms_auto_update_check") !== "false",
   };
 
   function esc(s) {
@@ -220,6 +227,13 @@
   const backToTabsBtn = $("btn-back-to-tabs");
   const openQueueBtn = $("btn-open-queue");
   const openSettingsTabBtn = $("btn-open-settings-tab");
+  const updatePillBtn = $("btn-update-pill");
+  if (updatePillBtn) {
+    updatePillBtn.addEventListener("click", () => {
+      window.dispatchEvent(new CustomEvent("ms-open-settings-tab"));
+      switchView("settings");
+    });
+  }
   if (utilBtn && utilMenu) {
     utilBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1582,6 +1596,152 @@
   // SETTINGS, OCR REVIEW & DATABASE BACKUP VIEW
   // =========================================================================
 
+  function syncUpdatePill() {
+    const pill = $("btn-update-pill");
+    const lbl = $("lbl-update-pill");
+    if (!pill || !lbl) return;
+    const upd = state.updateCheck;
+    if (upd && upd.update_available) {
+      lbl.textContent = `Update ${upd.tag_name || `v${upd.latest_version}`}`;
+      pill.classList.remove("hidden");
+    } else {
+      pill.classList.add("hidden");
+    }
+  }
+
+  async function runUpdateCheck({ silent = false } = {}) {
+    if (state.updateChecking) return;
+    state.updateChecking = true;
+    state.updateError = null;
+    if (!silent && state.currentView === "settings") refreshSettingsCardUpdatesOnly();
+    try {
+      const res = await invoke("check_for_updates");
+      state.updateCheck = res;
+      syncUpdatePill();
+    } catch (e) {
+      if (!silent) state.updateError = String(e);
+    } finally {
+      state.updateChecking = false;
+      if (state.currentView === "settings") refreshSettingsCardUpdatesOnly();
+    }
+  }
+
+  function renderUpdatesCardHtml() {
+    const upd = state.updateCheck;
+    const prog = state.updateProgress;
+    const curVer = upd?.current_version || "0.3.0";
+    const pct = prog?.percent != null ? Math.max(0, Math.min(100, prog.percent)) : null;
+
+    let statusLine = `<span class="muted">Check GitHub Releases for newer builds.</span>`;
+    if (state.updateChecking) {
+      statusLine = `<span>Checking GitHub Releases…</span>`;
+    } else if (state.updateError) {
+      statusLine = `<span style="color:var(--err);">${esc(state.updateError)}</span>`;
+    } else if (upd && upd.update_available) {
+      statusLine = `<span style="color:var(--ok);font-weight:600;">Update available: ${esc(upd.tag_name)}</span>` +
+        (upd.asset_size ? ` <span class="muted">(${fmtBytes(upd.asset_size)} · ${esc(upd.platform_label)})</span>` : "");
+    } else if (upd) {
+      statusLine = `<span style="color:var(--ok);">You are up to date (v${esc(curVer)}).</span>`;
+    }
+
+    const downloadBtn = upd && upd.update_available && upd.asset_url && upd.asset_name
+      ? `<button id="btn-download-update" class="btn btn-primary btn-sm" type="button" ${state.updateDownloading ? "disabled" : ""}>${state.updateDownloading ? "Downloading…" : "Download &amp; Open Installer"}</button>`
+      : "";
+    const revealBtn = state.updateDownloadedPath
+      ? `<button id="btn-reveal-update" class="btn btn-secondary btn-sm" type="button">Reveal Installer</button>`
+      : "";
+    const progressHtml = state.updateDownloading && prog
+      ? `<div style="margin-top:8px;">
+           <div class="muted" style="font-size:12px;">Downloading ${esc(upd?.asset_name || "")}: ${fmtBytes(prog.downloaded_bytes)}${prog.total_bytes ? ` / ${fmtBytes(prog.total_bytes)}` : ""}${pct != null ? ` (${pct.toFixed(0)}%)` : ""}</div>
+           <div class="update-progress-track"><div class="update-progress-fill" style="width:${pct != null ? pct.toFixed(1) : 35}%;"></div></div>
+         </div>`
+      : "";
+    const downloadedNote = state.updateDownloadedPath && !state.updateDownloading
+      ? `<div class="muted" style="font-size:12px;margin-top:6px;">Saved to <span class="mono">${esc(state.updateDownloadedPath)}</span></div>`
+      : "";
+    const notesHtml = upd && upd.update_available && upd.release_notes
+      ? `<div class="update-release-notes">${esc(upd.release_notes)}</div>`
+      : "";
+
+    return `
+      <div class="inline-row" style="justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+        <div>
+          <h3 style="margin:0;">Software Updates (GitHub Releases)</h3>
+          <div class="muted" style="font-size:12px;">Installed: <span class="mono">v${esc(curVer)}</span> · ${esc(upd?.platform_label || "Desktop Release")}</div>
+        </div>
+        <div class="inline-row" style="gap:8px;flex-wrap:wrap;">
+          <label class="toggle-inline" style="font-size:12px;">
+            <input id="chk-auto-update" type="checkbox" ${state.autoUpdateCheck ? "checked" : ""} />
+            <span>Check on launch</span>
+          </label>
+          <button id="btn-check-updates" class="btn btn-secondary btn-sm" type="button" ${state.updateChecking ? "disabled" : ""}>${state.updateChecking ? "Checking…" : "Check for Updates"}</button>
+          ${downloadBtn}
+          ${revealBtn}
+          <button id="btn-open-releases" class="btn btn-ghost btn-sm" type="button">GitHub Releases</button>
+        </div>
+      </div>
+      <div>${statusLine}</div>
+      ${progressHtml}
+      ${downloadedNote}
+      ${notesHtml}
+    `;
+  }
+
+  function bindUpdatesCardEvents() {
+    const chk = $("chk-auto-update");
+    if (chk) {
+      chk.onchange = (e) => {
+        state.autoUpdateCheck = Boolean(e.target.checked);
+        localStorage.setItem("ms_auto_update_check", state.autoUpdateCheck ? "true" : "false");
+      };
+    }
+    const btnCheck = $("btn-check-updates");
+    if (btnCheck) {
+      btnCheck.onclick = () => runUpdateCheck({ silent: false });
+    }
+    const btnRel = $("btn-open-releases");
+    if (btnRel) {
+      btnRel.onclick = () => {
+        const url = state.updateCheck?.html_url || "https://github.com/linwe2012/media-shack/releases";
+        invoke("open_external_url", { url }).catch((e) => alert(String(e)));
+      };
+    }
+    const btnDl = $("btn-download-update");
+    if (btnDl && state.updateCheck?.asset_url && state.updateCheck?.asset_name) {
+      btnDl.onclick = async () => {
+        if (state.updateDownloading) return;
+        state.updateDownloading = true;
+        state.updateError = null;
+        state.updateProgress = { downloaded_bytes: 0, total_bytes: state.updateCheck.asset_size || null, percent: 0, status: "downloading" };
+        refreshSettingsCardUpdatesOnly();
+        try {
+          const res = await invoke("download_and_install_update", {
+            assetUrl: state.updateCheck.asset_url,
+            assetName: state.updateCheck.asset_name,
+            autoLaunch: true,
+          });
+          state.updateDownloadedPath = res.downloaded_path;
+        } catch (e) {
+          state.updateError = String(e);
+        } finally {
+          state.updateDownloading = false;
+          refreshSettingsCardUpdatesOnly();
+        }
+      };
+    }
+    const btnRev = $("btn-reveal-update");
+    if (btnRev && state.updateDownloadedPath) {
+      btnRev.onclick = () => invoke("reveal_output", { path: state.updateDownloadedPath }).catch((e) => alert(String(e)));
+    }
+  }
+
+  function refreshSettingsCardUpdatesOnly() {
+    const card = $("settings-updates-card");
+    if (!card) return;
+    card.innerHTML = renderUpdatesCardHtml();
+    bindUpdatesCardEvents();
+  }
+
   async function refreshSettingsView() {
     const [tools, faceEnabled, llmCfg, ocrList, aliases] = await Promise.all([
       invoke("metadata_check_tools"),
@@ -1640,6 +1800,10 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <div id="settings-updates-card" class="card-panel">
+        ${renderUpdatesCardHtml()}
       </div>
 
       <div class="card-panel">
@@ -1726,6 +1890,7 @@
       });
     }
     $("btn-set-done")?.addEventListener("click", () => switchView("transcode"));
+    bindUpdatesCardEvents();
     $("btn-set-ffmpeg")?.addEventListener("click", () => window.dispatchEvent(new CustomEvent("ms-open-tools-modal")));
     $("btn-db-backup").onclick = async () => {
       const dest = await dialog.save({ defaultPath: "media_shack_backup.db" });
@@ -1774,9 +1939,16 @@
   event.listen("catalog_changed", () => { if (state.currentView === "library") refreshLibrary(); });
   event.listen("duplicates_changed", () => { if (state.currentView === "duplicates") refreshDuplicates(); });
   event.listen("tasks_changed", () => { refreshTasksView(); });
+  event.listen("update_download_progress", (e) => {
+    state.updateProgress = e.payload;
+    if (state.currentView === "settings") refreshSettingsCardUpdatesOnly();
+  });
 
   // Boot into Resource Tabs Workspace while hydrating footer catalog stats
   switchView("transcode");
+  if (state.autoUpdateCheck) {
+    setTimeout(() => runUpdateCheck({ silent: true }), 2500);
+  }
   invoke("catalog_get_stats").then((stats) => {
     if ($("lbl-catalog-footer")) {
       $("lbl-catalog-footer").textContent =
