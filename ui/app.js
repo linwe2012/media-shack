@@ -1004,43 +1004,60 @@
     if ($("mf-status")) $("mf-status").value = encodeFilters.status;
 
     const chips = [];
-    if (encodeFilters.search.trim()) chips.push({ key: "search", label: `Name: "${encodeFilters.search.trim()}"` });
+    if (encodeFilters.search.trim()) chips.push({ key: "search", col: "file", label: `Name: "${encodeFilters.search.trim()}"` });
     if (encodeFilters.codec !== "all") {
       const m = { non_modern: "Exclude HEVC & AV1", only_h264: "Only H.264", only_legacy: "Only Legacy", modern_only: "HEVC / AV1 only" };
-      chips.push({ key: "codec", label: `Codec: ${m[encodeFilters.codec] || encodeFilters.codec}` });
+      chips.push({ key: "codec", col: "codec", label: `Codec: ${m[encodeFilters.codec] || encodeFilters.codec}` });
     }
     if (encodeFilters.res !== "all") {
       const m = { "4k": "≥ 4K", "1080p": "≥ 1080p", "720p": "≥ 720p", sd: "< 720p" };
-      chips.push({ key: "res", label: `Res: ${m[encodeFilters.res] || encodeFilters.res}` });
+      chips.push({ key: "res", col: "res", label: `Res: ${m[encodeFilters.res] || encodeFilters.res}` });
     }
     if (encodeFilters.duration !== "all") {
       const m = { ge_60: "≥ 1m", ge_300: "≥ 5m", ge_900: "≥ 15m", ge_3600: "≥ 1h", lt_60: "< 1m" };
-      chips.push({ key: "duration", label: `Duration: ${m[encodeFilters.duration] || encodeFilters.duration}` });
+      chips.push({ key: "duration", col: "duration", label: `Duration: ${m[encodeFilters.duration] || encodeFilters.duration}` });
     }
     if (encodeFilters.minMb > 0) {
-      chips.push({ key: "minMb", label: `Size: ≥ ${encodeFilters.minMb >= 1024 ? `${encodeFilters.minMb / 1024} GB` : `${encodeFilters.minMb} MB`}` });
+      chips.push({ key: "minMb", col: "size", label: `Size: ≥ ${encodeFilters.minMb >= 1024 ? `${encodeFilters.minMb / 1024} GB` : `${encodeFilters.minMb} MB`}` });
     }
     if (encodeFilters.minMbps > 0) {
-      chips.push({ key: "minMbps", label: `Bitrate: ≥ ${encodeFilters.minMbps} Mbps` });
+      chips.push({ key: "minMbps", col: "bitrate", label: `Bitrate: ≥ ${encodeFilters.minMbps} Mbps` });
     }
     if (encodeFilters.target !== "all") {
-      chips.push({ key: "target", label: `Target: ${encodeFilters.target.toUpperCase()}` });
+      chips.push({ key: "target", col: "target", label: `Target: ${encodeFilters.target.toUpperCase()}` });
     }
     if (encodeFilters.status !== "all") {
       const m = { selected: "Selected", ready: "Ready", completed: "Completed", needs_attention: "Needs Attention", failed: "Failed / Interrupted" };
-      chips.push({ key: "status", label: `Status: ${m[encodeFilters.status] || encodeFilters.status}` });
+      chips.push({ key: "status", col: "status", label: `Status: ${m[encodeFilters.status] || encodeFilters.status}` });
     }
 
     const chipsEl = $("enc-active-chips");
     if (chipsEl) {
       chipsEl.innerHTML = chips.map((c) => `
         <span class="enc-chip">
-          <span>${escapeHtml(c.label)}</span>
-          <button type="button" data-clear-chip="${c.key}" title="Remove filter">×</button>
+          <button type="button" class="enc-chip-edit" data-edit-chip="${c.col}" title="Click to change filter">
+            <span>${escapeHtml(c.label)}</span>
+            <span class="enc-chip-caret" aria-hidden="true">▾</span>
+          </button>
+          <button type="button" class="enc-chip-clear" data-clear-chip="${c.key}" title="Remove filter">×</button>
         </span>
       `).join("") + (chips.length > 1 ? `<button type="button" id="enc-chips-clear-all" class="btn btn-sm btn-ghost" style="height:24px;padding:0 8px;font-size:11px;">Clear all</button>` : "");
+      chipsEl.querySelectorAll("[data-edit-chip]").forEach((btn) => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const col = btn.getAttribute("data-edit-chip");
+          if (activeColPopover && activeColPopover.dataset?.chipCol === col) {
+            closeColFilterPopover();
+            return;
+          }
+          openColFilterPopover(col, btn);
+          if (activeColPopover) activeColPopover.dataset.chipCol = col;
+        };
+      });
       chipsEl.querySelectorAll("[data-clear-chip]").forEach((btn) => {
-        btn.onclick = () => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          closeColFilterPopover();
           const k = btn.getAttribute("data-clear-chip");
           if (k === "search") encodeFilters.search = "";
           else if (k === "minMb" || k === "minMbps") encodeFilters[k] = 0;
@@ -1050,6 +1067,7 @@
         };
       });
       chipsEl.querySelector("#enc-chips-clear-all")?.addEventListener("click", () => {
+        closeColFilterPopover();
         resetAllEncodeFilters();
         renderQueueList(activeQueue(), activeQueueJobs());
         renderActionBar();
@@ -3738,7 +3756,7 @@
     });
   });
   document.addEventListener("click", (e) => {
-    if (activeColPopover && !activeColPopover.contains(e.target) && !e.target.closest("[data-col-flt]")) {
+    if (activeColPopover && !activeColPopover.contains(e.target) && !e.target.closest("[data-col-flt]") && !e.target.closest("[data-edit-chip]")) {
       closeColFilterPopover();
     }
   });
