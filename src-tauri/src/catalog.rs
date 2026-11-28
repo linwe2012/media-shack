@@ -322,6 +322,7 @@ pub fn detect_storage_kind(path: &Path) -> String {
                 _ => "unknown".to_string(),
             };
         }
+        return "unknown".to_string();
     }
     #[cfg(target_os = "macos")]
     {
