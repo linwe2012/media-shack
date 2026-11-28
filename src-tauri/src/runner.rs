@@ -2,7 +2,9 @@ use crate::models::*;
 use crate::planner::materialize_argv;
 use crate::platform::{disk_space_for_path, spawn_supervised_ffmpeg};
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -174,6 +176,7 @@ pub fn run_ffmpeg_attempt(params: RunEncodeParams<'_>) -> EncodeRunOutcome {
         };
     };
 
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut args = materialize_argv(&plan.argv, params.partial_path);
 
     // Optional bounded preview branch for ordinary MP4 when a preview side-pipe/FIFO is supplied.

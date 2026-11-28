@@ -331,7 +331,10 @@ pub fn detect_storage_kind(path: &Path) -> String {
         }
         return "ssd".to_string();
     }
-    "unknown".to_string()
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        "unknown".to_string()
+    }
 }
 
 fn is_hidden_entry(path: &Path) -> bool {

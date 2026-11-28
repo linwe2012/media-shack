@@ -1,20 +1,17 @@
 use crate::models::{ProcessPriority, SourceFingerprint};
-use crate::platform::common::{compute_head_tail_hash, verify_no_symlink_ancestors_impl};
 use crate::platform::{PublishOutcome, VolumeStats};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::fs::MetadataExt;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
+use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, HANDLE};
 use windows_sys::Win32::Storage::FileSystem::{
-    GetDiskFreeSpaceExW, GetDriveTypeW, GetFileInformationByHandle, GetVolumeInformationW,
-    GetVolumePathNameW, MoveFileExW, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT,
+    GetDiskFreeSpaceExW, GetVolumeInformationW, GetVolumePathNameW, MoveFileExW,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
@@ -27,10 +24,6 @@ use windows_sys::Win32::System::Power::{
 use windows_sys::Win32::System::Threading::{
     CreateMutexW, OpenProcess, SetPriorityClass, BELOW_NORMAL_PRIORITY_CLASS, CREATE_NO_WINDOW,
     IDLE_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS, PROCESS_SET_INFORMATION,
-};
-use windows_sys::Win32::UI::Shell::{
-    SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE,
-    SHFILEOPSTRUCTW,
 };
 
 fn to_wide_null(s: &std::ffi::OsStr) -> Vec<u16> {

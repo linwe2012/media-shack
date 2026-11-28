@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 pub const GITHUB_REPO_API_LATEST: &str =

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+echo "[lint] Checking JS syntax..."
+if command -v node >/dev/null 2>&1; then
+  for f in ui/app.js ui/platform.js stress/mock-tauri.js; do
+    if [ -f "$f" ]; then
+      node --check "$f"
+    fi
+  done
+fi
+
+echo "[lint] Checking JSON configs..."
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c "
+import json
+for p in ['src-tauri/tauri.conf.json', 'src-tauri/tauri.bundle.json', 'src-tauri/capabilities/default.json']:
+    with open(p, 'r', encoding='utf-8') as f:
+        json.load(f)
+"
+fi
+
+if command -v cargo >/dev/null 2>&1; then
+  echo "[lint] Running cargo check & clippy..."
+  (
+    cd "$ROOT/src-tauri"
+    cargo check --all-targets
+    if cargo clippy --version >/dev/null 2>&1; then
+      cargo clippy --all-targets -- -D unused-imports -D unreachable-code -D unused-mut
+    fi
+  )
+else
+  echo "[lint] cargo not installed locally; skipping Rust lint (CI will enforce)."
+fi
