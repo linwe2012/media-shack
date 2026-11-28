@@ -9,8 +9,8 @@
 <body>
   <div id="app" class="app-shell">
     <!-- Unified Chrome-Style Top Header (First-Class Resource Tabs) -->
-    <header class="chrome-header">
-      <div class="chrome-strip">
+    <header id="chrome-header" class="chrome-header" data-tauri-drag-region>
+      <div class="chrome-strip" data-tauri-drag-region>
         <button id="open-icon-modal-btn" class="brand-icon-btn" type="button" title="Media Shack — Inspect &amp; Export App Icon SVG">
           <div id="header-icon-slot" class="brand-icon-slot">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
@@ -39,9 +39,10 @@
         <button id="btn-new-queue" class="btn btn-tab-add" type="button" title="New independent resource tab" aria-label="New tab">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"><path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m7-7H5"/></svg>
         </button>
+        <div class="chrome-drag-spacer" data-tauri-drag-region aria-hidden="true"></div>
       </div>
 
-      <div class="chrome-right">
+      <div class="chrome-right" data-tauri-drag-region>
         <span id="nav-selection-pill" class="counts-pill hidden">0 selected</span>
         <button id="btn-back-to-tabs" class="btn btn-sm btn-secondary hidden" type="button">← Resource Tabs</button>
         <div class="utility-dropdown-wrap">
@@ -78,6 +79,7 @@
           <span>Settings</span>
         </button>
       </div>
+      <div id="window-controls-slot" class="window-controls-slot" data-tauri-decorum-tb></div>
     </header>
 
     <!-- ================================================================== -->

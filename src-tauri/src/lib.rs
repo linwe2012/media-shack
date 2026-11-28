@@ -31,10 +31,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tasks::TaskManager;
 use tauri::{Emitter, Manager};
+use tauri_plugin_decorum::WebviewWindowExt;
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_decorum::init())
         .register_uri_scheme_protocol("preview", |ctx, req| {
             // Serve sample media files strictly from the app's preview directory with full HTTP Range support
             let state = ctx.app_handle().state::<AppState>();
@@ -144,6 +146,11 @@ pub fn run() {
                 active_scans: Arc::new(Mutex::new(HashMap::new())),
                 _instance_lock: Arc::new(Mutex::new(Some(instance_lock))),
             });
+
+            if let Some(main_window) = app.get_webview_window("main") {
+                let _ = main_window.create_overlay_titlebar();
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

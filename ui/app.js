@@ -5238,6 +5238,53 @@
     }
   });
 
+  // Cross-platform Chrome-style overlay titlebar (tauri-plugin-decorum)
+  function initTitlebarChrome() {
+    const ua = navigator.userAgent || "";
+    const isWindows = ua.includes("Windows");
+    const isMac = !isWindows && (ua.includes("Mac") || ua.includes("Macintosh"));
+    document.body.classList.toggle("os-windows", isWindows);
+    document.body.classList.toggle("os-macos", isMac);
+    document.body.classList.toggle("os-other", !isWindows && !isMac);
+
+    const header = $("chrome-header");
+    const curWin = tauriWindow?.getCurrentWindow?.();
+    if (!curWin) return;
+
+    if (isMac) {
+      const setFs = (fs) => document.body.classList.toggle("is-fullscreen", Boolean(fs));
+      event.listen("will-enter-fullscreen", () => setFs(true));
+      event.listen("did-enter-fullscreen", () => setFs(true));
+      event.listen("will-exit-fullscreen", () => setFs(false));
+      event.listen("did-exit-fullscreen", () => setFs(false));
+      if (typeof curWin.isFullscreen === "function") {
+        curWin.isFullscreen().then(setFs).catch(() => {});
+      }
+      if (typeof curWin.onResized === "function") {
+        curWin.onResized(() => {
+          if (typeof curWin.isFullscreen === "function") {
+            curWin.isFullscreen().then(setFs).catch(() => {});
+          }
+        });
+      }
+    }
+
+    if (header) {
+      const interactiveSel = "button, a, input, select, textarea, .tab-item, .chrome-tab, .utility-menu, .window-controls-slot";
+      header.addEventListener("mousedown", (e) => {
+        if (e.button !== 0 || e.detail > 1) return;
+        if (e.target.hasAttribute?.("data-tauri-drag-region")) return;
+        if (e.target.closest?.(interactiveSel)) return;
+        curWin.startDragging?.().catch(() => {});
+      });
+      header.addEventListener("dblclick", (e) => {
+        if (e.target.closest?.(interactiveSel)) return;
+        curWin.toggleMaximize?.().catch(() => {});
+      });
+    }
+  }
+  initTitlebarChrome();
+
   event.listen("import_scan_progress", (e) => {
     latestImportProgress = e.payload;
     updateScanProgressDom();

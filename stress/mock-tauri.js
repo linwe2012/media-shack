@@ -37,7 +37,7 @@
   window.__TAURI__ = {
     core: { invoke }, event: { listen: async (name, fn) => { if (!listeners.has(name)) listeners.set(name, []); listeners.get(name).push(fn); return () => {}; } },
     dialog: { open: async () => null, save: async () => null, message: async () => {}, ask: async () => false },
-    window: { getCurrentWindow: () => ({ onDragDropEvent: async () => () => {}, onCloseRequested: async () => () => {}, close: async () => {}, minimize: async () => {} }) },
+    window: { getCurrentWindow: () => ({ onDragDropEvent: async () => () => {}, onCloseRequested: async () => () => {}, onResized: async () => () => {}, isFullscreen: async () => false, startDragging: async () => {}, toggleMaximize: async () => {}, close: async () => {}, minimize: async () => {} }) },
   };
   const timing = { loadStarted: performance.now(), loadReady: null, searches: [] };
   const metric = () => ({ fileCount: N, bytes: TOTAL_BYTES, visibleRows: document.querySelectorAll("#queue-rows tbody tr.tc-row").length, renderedRows: document.querySelectorAll("#queue-rows tbody tr.tc-row").length, totalJobs: jobs.length, uniquePhysicalBytes: TOTAL_BYTES, activeQueue: snapshot.active_queue_id, status: "ready", dataset: window.__STRESS_SIZE__, loadMs: timing.loadReady ?? performance.now() - timing.loadStarted, lastSearchMs: timing.searches.at(-1)?.ms ?? null, searchCount: timing.searches.length });

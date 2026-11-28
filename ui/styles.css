@@ -4219,3 +4219,58 @@ input[type="radio"] {
   object-fit: contain;
   display: block;
 }
+
+/* Cross-platform Chrome-style Overlay Titlebar (tauri-plugin-decorum) */
+.chrome-header {
+  cursor: default;
+}
+
+.chrome-drag-spacer {
+  flex: 1 0 28px;
+  min-width: 28px;
+  align-self: stretch;
+  margin-top: -6px;
+}
+
+body.os-macos:not(.is-fullscreen) .chrome-header {
+  padding-left: 76px;
+}
+
+body.os-windows .chrome-header,
+body.os-other .chrome-header {
+  padding-right: 0;
+}
+
+.window-controls-slot {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  margin-top: -6px;
+  height: 44px;
+  flex-shrink: 0;
+}
+
+.window-controls-slot:empty {
+  display: none;
+}
+
+body.os-windows .window-controls-slot:empty {
+  margin-right: 12px;
+}
+
+#window-controls-slot .decorum-tb-btn {
+  width: 46px;
+  height: 44px;
+  color: var(--text);
+  font-size: 10px;
+  transition: background-color 110ms ease, color 110ms ease;
+}
+
+#window-controls-slot .decorum-tb-btn:hover {
+  background-color: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+#window-controls-slot #decorum-tb-close:hover {
+  background-color: #e81123 !important;
+  color: #ffffff;
+}
