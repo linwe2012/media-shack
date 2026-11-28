@@ -74,12 +74,15 @@
     searchMode: "name", // "name" | "path" | "regex"
     searchInvert: false,
     codec: "all",
+    selectedCodecs: new Set(),
     resOp: "ge",
     resHeight: 0,
     durOp: "ge",
     durSecs: 0,
+    durUnit: "m",
     sizeOp: "ge",
     minMb: 0,
+    sizeUnit: "GB",
     bitrateOp: "ge",
     minMbps: 0,
     target: "all",
@@ -608,13 +611,6 @@
         }
       }
 
-      const bAll = document.createElement("button");
-      bAll.type = "button";
-      bAll.className = "pill-filter-btn" + (encodeFilters.status === "all" ? " active" : "");
-      bAll.textContent = `${jobs.length} videos`;
-      bAll.onclick = () => { encodeFilters.status = "all"; renderWorkspace(); renderActionBar(); };
-      pills.appendChild(bAll);
-
       if (attCount > 0) {
         const b = document.createElement("button");
         b.type = "button";
@@ -1032,6 +1028,7 @@
     encodeFilters.searchMode = "name";
     encodeFilters.searchInvert = false;
     encodeFilters.codec = "all";
+    encodeFilters.selectedCodecs.clear();
     encodeFilters.resOp = "ge";
     encodeFilters.resHeight = 0;
     encodeFilters.durOp = "ge";
@@ -1043,20 +1040,16 @@
     encodeFilters.target = "all";
     encodeFilters.status = "all";
     if ($("enc-search-input")) $("enc-search-input").value = "";
-    if ($("mf-search-mode")) $("mf-search-mode").value = "name";
-    if ($("mf-search-invert")) $("mf-search-invert").checked = false;
-    if ($("mf-res-op")) $("mf-res-op").value = "ge";
-    if ($("mf-res-slider")) $("mf-res-slider").value = "0";
-    if ($("mf-res-preset")) $("mf-res-preset").value = "0";
-    if ($("mf-dur-op")) $("mf-dur-op").value = "ge";
-    if ($("mf-dur")) $("mf-dur").value = "0";
-    $("mf-dur-custom-wrap")?.classList.add("hidden");
-    if ($("mf-size-op")) $("mf-size-op").value = "ge";
-    if ($("mf-size")) $("mf-size").value = "0";
-    $("mf-size-custom-wrap")?.classList.add("hidden");
-    if ($("mf-mbps-op")) $("mf-mbps-op").value = "ge";
-    if ($("mf-mbps")) $("mf-mbps").value = "0";
-    $("mf-mbps-custom-wrap")?.classList.add("hidden");
+  }
+
+  function canonicalCodecLabel(j) {
+    const raw = String(jobVideoInfo(j).codec || "").toUpperCase();
+    if (!raw || raw === "VIDEO" || raw === "STATS…" || raw === "—") return "";
+    if (["H264", "AVC", "AVC1"].includes(raw)) return "H.264";
+    if (["HEVC", "H265", "HVC1", "HEV1"].includes(raw)) return "HEVC";
+    if (["AV1", "AV01"].includes(raw)) return "AV1";
+    if (["PRORES", "APCH", "APCN", "APCS", "APCO", "AP4H", "AP4X"].includes(raw)) return "ProRes";
+    return raw;
   }
 
   function compileEncodeSearchMatcher() {
@@ -1101,10 +1094,15 @@
     const sm = searchMatcher || compileEncodeSearchMatcher();
     if (sm.active && !sm.test(j)) return false;
     const codec = (info.codec || "").toUpperCase();
-    if (encodeFilters.codec === "non_modern" && (!j.probe || isModernCodec(codec))) return false;
-    if (encodeFilters.codec === "only_h264" && !["H264", "AVC", "AVC1"].includes(codec)) return false;
-    if (encodeFilters.codec === "only_legacy" && (isModernCodec(codec) || ["H264", "AVC", "AVC1", "VIDEO", "STATS…"].includes(codec))) return false;
-    if (encodeFilters.codec === "modern_only" && !isModernCodec(codec)) return false;
+    if (encodeFilters.selectedCodecs.size > 0) {
+      const canon = canonicalCodecLabel(j);
+      if (!canon || !encodeFilters.selectedCodecs.has(canon)) return false;
+    } else {
+      if (encodeFilters.codec === "non_modern" && (!j.probe || isModernCodec(codec))) return false;
+      if (encodeFilters.codec === "only_h264" && !["H264", "AVC", "AVC1"].includes(codec)) return false;
+      if (encodeFilters.codec === "only_legacy" && (isModernCodec(codec) || ["H264", "AVC", "AVC1", "VIDEO", "STATS…"].includes(codec))) return false;
+      if (encodeFilters.codec === "modern_only" && !isModernCodec(codec)) return false;
+    }
 
     const h = info.v?.height || 0;
     const w = info.v?.width || 0;
@@ -1250,94 +1248,6 @@
     $("enc-search-mode-seg")?.querySelectorAll("[data-search-mode]").forEach((b) => {
       b.classList.toggle("active", b.getAttribute("data-search-mode") === encodeFilters.searchMode);
     });
-    if ($("mf-search-mode")) $("mf-search-mode").value = encodeFilters.searchMode;
-    if ($("mf-search-invert")) $("mf-search-invert").checked = !!encodeFilters.searchInvert;
-    if ($("mf-codec")) $("mf-codec").value = encodeFilters.codec;
-
-    if ($("mf-res-op")) $("mf-res-op").value = encodeFilters.resOp;
-    if ($("mf-res-slider") && document.activeElement !== $("mf-res-slider")) {
-      $("mf-res-slider").value = String(encodeFilters.resHeight || 0);
-    }
-    if ($("mf-res-preset")) {
-      $("mf-res-preset").value = RES_FILTER_PRESETS.includes(encodeFilters.resHeight) ? String(encodeFilters.resHeight) : "0";
-    }
-    if ($("mf-res-readout")) {
-      $("mf-res-readout").textContent = formatResFilterLabel(encodeFilters.resOp, encodeFilters.resHeight);
-    }
-
-    if ($("mf-dur-op")) $("mf-dur-op").value = encodeFilters.durOp;
-    if ($("mf-dur")) {
-      const isPreset = DUR_FILTER_PRESETS.includes(encodeFilters.durSecs);
-      const wrap = $("mf-dur-custom-wrap");
-      const valEl = $("mf-dur-custom-val");
-      const unitEl = $("mf-dur-custom-unit");
-      const editing = document.activeElement === valEl || document.activeElement === unitEl;
-      if (isPreset && !editing && $("mf-dur").value !== "custom") {
-        $("mf-dur").value = String(encodeFilters.durSecs);
-        wrap?.classList.add("hidden");
-      } else if (!isPreset && encodeFilters.durSecs > 0) {
-        $("mf-dur").value = "custom";
-        wrap?.classList.remove("hidden");
-        if (valEl && document.activeElement !== valEl && unitEl && document.activeElement !== unitEl) {
-          if (encodeFilters.durSecs >= 3600 && encodeFilters.durSecs % 3600 === 0) {
-            unitEl.value = "h";
-            valEl.value = String(encodeFilters.durSecs / 3600);
-          } else if (encodeFilters.durSecs >= 60) {
-            unitEl.value = "m";
-            valEl.value = String(+(encodeFilters.durSecs / 60).toFixed(1));
-          } else {
-            unitEl.value = "s";
-            valEl.value = String(+Number(encodeFilters.durSecs).toFixed(1));
-          }
-        }
-      }
-    }
-
-    if ($("mf-size-op")) $("mf-size-op").value = encodeFilters.sizeOp;
-    if ($("mf-size")) {
-      const isPreset = SIZE_FILTER_PRESETS.includes(encodeFilters.minMb);
-      const wrap = $("mf-size-custom-wrap");
-      const valEl = $("mf-size-custom-val");
-      const unitEl = $("mf-size-custom-unit");
-      const editingCustom = document.activeElement === valEl || document.activeElement === unitEl;
-      if (isPreset && !editingCustom && $("mf-size").value !== "custom") {
-        $("mf-size").value = String(encodeFilters.minMb);
-        if (wrap) wrap.classList.add("hidden");
-      } else if (!isPreset && encodeFilters.minMb > 0) {
-        $("mf-size").value = "custom";
-        if (wrap) wrap.classList.remove("hidden");
-        if (valEl && document.activeElement !== valEl && unitEl && document.activeElement !== unitEl) {
-          if (encodeFilters.minMb >= 1024) {
-            unitEl.value = "GB";
-            valEl.value = String(+(encodeFilters.minMb / 1024).toFixed(2));
-          } else {
-            unitEl.value = "MB";
-            valEl.value = String(+Number(encodeFilters.minMb).toFixed(1));
-          }
-        }
-      }
-    }
-
-    if ($("mf-mbps-op")) $("mf-mbps-op").value = encodeFilters.bitrateOp;
-    if ($("mf-mbps")) {
-      const isPreset = BITRATE_FILTER_PRESETS.includes(encodeFilters.minMbps);
-      const wrap = $("mf-mbps-custom-wrap");
-      const valEl = $("mf-mbps-custom-val");
-      const editing = document.activeElement === valEl;
-      if (isPreset && !editing && $("mf-mbps").value !== "custom") {
-        $("mf-mbps").value = String(encodeFilters.minMbps);
-        wrap?.classList.add("hidden");
-      } else if (!isPreset && encodeFilters.minMbps > 0) {
-        $("mf-mbps").value = "custom";
-        wrap?.classList.remove("hidden");
-        if (valEl && document.activeElement !== valEl) {
-          valEl.value = String(+Number(encodeFilters.minMbps).toFixed(1));
-        }
-      }
-    }
-
-    if ($("mf-target")) $("mf-target").value = encodeFilters.target;
-    if ($("mf-status")) $("mf-status").value = encodeFilters.status;
 
     const chips = [];
     if (encodeFilters.search.trim()) {
@@ -1346,7 +1256,9 @@
       const errTag = !sm.valid ? " (invalid regex)" : "";
       chips.push({ key: "search", col: "file", label: `${modeLbl}${opLbl}"${encodeFilters.search.trim()}"${errTag}` });
     }
-    if (encodeFilters.codec !== "all") {
+    if (encodeFilters.selectedCodecs.size > 0) {
+      chips.push({ key: "selectedCodecs", col: "codec", label: `Codec: ${Array.from(encodeFilters.selectedCodecs).join(", ")}` });
+    } else if (encodeFilters.codec !== "all") {
       const m = { non_modern: "Exclude HEVC & AV1", only_h264: "Only H.264", only_legacy: "Only Legacy", modern_only: "HEVC / AV1 only" };
       chips.push({ key: "codec", col: "codec", label: `Codec: ${m[encodeFilters.codec] || encodeFilters.codec}` });
     }
@@ -1401,22 +1313,16 @@
           if (k === "search") {
             encodeFilters.search = "";
             encodeFilters.searchInvert = false;
+          } else if (k === "selectedCodecs") {
+            encodeFilters.selectedCodecs.clear();
           } else if (k === "resHeight") {
             encodeFilters.resHeight = 0;
-            if ($("mf-res-slider")) $("mf-res-slider").value = "0";
-            if ($("mf-res-preset")) $("mf-res-preset").value = "0";
           } else if (k === "durSecs") {
             encodeFilters.durSecs = 0;
-            if ($("mf-dur")) $("mf-dur").value = "0";
-            $("mf-dur-custom-wrap")?.classList.add("hidden");
           } else if (k === "minMb") {
             encodeFilters.minMb = 0;
-            if ($("mf-size")) $("mf-size").value = "0";
-            $("mf-size-custom-wrap")?.classList.add("hidden");
           } else if (k === "minMbps") {
             encodeFilters.minMbps = 0;
-            if ($("mf-mbps")) $("mf-mbps").value = "0";
-            $("mf-mbps-custom-wrap")?.classList.add("hidden");
           } else encodeFilters[k] = "all";
           renderQueueList(activeQueue(), activeQueueJobs());
           renderActionBar();
@@ -1434,10 +1340,355 @@
     if (moreBtn) {
       const nonSearchCount = chips.filter((c) => c.key !== "search").length;
       const isOpen = !$("encode-more-filter-drawer")?.classList.contains("hidden");
-      moreBtn.textContent = nonSearchCount > 0 ? `More Filter (${nonSearchCount}) ${isOpen ? "▴" : "▾"}` : `More Filter ${isOpen ? "▴" : "▾"}`;
+      moreBtn.textContent = nonSearchCount > 0 ? `Filters (${nonSearchCount}) ${isOpen ? "▴" : "▾"}` : `Filters ${isOpen ? "▴" : "▾"}`;
+      moreBtn.classList.toggle("active", isOpen || nonSearchCount > 0);
     }
     const resetSortBtn = $("btn-reset-col-sort");
     if (resetSortBtn) resetSortBtn.classList.toggle("hidden", !encodeSort.col);
+  }
+
+  function renderFilterRulesDrawer(allJobs = activeQueueJobs(), matchedJobs = null) {
+    const dr = $("encode-more-filter-drawer");
+    if (!dr || dr.classList.contains("hidden")) return;
+
+    const sm = compileEncodeSearchMatcher();
+    const matched = matchedJobs || allJobs.filter((j) => encodeFilterColumnMatch(j, sm));
+    const selectableMatches = matched.filter(isEncodeSelectableJob);
+    const matchBytes = selectableMatches.reduce((a, b) => a + (b.input_bytes || 0), 0);
+
+    // Build dynamic codec counts in current tab
+    const codecCounts = new Map([["H.264", 0], ["AV1", 0], ["HEVC", 0], ["ProRes", 0]]);
+    for (const j of allJobs) {
+      const c = canonicalCodecLabel(j);
+      if (!c) continue;
+      codecCounts.set(c, (codecCounts.get(c) || 0) + 1);
+    }
+    const codecEntries = Array.from(codecCounts.entries()).filter(([name, cnt]) =>
+      cnt > 0 || ["H.264", "AV1", "HEVC", "ProRes"].includes(name)
+    );
+
+    const bestSavingsActive = encodeFilters.codec === "non_modern" && encodeFilters.selectedCodecs.size === 0 && encodeFilters.sizeOp === "ge" && encodeFilters.minMb === 1024;
+    const exclModernActive = encodeFilters.codec === "non_modern" && encodeFilters.selectedCodecs.size === 0;
+    const bitrate20Active = encodeFilters.bitrateOp === "ge" && encodeFilters.minMbps === 20;
+    const modernOnlyActive = encodeFilters.codec === "modern_only" && encodeFilters.selectedCodecs.size === 0;
+
+    // Preserve active numeric input if user is currently typing inside the drawer
+    const activeId = document.activeElement && dr.contains(document.activeElement) ? document.activeElement.id : null;
+    if (activeId && ["fr-size-val", "fr-mbps-val", "fr-res-val", "fr-dur-val"].includes(activeId)) {
+      const statEl = dr.querySelector("#fr-match-stat");
+      if (statEl) {
+        statEl.innerHTML = `<span class="fr-match-dot"></span><span><strong>${selectableMatches.length}</strong> match${selectableMatches.length === 1 ? "" : "es"} (${fmtBytes(matchBytes)})</span>` +
+          (matched.length !== selectableMatches.length ? `<span class="muted">· ${matched.length} total</span>` : "");
+      }
+      const selBtn = dr.querySelector("#fr-act-select");
+      if (selBtn) {
+        selBtn.textContent = `Select ${selectableMatches.length}`;
+        selBtn.disabled = selectableMatches.length === 0;
+      }
+      const addBtn = dr.querySelector("#fr-act-add");
+      if (addBtn) addBtn.disabled = selectableMatches.length === 0;
+      const deBtn = dr.querySelector("#fr-act-deselect");
+      if (deBtn) deBtn.disabled = selectableMatches.length === 0;
+      return;
+    }
+
+    const sizeUnit = encodeFilters.sizeUnit === "MB" ? "MB" : "GB";
+    const sizeValStr = encodeFilters.minMb > 0
+      ? String(+(encodeFilters.minMb / (sizeUnit === "GB" ? 1024 : 1)).toFixed(2))
+      : "";
+    const mbpsValStr = encodeFilters.minMbps > 0 ? String(+Number(encodeFilters.minMbps).toFixed(1)) : "";
+    const resValStr = encodeFilters.resHeight > 0 ? String(encodeFilters.resHeight) : "";
+    const durUnit = ["s", "m", "h"].includes(encodeFilters.durUnit) ? encodeFilters.durUnit : "m";
+    const durMult = durUnit === "h" ? 3600 : durUnit === "s" ? 1 : 60;
+    const durValStr = encodeFilters.durSecs > 0 ? String(+(encodeFilters.durSecs / durMult).toFixed(2)) : "";
+
+    dr.innerHTML = `
+      <div class="fr-head">
+        <span class="fr-title">Filter &amp; Smart Selection Rules</span>
+        <div class="fr-head-actions">
+          <button type="button" id="fr-clear-all" class="fr-link-btn">Clear all</button>
+          <button type="button" id="fr-close" class="fr-close-btn" title="Close filter rules">×</button>
+        </div>
+      </div>
+
+      <div class="fr-smart-row">
+        <button type="button" class="fr-smart-pill ${bestSavingsActive ? "active" : ""}" data-fr-smart="best_savings">Best Savings (≥1 GB)</button>
+        <button type="button" class="fr-smart-pill ${exclModernActive ? "active" : ""}" data-fr-smart="non_modern">Exclude HEVC &amp; AV1</button>
+        <button type="button" class="fr-smart-pill ${bitrate20Active ? "active" : ""}" data-fr-smart="bitrate_20">Bitrate ≥20 Mbps</button>
+        <button type="button" class="fr-smart-pill is-amber ${modernOnlyActive ? "active" : ""}" data-fr-smart="modern_only">HEVC / AV1 Only</button>
+      </div>
+
+      <div class="fr-divider"></div>
+
+      <div>
+        <div class="fr-sec-head">
+          <span class="fr-sec-label">Encodings in Queue (Multi-Select)</span>
+          <div class="fr-quick-links">
+            <button type="button" class="fr-qlink ${encodeFilters.selectedCodecs.size === 0 && encodeFilters.codec === "all" ? "active" : ""}" data-fr-codec-quick="all">Any</button>
+            <span>·</span>
+            <button type="button" class="fr-qlink ${exclModernActive ? "active" : ""}" data-fr-codec-quick="non_modern">Non-HEVC/AV1</button>
+          </div>
+        </div>
+        <div class="fr-codec-grid">
+          ${codecEntries.map(([name, cnt]) => {
+            const active = encodeFilters.selectedCodecs.has(name);
+            return `
+              <button type="button" class="fr-codec-chip ${active ? "active" : ""}" data-fr-codec="${escapeHtml(name)}">
+                <span class="fr-chk-box" aria-hidden="true">${active ? "✓" : ""}</span>
+                <span>${escapeHtml(name)}</span>
+                <span class="fr-codec-cnt">(${cnt})</span>
+              </button>
+            `;
+          }).join("")}
+        </div>
+      </div>
+
+      <div class="fr-divider"></div>
+
+      <div class="fr-thresh-grid">
+        <div class="fr-thresh-block">
+          <span class="fr-sec-label">File Size (Custom)</span>
+          <div class="fr-compound-input">
+            <button type="button" id="fr-size-op" class="fr-op-toggle" title="Click to toggle ≥ / <">${opSym(encodeFilters.sizeOp)}</button>
+            <input id="fr-size-val" class="fr-num-input" type="number" min="0" step="any" placeholder="Any" value="${escapeHtml(sizeValStr)}" />
+            <button type="button" id="fr-size-unit" class="fr-unit-toggle" title="Click to switch GB / MB">${sizeUnit}</button>
+          </div>
+          <div class="fr-preset-row">
+            ${[[0, "Any"], [500, "500 MB"], [1024, "1 GB"], [2560, "2.5 GB"], [5120, "5 GB"]].map(([v, lbl]) => `
+              <button type="button" class="fr-preset-btn ${encodeFilters.minMb === v ? "active" : ""}" data-fr-size-preset="${v}">${lbl}</button>
+            `).join("")}
+          </div>
+        </div>
+
+        <div class="fr-thresh-block">
+          <span class="fr-sec-label">Bitrate (Custom)</span>
+          <div class="fr-compound-input">
+            <button type="button" id="fr-mbps-op" class="fr-op-toggle" title="Click to toggle ≥ / <">${opSym(encodeFilters.bitrateOp)}</button>
+            <input id="fr-mbps-val" class="fr-num-input" type="number" min="0" step="any" placeholder="Any" value="${escapeHtml(mbpsValStr)}" />
+            <span class="fr-unit-toggle fr-unit-static">Mbps</span>
+          </div>
+          <div class="fr-preset-row">
+            ${[[0, "Any"], [10, "10M"], [20, "20M"], [40, "40M"]].map(([v, lbl]) => `
+              <button type="button" class="fr-preset-btn ${encodeFilters.minMbps === v ? "active" : ""}" data-fr-mbps-preset="${v}">${lbl}</button>
+            `).join("")}
+          </div>
+        </div>
+
+        <div class="fr-thresh-block">
+          <span class="fr-sec-label">Resolution (Custom)</span>
+          <div class="fr-compound-input">
+            <button type="button" id="fr-res-op" class="fr-op-toggle" title="Click to toggle ≥ / <">${opSym(encodeFilters.resOp)}</button>
+            <input id="fr-res-val" class="fr-num-input" type="number" min="0" step="60" placeholder="Any" value="${escapeHtml(resValStr)}" />
+            <span class="fr-unit-toggle fr-unit-static">p</span>
+          </div>
+          <div class="fr-preset-row">
+            ${[[0, "Any"], [720, "720p"], [1080, "1080p"], [2160, "4K"]].map(([v, lbl]) => `
+              <button type="button" class="fr-preset-btn ${encodeFilters.resHeight === v ? "active" : ""}" data-fr-res-preset="${v}">${lbl}</button>
+            `).join("")}
+          </div>
+        </div>
+
+        <div class="fr-thresh-block">
+          <span class="fr-sec-label">Duration (Custom)</span>
+          <div class="fr-compound-input">
+            <button type="button" id="fr-dur-op" class="fr-op-toggle" title="Click to toggle ≥ / <">${opSym(encodeFilters.durOp)}</button>
+            <input id="fr-dur-val" class="fr-num-input" type="number" min="0" step="any" placeholder="Any" value="${escapeHtml(durValStr)}" />
+            <button type="button" id="fr-dur-unit" class="fr-unit-toggle" title="Click to switch min / sec / hr">${durUnit === "h" ? "hr" : durUnit === "s" ? "sec" : "min"}</button>
+          </div>
+          <div class="fr-preset-row">
+            ${[[0, "Any"], [60, "1m"], [300, "5m"], [900, "15m"], [3600, "1h"]].map(([v, lbl]) => `
+              <button type="button" class="fr-preset-btn ${encodeFilters.durSecs === v ? "active" : ""}" data-fr-dur-preset="${v}">${lbl}</button>
+            `).join("")}
+          </div>
+        </div>
+      </div>
+
+      <div class="fr-divider"></div>
+
+      <div class="fr-footer">
+        <div id="fr-match-stat" class="fr-match-stat">
+          <span class="fr-match-dot"></span>
+          <span><strong>${selectableMatches.length}</strong> match${selectableMatches.length === 1 ? "" : "es"} (${fmtBytes(matchBytes)})</span>
+          ${matched.length !== selectableMatches.length ? `<span class="muted">· ${matched.length} total</span>` : ""}
+        </div>
+        <div class="fr-footer-actions">
+          <button type="button" id="fr-act-deselect" class="btn btn-sm btn-secondary" ${selectableMatches.length === 0 ? "disabled" : ""}>− Deselect</button>
+          <button type="button" id="fr-act-add" class="btn btn-sm btn-secondary" ${selectableMatches.length === 0 ? "disabled" : ""}>+ Add</button>
+          <button type="button" id="fr-act-select" class="btn btn-sm fr-cta-select" ${selectableMatches.length === 0 ? "disabled" : ""}>Select ${selectableMatches.length}</button>
+        </div>
+      </div>
+    `;
+
+    const refreshAll = () => {
+      const q = activeQueue();
+      const jobs = activeQueueJobs();
+      renderQueueList(q, jobs);
+      renderActionBar();
+    };
+
+    dr.querySelector("#fr-close")?.addEventListener("click", () => {
+      dr.classList.add("hidden");
+      $("btn-more-filters")?.setAttribute("aria-expanded", "false");
+      syncEncodeFilterControls();
+    });
+    dr.querySelector("#fr-clear-all")?.addEventListener("click", () => {
+      resetAllEncodeFilters();
+      refreshAll();
+    });
+
+    dr.querySelectorAll("[data-fr-smart]").forEach((btn) => {
+      btn.onclick = () => {
+        const k = btn.getAttribute("data-fr-smart");
+        encodeFilters.selectedCodecs.clear();
+        if (k === "best_savings") {
+          if (bestSavingsActive) {
+            encodeFilters.codec = "all";
+            encodeFilters.minMb = 0;
+          } else {
+            encodeFilters.codec = "non_modern";
+            encodeFilters.sizeOp = "ge";
+            encodeFilters.minMb = 1024;
+          }
+        } else if (k === "non_modern") {
+          encodeFilters.codec = exclModernActive ? "all" : "non_modern";
+        } else if (k === "bitrate_20") {
+          encodeFilters.minMbps = bitrate20Active ? 0 : 20;
+          encodeFilters.bitrateOp = "ge";
+        } else if (k === "modern_only") {
+          encodeFilters.codec = modernOnlyActive ? "all" : "modern_only";
+        }
+        refreshAll();
+      };
+    });
+
+    dr.querySelectorAll("[data-fr-codec-quick]").forEach((btn) => {
+      btn.onclick = () => {
+        const mode = btn.getAttribute("data-fr-codec-quick");
+        encodeFilters.selectedCodecs.clear();
+        encodeFilters.codec = mode === "non_modern" ? "non_modern" : "all";
+        refreshAll();
+      };
+    });
+
+    dr.querySelectorAll("[data-fr-codec]").forEach((btn) => {
+      btn.onclick = () => {
+        const c = btn.getAttribute("data-fr-codec");
+        encodeFilters.codec = "all";
+        if (encodeFilters.selectedCodecs.has(c)) encodeFilters.selectedCodecs.delete(c);
+        else encodeFilters.selectedCodecs.add(c);
+        refreshAll();
+      };
+    });
+
+    // Clickable >= / < toggles (zero dropdowns)
+    dr.querySelector("#fr-size-op")?.addEventListener("click", () => {
+      encodeFilters.sizeOp = encodeFilters.sizeOp === "lt" ? "ge" : "lt";
+      refreshAll();
+    });
+    dr.querySelector("#fr-mbps-op")?.addEventListener("click", () => {
+      encodeFilters.bitrateOp = encodeFilters.bitrateOp === "lt" ? "ge" : "lt";
+      refreshAll();
+    });
+    dr.querySelector("#fr-res-op")?.addEventListener("click", () => {
+      encodeFilters.resOp = encodeFilters.resOp === "lt" ? "ge" : "lt";
+      refreshAll();
+    });
+    dr.querySelector("#fr-dur-op")?.addEventListener("click", () => {
+      encodeFilters.durOp = encodeFilters.durOp === "lt" ? "ge" : "lt";
+      refreshAll();
+    });
+
+    // Unit toggles & custom inputs
+    dr.querySelector("#fr-size-unit")?.addEventListener("click", () => {
+      encodeFilters.sizeUnit = encodeFilters.sizeUnit === "GB" ? "MB" : "GB";
+      const val = parseFloat(dr.querySelector("#fr-size-val")?.value || "");
+      if (Number.isFinite(val) && val > 0) {
+        encodeFilters.minMb = val * (encodeFilters.sizeUnit === "GB" ? 1024 : 1);
+      }
+      refreshAll();
+    });
+    dr.querySelector("#fr-size-val")?.addEventListener("input", (e) => {
+      const val = parseFloat(e.target.value || "");
+      encodeFilters.minMb = Number.isFinite(val) && val > 0 ? val * (encodeFilters.sizeUnit === "GB" ? 1024 : 1) : 0;
+      refreshAll();
+    });
+    dr.querySelectorAll("[data-fr-size-preset]").forEach((btn) => {
+      btn.onclick = () => {
+        const v = Number(btn.getAttribute("data-fr-size-preset") || 0);
+        encodeFilters.minMb = v;
+        if (v >= 1024) encodeFilters.sizeUnit = "GB";
+        else if (v > 0) encodeFilters.sizeUnit = "MB";
+        refreshAll();
+      };
+    });
+
+    dr.querySelector("#fr-mbps-val")?.addEventListener("input", (e) => {
+      const val = parseFloat(e.target.value || "");
+      encodeFilters.minMbps = Number.isFinite(val) && val > 0 ? val : 0;
+      refreshAll();
+    });
+    dr.querySelectorAll("[data-fr-mbps-preset]").forEach((btn) => {
+      btn.onclick = () => {
+        encodeFilters.minMbps = Number(btn.getAttribute("data-fr-mbps-preset") || 0);
+        refreshAll();
+      };
+    });
+
+    dr.querySelector("#fr-res-val")?.addEventListener("input", (e) => {
+      const val = parseFloat(e.target.value || "");
+      encodeFilters.resHeight = Number.isFinite(val) && val > 0 ? Math.round(val) : 0;
+      refreshAll();
+    });
+    dr.querySelectorAll("[data-fr-res-preset]").forEach((btn) => {
+      btn.onclick = () => {
+        encodeFilters.resHeight = Number(btn.getAttribute("data-fr-res-preset") || 0);
+        refreshAll();
+      };
+    });
+
+    dr.querySelector("#fr-dur-unit")?.addEventListener("click", () => {
+      const order = ["m", "s", "h"];
+      encodeFilters.durUnit = order[(order.indexOf(encodeFilters.durUnit) + 1) % order.length];
+      const mult = encodeFilters.durUnit === "h" ? 3600 : encodeFilters.durUnit === "s" ? 1 : 60;
+      const val = parseFloat(dr.querySelector("#fr-dur-val")?.value || "");
+      if (Number.isFinite(val) && val > 0) {
+        encodeFilters.durSecs = val * mult;
+      }
+      refreshAll();
+    });
+    dr.querySelector("#fr-dur-val")?.addEventListener("input", (e) => {
+      const val = parseFloat(e.target.value || "");
+      const mult = encodeFilters.durUnit === "h" ? 3600 : encodeFilters.durUnit === "s" ? 1 : 60;
+      encodeFilters.durSecs = Number.isFinite(val) && val > 0 ? val * mult : 0;
+      refreshAll();
+    });
+    dr.querySelectorAll("[data-fr-dur-preset]").forEach((btn) => {
+      btn.onclick = () => {
+        const v = Number(btn.getAttribute("data-fr-dur-preset") || 0);
+        encodeFilters.durSecs = v;
+        if (v >= 3600) encodeFilters.durUnit = "h";
+        else if (v > 0) encodeFilters.durUnit = "m";
+        refreshAll();
+      };
+    });
+
+    // Footer batch selection actions
+    dr.querySelector("#fr-act-deselect")?.addEventListener("click", () => {
+      selectableMatches.forEach((j) => checkedJobIds.delete(j.id));
+      refreshAll();
+      renderSidebar();
+    });
+    dr.querySelector("#fr-act-add")?.addEventListener("click", () => {
+      selectableMatches.forEach((j) => checkedJobIds.add(j.id));
+      refreshAll();
+      renderSidebar();
+    });
+    dr.querySelector("#fr-act-select")?.addEventListener("click", () => {
+      checkedJobIds.clear();
+      selectableMatches.forEach((j) => checkedJobIds.add(j.id));
+      refreshAll();
+      renderSidebar();
+    });
   }
 
   function openColFilterPopover(colKey, anchorEl) {
@@ -1757,9 +2008,14 @@
     const visibleBytes = jobs.reduce((a, b) => a + (b.input_bytes || 0), 0);
     const checkedJobs = allJobs.filter((j) => checkedJobIds.has(j.id) && isEncodeSelectableJob(j));
     const checkedBytes = checkedJobs.reduce((a, b) => a + (b.input_bytes || 0), 0);
-    $("lbl-queue-filter-bar").textContent = jobs.length === allJobs.length
-      ? `${allJobs.length} files · ${fmtBytes(totalBytes)} source`
-      : `${jobs.length} of ${allJobs.length} matching (${fmtBytes(visibleBytes)})`;
+    const filterLbl = $("lbl-queue-filter-bar");
+    if (filterLbl) {
+      const isFiltered = jobs.length !== allJobs.length;
+      filterLbl.classList.toggle("hidden", !isFiltered);
+      if (isFiltered) {
+        filterLbl.textContent = `${jobs.length} of ${allJobs.length} matching (${fmtBytes(visibleBytes)})`;
+      }
+    }
     if ($("lbl-encode-sel-pill")) {
       $("lbl-encode-sel-pill").textContent = `${checkedJobs.length} selected (${fmtBytes(checkedBytes)})`;
       $("lbl-encode-sel-pill").classList.toggle("hidden", checkedJobs.length === 0);
@@ -1768,6 +2024,7 @@
       $("btn-desel-all").classList.toggle("hidden", checkedJobs.length === 0);
     }
     syncEncodeFilterControls(searchMatcher);
+    renderFilterRulesDrawer(allJobs, jobs);
 
     const alreadyHevc = allJobs.filter((j) => !isQueuedJob(j) && j.status === "listed" && isModernCodec(jobVideoInfo(j).codec));
     const skipBtn = $("btn-triage-skip-hevc");
@@ -2094,14 +2351,46 @@
     const dur = prog.duration_secs || 1;
     const pct = Math.min(100, (prog.out_time_secs / dur) * 100);
     const outSz = prog.bytes_written > 0 ? fmtBytes(prog.bytes_written) : "0 B";
-    const ratioStr = prog.est_final_ratio ? `${prog.est_final_ratio.toFixed(2)}:1` : null;
+    const ratio = prog.est_final_ratio && prog.est_final_ratio > 0 ? prog.est_final_ratio : null;
+    const savedPct = ratio ? Math.round((1 - 1 / ratio) * 100) : null;
+    const ratioStr = ratio ? `${ratio.toFixed(2)}:1 (${savedPct >= 0 ? `-${savedPct}%` : `+${Math.abs(savedPct)}%`})` : null;
     const spStr = prog.speed ? `${prog.speed.toFixed(2)}x` : null;
     const topParts = [`${pct.toFixed(1)}%`];
     if (spStr) topParts.push(spStr);
     topParts.push(outSz);
-    if (detailed && ratioStr) topParts.push(ratioStr);
+    if (ratioStr) topParts.push(ratioStr);
     topParts.push(`ETA ${prog.eta_secs ? fmtDuration(prog.eta_secs) : "—"}`);
-    return `<div class="tabular-nums" style="min-width:${detailed ? 175 : 145}px;"><div style="font-size:11px;font-weight:600;color:var(--accent-text);">${topParts.join(" · ")}</div><div class="progress-track" style="height:5px;margin-top:3px;"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+    return `<div class="tabular-nums" style="min-width:${detailed ? 210 : 185}px;"><div style="font-size:11px;font-weight:600;color:var(--accent-text);">${topParts.join(" · ")}</div><div class="progress-track" style="height:5px;margin-top:3px;"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+  }
+
+  function buildQueueCompressionCellHtml(job, prog) {
+    if (job.status === "completed" && job.output_bytes) {
+      const ratio = job.input_bytes > 0 ? job.input_bytes / job.output_bytes : null;
+      const savedPct = ratio && ratio > 0 ? Math.round((1 - 1 / ratio) * 100) : null;
+      return `
+        <div class="tabular-nums">
+          <div style="font-weight:600;color:var(--ok);">${escapeHtml(fmtRatio(job.input_bytes, job.output_bytes))}${savedPct !== null ? ` <span class="muted" style="font-weight:500;">(${savedPct >= 0 ? `-${savedPct}%` : `+${Math.abs(savedPct)}%`})</span>` : ""}</div>
+          <div class="mono muted" style="font-size:10.5px;">Out ${fmtBytes(job.output_bytes)}</div>
+        </div>
+      `;
+    }
+    if (prog && prog.job_id === job.id) {
+      const outSz = prog.bytes_written > 0 ? fmtBytes(prog.bytes_written) : "0 B";
+      const ratio = prog.est_final_ratio && prog.est_final_ratio > 0 ? prog.est_final_ratio : null;
+      const savedPct = ratio ? Math.round((1 - 1 / ratio) * 100) : null;
+      const estFinal = ratio && job.input_bytes > 0 ? Math.round(job.input_bytes / ratio) : null;
+      const etaStr = prog.eta_secs ? fmtDuration(prog.eta_secs) : "—";
+      return `
+        <div class="tabular-nums">
+          <div style="font-weight:600;color:var(--accent-text);">${ratio ? `${ratio.toFixed(2)}:1 (${savedPct >= 0 ? `-${savedPct}%` : `+${Math.abs(savedPct)}%`})` : "Estimating…"}</div>
+          <div class="mono muted" style="font-size:10.5px;">Now ${outSz}${estFinal ? ` → ~${fmtBytes(estFinal)}` : ""} · ETA ${etaStr}</div>
+        </div>
+      `;
+    }
+    if (["encoding", "verifying", "publishing"].includes(job.status)) {
+      return `<span class="muted" style="font-size:11px;">Starting…</span>`;
+    }
+    return `<span class="muted">—</span>`;
   }
 
   function renderSpeedChartSvg(history) {
@@ -2280,8 +2569,9 @@
     const job = queueJobsById.get(progress.job_id);
     if (!job || job.status !== "encoding") return;
     const cell = row.querySelector("[data-q-status-cell]");
-    if (!cell) return;
-    cell.innerHTML = buildInlineProgressHtml(job, progress, true);
+    if (cell) cell.innerHTML = buildInlineProgressHtml(job, progress, true);
+    const ratioCell = row.querySelector("[data-q-ratio-cell]");
+    if (ratioCell) ratioCell.innerHTML = buildQueueCompressionCellHtml(job, progress);
   }
 
   function openEnqueueConsentModal(q, resp, jobIds) {
@@ -2485,7 +2775,8 @@
           <th style="width:76px;">#</th>
           <th>Video &amp; Tab</th>
           <th>Target Recipe</th>
-          <th style="text-align:right;">Size</th>
+          <th style="text-align:right;">Source</th>
+          <th>Compression &amp; Output</th>
           <th>Queue Status</th>
           <th style="text-align:right;">Actions</th>
         </tr>
@@ -2562,6 +2853,7 @@
           <div class="mono muted truncate" style="font-size:10.5px;" title="${escapeHtml(j.destination_path)}">→ ${escapeHtml(j.destination_path.split(/[/\\]/).pop() || "")}</div>
         </td>
         <td class="tabular-nums" style="text-align:right;font-weight:600;">${fmtBytes(j.input_bytes)}</td>
+        <td data-q-ratio-cell>${buildQueueCompressionCellHtml(j, prog)}</td>
         <td data-q-status-cell>${stHtml}</td>
         <td style="text-align:right;">
           <div class="inline-row" style="justify-content:flex-end;gap:4px;">
@@ -2610,7 +2902,7 @@
       if (["failed", "needs_attention"].includes(j.status) && j.error_message) {
         const errRow = document.createElement("tr");
         errRow.className = "tc-subrow";
-        errRow.innerHTML = `<td colspan="7"><span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span></td>`;
+        errRow.innerHTML = `<td colspan="8"><span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span></td>`;
         tbody.appendChild(errRow);
       }
     });
@@ -5050,133 +5342,13 @@
       renderQueueList(activeQueue(), activeQueueJobs());
     });
   });
-  $("mf-search-mode")?.addEventListener("change", (e) => {
-    encodeFilters.searchMode = e.target.value;
-    renderQueueList(activeQueue(), activeQueueJobs());
-  });
-  $("mf-search-invert")?.addEventListener("change", (e) => {
-    encodeFilters.searchInvert = !!e.target.checked;
-    renderQueueList(activeQueue(), activeQueueJobs());
-  });
   $("btn-more-filters")?.addEventListener("click", () => {
     const dr = $("encode-more-filter-drawer");
     if (!dr) return;
     const isHidden = dr.classList.toggle("hidden");
     $("btn-more-filters").setAttribute("aria-expanded", String(!isHidden));
     syncEncodeFilterControls();
-  });
-  $("btn-clear-more-filters")?.addEventListener("click", () => {
-    resetAllEncodeFilters();
-    renderQueueList(activeQueue(), activeQueueJobs());
-    renderActionBar();
-  });
-
-  // Resolution slider + op + snap preset
-  $("mf-res-op")?.addEventListener("change", (e) => {
-    encodeFilters.resOp = e.target.value;
-    renderQueueList(activeQueue(), activeQueueJobs());
-    renderActionBar();
-  });
-  $("mf-res-slider")?.addEventListener("input", (e) => {
-    encodeFilters.resHeight = Number(e.target.value || 0);
-    renderQueueList(activeQueue(), activeQueueJobs());
-    renderActionBar();
-  });
-  $("mf-res-preset")?.addEventListener("change", (e) => {
-    encodeFilters.resHeight = Number(e.target.value || 0);
-    renderQueueList(activeQueue(), activeQueueJobs());
-    renderActionBar();
-  });
-
-  function wireDrawerNumericFilter({ opId, selId, wrapId, valId, unitId, opField, valField, unitMults }) {
-    $(opId)?.addEventListener("change", (e) => {
-      encodeFilters[opField] = e.target.value;
-      renderQueueList(activeQueue(), activeQueueJobs());
-      renderActionBar();
-    });
-    $(selId)?.addEventListener("change", (e) => {
-      const v = e.target.value;
-      const wrap = $(wrapId);
-      if (v === "custom") {
-        wrap?.classList.remove("hidden");
-        const valEl = $(valId);
-        const unitEl = unitId ? $(unitId) : null;
-        if (valEl) {
-          const cur = encodeFilters[valField] || 0;
-          if (cur > 0) {
-            if (unitEl && unitMults) {
-              let chosen = Object.entries(unitMults)[0];
-              for (const entry of Object.entries(unitMults)) {
-                if (cur >= entry[1]) chosen = entry;
-              }
-              unitEl.value = chosen[0];
-              valEl.value = String(+(cur / chosen[1]).toFixed(2));
-            } else {
-              valEl.value = String(+Number(cur).toFixed(1));
-            }
-          }
-          valEl.focus();
-        }
-        return;
-      }
-      wrap?.classList.add("hidden");
-      encodeFilters[valField] = Number(v || 0);
-      renderQueueList(activeQueue(), activeQueueJobs());
-      renderActionBar();
-    });
-    const applyCustom = () => {
-      const num = parseFloat($(valId)?.value || "");
-      const unitKey = unitId ? $(unitId)?.value : null;
-      const mult = unitKey && unitMults ? (unitMults[unitKey] || 1) : 1;
-      encodeFilters[valField] = Number.isFinite(num) && num > 0 ? num * mult : 0;
-      renderQueueList(activeQueue(), activeQueueJobs());
-      renderActionBar();
-    };
-    $(valId)?.addEventListener("input", applyCustom);
-    if (unitId) $(unitId)?.addEventListener("change", applyCustom);
-  }
-
-  wireDrawerNumericFilter({
-    opId: "mf-dur-op",
-    selId: "mf-dur",
-    wrapId: "mf-dur-custom-wrap",
-    valId: "mf-dur-custom-val",
-    unitId: "mf-dur-custom-unit",
-    opField: "durOp",
-    valField: "durSecs",
-    unitMults: { s: 1, m: 60, h: 3600 },
-  });
-  wireDrawerNumericFilter({
-    opId: "mf-size-op",
-    selId: "mf-size",
-    wrapId: "mf-size-custom-wrap",
-    valId: "mf-size-custom-val",
-    unitId: "mf-size-custom-unit",
-    opField: "sizeOp",
-    valField: "minMb",
-    unitMults: { MB: 1, GB: 1024 },
-  });
-  wireDrawerNumericFilter({
-    opId: "mf-mbps-op",
-    selId: "mf-mbps",
-    wrapId: "mf-mbps-custom-wrap",
-    valId: "mf-mbps-custom-val",
-    unitId: null,
-    opField: "bitrateOp",
-    valField: "minMbps",
-    unitMults: null,
-  });
-
-  [
-    ["mf-codec", "codec", false],
-    ["mf-target", "target", false],
-    ["mf-status", "status", false],
-  ].forEach(([id, field, isNum]) => {
-    $(id)?.addEventListener("change", (e) => {
-      encodeFilters[field] = isNum ? Number(e.target.value || 0) : e.target.value;
-      renderQueueList(activeQueue(), activeQueueJobs());
-      renderActionBar();
-    });
+    if (!isHidden) renderFilterRulesDrawer(activeQueueJobs());
   });
   document.addEventListener("click", (e) => {
     if (activeColPopover && !activeColPopover.contains(e.target) && !e.target.closest("[data-col-flt]") && !e.target.closest("[data-edit-chip]")) {

@@ -163,13 +163,24 @@
           <section id="mode-view-encode" class="mode-view hidden" aria-label="Transcode Queue">
             <div id="tab-encode-list-view" class="tab-encode-subview">
               <div id="banner-area" class="banner-area"></div>
-              <div id="queue-controls-bar" class="queue-controls-bar" style="flex-direction:column;align-items:stretch;gap:8px;">
-              <div class="inline-row" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
-                <div class="inline-row" style="flex-wrap:wrap;gap:8px;">
-                  <span id="lbl-queue-filter-bar" class="tabular-nums muted">0 files</span>
-                  <span id="lbl-encode-sel-pill" class="counts-pill hidden">0 selected</span>
+              <div id="queue-controls-bar" class="queue-controls-bar enc-unified-bar">
+                <div class="enc-unified-left">
+                  <div class="enc-search-wrap">
+                    <svg class="enc-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input id="enc-search-input" class="enc-search-input" type="search" placeholder="Search file name…" autocomplete="off" />
+                    <div id="enc-search-mode-seg" class="enc-search-mode-seg" role="group" aria-label="Search target">
+                      <button type="button" class="enc-mode-btn active" data-search-mode="name" title="Match file name only">Name</button>
+                      <button type="button" class="enc-mode-btn" data-search-mode="path" title="Match full file path">Path</button>
+                      <button type="button" class="enc-mode-btn" data-search-mode="regex" title="Match regular expression (against full path)">.*</button>
+                    </div>
+                  </div>
+                  <button id="btn-more-filters" class="btn btn-sm btn-secondary" type="button" aria-expanded="false">Filters ▾</button>
+                  <div id="enc-active-chips" class="enc-active-chips"></div>
+                  <span id="lbl-queue-filter-bar" class="tabular-nums muted hidden"></span>
                 </div>
-                <div class="inline-row" style="flex-wrap:wrap;gap:6px;">
+                <div class="divider-v enc-bar-sep" aria-hidden="true"></div>
+                <div class="enc-unified-right">
+                  <span id="lbl-encode-sel-pill" class="counts-pill hidden">0 selected</span>
                   <button id="btn-sel-non-modern" class="btn btn-sm btn-secondary" type="button" title="Select all ready files not yet encoded in HEVC or AV1">Select Non-HEVC/AV1</button>
                   <button id="btn-desel-all" class="btn btn-sm btn-ghost hidden" type="button">Clear Selection</button>
                   <button id="btn-reset-col-sort" class="btn btn-sm btn-ghost hidden" type="button" title="Restore original queue order">Reset Sort</button>
@@ -182,157 +193,7 @@
                   <button id="btn-clear-completed" class="btn btn-ghost btn-sm hidden" type="button">Remove finished</button>
                 </div>
               </div>
-              <div class="enc-filter-bar">
-                <div class="enc-search-wrap">
-                  <svg class="enc-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                  <input id="enc-search-input" class="enc-search-input" type="search" placeholder="Search file name…" autocomplete="off" />
-                  <div id="enc-search-mode-seg" class="enc-search-mode-seg" role="group" aria-label="Search target">
-                    <button type="button" class="enc-mode-btn active" data-search-mode="name" title="Match file name only">Name</button>
-                    <button type="button" class="enc-mode-btn" data-search-mode="path" title="Match full file path">Path</button>
-                    <button type="button" class="enc-mode-btn" data-search-mode="regex" title="Match regular expression (against full path)">.*</button>
-                  </div>
-                </div>
-                <div id="enc-active-chips" class="enc-active-chips"></div>
-                <button id="btn-more-filters" class="btn btn-sm btn-ghost" type="button" aria-expanded="false">More Filter ▾</button>
-              </div>
-              <div id="encode-more-filter-drawer" class="enc-more-drawer hidden">
-                <label class="enc-mf-field">
-                  <span>File Match Mode</span>
-                  <div class="inline-row" style="gap:6px;">
-                    <select id="mf-search-mode" class="compact-sel">
-                      <option value="name">File Name</option>
-                      <option value="path">Full Path</option>
-                      <option value="regex">Regex (Path)</option>
-                    </select>
-                    <label class="inline-row" style="gap:4px;font-weight:500;cursor:pointer;" title="Invert file match (exclude matching files)">
-                      <input id="mf-search-invert" type="checkbox" class="switch-chk" />
-                      <span>Exclude</span>
-                    </label>
-                  </div>
-                </label>
-                <label class="enc-mf-field">
-                  <span>Codec</span>
-                  <select id="mf-codec" class="compact-sel">
-                    <option value="all">All Codecs</option>
-                    <option value="non_modern">Exclude HEVC &amp; AV1</option>
-                    <option value="only_h264">Only H.264 / AVC</option>
-                    <option value="only_legacy">Only Legacy</option>
-                    <option value="modern_only">HEVC / AV1 only</option>
-                  </select>
-                </label>
-                <label class="enc-mf-field">
-                  <span>Resolution (<span id="mf-res-readout">Any</span>)</span>
-                  <div class="inline-row" style="gap:5px;">
-                    <select id="mf-res-op" class="compact-sel" title="Resolution comparison">
-                      <option value="ge">≥</option>
-                      <option value="lt">&lt;</option>
-                    </select>
-                    <input id="mf-res-slider" type="range" min="0" max="2160" step="60" value="0" style="width:92px;accent-color:var(--accent-solid);" title="Minimum or maximum vertical resolution (0 = Any)" />
-                    <select id="mf-res-preset" class="compact-sel" style="width:72px;">
-                      <option value="0">Any</option>
-                      <option value="480">480p</option>
-                      <option value="720">720p</option>
-                      <option value="1080">1080p</option>
-                      <option value="1440">1440p</option>
-                      <option value="2160">4K</option>
-                    </select>
-                  </div>
-                </label>
-                <label class="enc-mf-field">
-                  <span>Duration</span>
-                  <div class="inline-row" style="gap:4px;">
-                    <select id="mf-dur-op" class="compact-sel" title="Duration comparison">
-                      <option value="ge">≥</option>
-                      <option value="lt">&lt;</option>
-                    </select>
-                    <select id="mf-dur" class="compact-sel">
-                      <option value="0">Any</option>
-                      <option value="60">1 min</option>
-                      <option value="300">5 min</option>
-                      <option value="900">15 min</option>
-                      <option value="3600">1 hour</option>
-                      <option value="custom">Custom…</option>
-                    </select>
-                    <span id="mf-dur-custom-wrap" class="inline-row hidden" style="gap:4px;">
-                      <input id="mf-dur-custom-val" class="full-input" type="number" min="0" step="any" placeholder="Len" style="width:58px;height:26px;font-size:12px;" />
-                      <select id="mf-dur-custom-unit" class="compact-sel">
-                        <option value="s">sec</option>
-                        <option value="m">min</option>
-                        <option value="h">hr</option>
-                      </select>
-                    </span>
-                  </div>
-                </label>
-                <label class="enc-mf-field">
-                  <span>Size</span>
-                  <div class="inline-row" style="gap:4px;">
-                    <select id="mf-size-op" class="compact-sel" title="File size comparison">
-                      <option value="ge">≥</option>
-                      <option value="lt">&lt;</option>
-                    </select>
-                    <select id="mf-size" class="compact-sel">
-                      <option value="0">Any Size</option>
-                      <option value="100">100 MB</option>
-                      <option value="500">500 MB</option>
-                      <option value="1024">1 GB</option>
-                      <option value="2048">2 GB</option>
-                      <option value="5120">5 GB</option>
-                      <option value="custom">Custom…</option>
-                    </select>
-                    <span id="mf-size-custom-wrap" class="inline-row hidden" style="gap:4px;">
-                      <input id="mf-size-custom-val" class="full-input" type="number" min="0" step="any" placeholder="Size" style="width:62px;height:26px;font-size:12px;" />
-                      <select id="mf-size-custom-unit" class="compact-sel">
-                        <option value="MB">MB</option>
-                        <option value="GB">GB</option>
-                      </select>
-                    </span>
-                  </div>
-                </label>
-                <label class="enc-mf-field">
-                  <span>Bitrate</span>
-                  <div class="inline-row" style="gap:4px;">
-                    <select id="mf-mbps-op" class="compact-sel" title="Bitrate comparison">
-                      <option value="ge">≥</option>
-                      <option value="lt">&lt;</option>
-                    </select>
-                    <select id="mf-mbps" class="compact-sel">
-                      <option value="0">Any</option>
-                      <option value="5">5 Mbps</option>
-                      <option value="10">10 Mbps</option>
-                      <option value="20">20 Mbps</option>
-                      <option value="50">50 Mbps</option>
-                      <option value="custom">Custom…</option>
-                    </select>
-                    <span id="mf-mbps-custom-wrap" class="inline-row hidden" style="gap:4px;">
-                      <input id="mf-mbps-custom-val" class="full-input" type="number" min="0" step="any" placeholder="Mbps" style="width:60px;height:26px;font-size:12px;" />
-                      <span class="muted" style="font-size:11px;">Mbps</span>
-                    </span>
-                  </div>
-                </label>
-                <label class="enc-mf-field">
-                  <span>Target Recipe</span>
-                  <select id="mf-target" class="compact-sel">
-                    <option value="all">All Recipes</option>
-                    <option value="hevc">HEVC</option>
-                    <option value="av1">AV1</option>
-                    <option value="remux">Remux</option>
-                  </select>
-                </label>
-                <label class="enc-mf-field">
-                  <span>Status</span>
-                  <select id="mf-status" class="compact-sel">
-                    <option value="all">All Statuses</option>
-                    <option value="listed">Not Yet Queued</option>
-                    <option value="selected">Checked</option>
-                    <option value="ready">In Queue</option>
-                    <option value="completed">Completed</option>
-                    <option value="needs_attention">Needs Attention</option>
-                    <option value="failed">Failed / Interrupted</option>
-                  </select>
-                </label>
-                <button id="btn-clear-more-filters" class="btn btn-sm btn-ghost" type="button" style="align-self:flex-end;">Clear All</button>
-              </div>
-            </div>
+              <div id="encode-more-filter-drawer" class="enc-rules-panel hidden"></div>
             <div id="queue-rows" class="transcode-table-wrap"></div>
             </div>
             <div id="tab-encode-queue-view" class="tab-encode-subview hidden"></div>
