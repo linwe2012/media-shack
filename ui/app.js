@@ -910,6 +910,8 @@
     encodeFilters.target = "all";
     encodeFilters.status = "all";
     if ($("enc-search-input")) $("enc-search-input").value = "";
+    if ($("mf-size")) $("mf-size").value = "0";
+    $("mf-size-custom-wrap")?.classList.add("hidden");
   }
 
   function encodeFilterColumnMatch(j) {
@@ -991,6 +993,17 @@
     });
   }
 
+  const SIZE_FILTER_PRESETS = [0, 100, 500, 1024, 2048, 5120];
+  function formatMinSizeLabel(minMb) {
+    if (!minMb || minMb <= 0) return "Any Size";
+    if (minMb >= 1024) {
+      const gb = +(minMb / 1024).toFixed(2);
+      return `≥ ${gb} GB`;
+    }
+    const mb = +Number(minMb).toFixed(1);
+    return `≥ ${mb} MB`;
+  }
+
   function syncEncodeFilterControls() {
     if ($("enc-search-input") && document.activeElement !== $("enc-search-input")) {
       $("enc-search-input").value = encodeFilters.search;
@@ -998,7 +1011,29 @@
     if ($("mf-codec")) $("mf-codec").value = encodeFilters.codec;
     if ($("mf-res")) $("mf-res").value = encodeFilters.res;
     if ($("mf-dur")) $("mf-dur").value = encodeFilters.duration;
-    if ($("mf-size")) $("mf-size").value = String(encodeFilters.minMb);
+    if ($("mf-size")) {
+      const isPreset = SIZE_FILTER_PRESETS.includes(encodeFilters.minMb);
+      const wrap = $("mf-size-custom-wrap");
+      const valEl = $("mf-size-custom-val");
+      const unitEl = $("mf-size-custom-unit");
+      const editingCustom = document.activeElement === valEl || document.activeElement === unitEl;
+      if (isPreset && !editingCustom && $("mf-size").value !== "custom") {
+        $("mf-size").value = String(encodeFilters.minMb);
+        if (wrap) wrap.classList.add("hidden");
+      } else if (!isPreset && encodeFilters.minMb > 0) {
+        $("mf-size").value = "custom";
+        if (wrap) wrap.classList.remove("hidden");
+        if (valEl && document.activeElement !== valEl && unitEl && document.activeElement !== unitEl) {
+          if (encodeFilters.minMb >= 1024) {
+            unitEl.value = "GB";
+            valEl.value = String(+(encodeFilters.minMb / 1024).toFixed(2));
+          } else {
+            unitEl.value = "MB";
+            valEl.value = String(+Number(encodeFilters.minMb).toFixed(1));
+          }
+        }
+      }
+    }
     if ($("mf-mbps")) $("mf-mbps").value = String(encodeFilters.minMbps);
     if ($("mf-target")) $("mf-target").value = encodeFilters.target;
     if ($("mf-status")) $("mf-status").value = encodeFilters.status;
@@ -1018,7 +1053,7 @@
       chips.push({ key: "duration", col: "duration", label: `Duration: ${m[encodeFilters.duration] || encodeFilters.duration}` });
     }
     if (encodeFilters.minMb > 0) {
-      chips.push({ key: "minMb", col: "size", label: `Size: ≥ ${encodeFilters.minMb >= 1024 ? `${encodeFilters.minMb / 1024} GB` : `${encodeFilters.minMb} MB`}` });
+      chips.push({ key: "minMb", col: "size", label: `Size: ${formatMinSizeLabel(encodeFilters.minMb)}` });
     }
     if (encodeFilters.minMbps > 0) {
       chips.push({ key: "minMbps", col: "bitrate", label: `Bitrate: ≥ ${encodeFilters.minMbps} Mbps` });
@@ -1060,7 +1095,11 @@
           closeColFilterPopover();
           const k = btn.getAttribute("data-clear-chip");
           if (k === "search") encodeFilters.search = "";
-          else if (k === "minMb" || k === "minMbps") encodeFilters[k] = 0;
+          else if (k === "minMb") {
+            encodeFilters.minMb = 0;
+            if ($("mf-size")) $("mf-size").value = "0";
+            $("mf-size-custom-wrap")?.classList.add("hidden");
+          } else if (k === "minMbps") encodeFilters.minMbps = 0;
           else encodeFilters[k] = "all";
           renderQueueList(activeQueue(), activeQueueJobs());
           renderActionBar();
@@ -1183,13 +1222,26 @@
       `;
     } else {
       const curVal = encodeFilters[cfg.field];
+      const customSizeHtml = colKey === "size" ? `
+        <div style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;">
+          <div class="col-filter-popover-title" style="margin-bottom:4px;">Custom Minimum Size (≥)</div>
+          <div class="inline-row" style="gap:4px;">
+            <input id="col-pop-size-val" class="full-input" type="number" min="0" step="any" placeholder="e.g. 250" style="width:74px;height:26px;font-size:12px;" />
+            <select id="col-pop-size-unit" class="compact-sel" style="height:26px;">
+              <option value="MB">MB</option>
+              <option value="GB">GB</option>
+            </select>
+            <button id="col-pop-size-apply" class="btn btn-sm btn-primary" type="button" style="height:26px;padding:0 8px;">Apply</button>
+          </div>
+        </div>
+      ` : "";
       pop.innerHTML = `<div class="col-filter-popover-title">${cfg.title}</div>` +
         cfg.options.map(([val, lbl]) => `
           <button type="button" class="col-filter-opt ${curVal === val ? "active" : ""}" data-pop-val="${escapeHtml(String(val))}">
             <span>${escapeHtml(lbl)}</span>
             <span>${curVal === val ? "✓" : ""}</span>
           </button>
-        `).join("");
+        `).join("") + customSizeHtml;
     }
 
     document.body.appendChild(pop);
@@ -1212,11 +1264,43 @@
         btn.onclick = () => {
           const raw = btn.getAttribute("data-pop-val");
           encodeFilters[cfg.field] = cfg.numeric ? Number(raw) : raw;
+          if (colKey === "size" && $("mf-size")) {
+            $("mf-size").value = String(encodeFilters.minMb);
+          }
           closeColFilterPopover();
           renderQueueList(activeQueue(), activeQueueJobs());
           renderActionBar();
         };
       });
+      if (colKey === "size") {
+        const sVal = pop.querySelector("#col-pop-size-val");
+        const sUnit = pop.querySelector("#col-pop-size-unit");
+        const sApply = pop.querySelector("#col-pop-size-apply");
+        if (encodeFilters.minMb > 0) {
+          if (encodeFilters.minMb >= 1024) {
+            sUnit.value = "GB";
+            sVal.value = String(+(encodeFilters.minMb / 1024).toFixed(2));
+          } else {
+            sUnit.value = "MB";
+            sVal.value = String(+Number(encodeFilters.minMb).toFixed(1));
+          }
+        }
+        const applyCustom = () => {
+          const num = parseFloat(sVal.value);
+          if (!Number.isFinite(num) || num <= 0) {
+            encodeFilters.minMb = 0;
+          } else {
+            encodeFilters.minMb = sUnit.value === "GB" ? num * 1024 : num;
+          }
+          closeColFilterPopover();
+          renderQueueList(activeQueue(), activeQueueJobs());
+          renderActionBar();
+        };
+        sApply.onclick = applyCustom;
+        sVal.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") { e.preventDefault(); applyCustom(); }
+        });
+      }
     }
   }
 
@@ -3740,11 +3824,44 @@
     renderQueueList(activeQueue(), activeQueueJobs());
     renderActionBar();
   });
+  $("mf-size")?.addEventListener("change", (e) => {
+    const v = e.target.value;
+    const wrap = $("mf-size-custom-wrap");
+    if (v === "custom") {
+      wrap?.classList.remove("hidden");
+      const valEl = $("mf-size-custom-val");
+      if (valEl) {
+        if (encodeFilters.minMb > 0) {
+          if (encodeFilters.minMb >= 1024) {
+            if ($("mf-size-custom-unit")) $("mf-size-custom-unit").value = "GB";
+            valEl.value = String(+(encodeFilters.minMb / 1024).toFixed(2));
+          } else {
+            if ($("mf-size-custom-unit")) $("mf-size-custom-unit").value = "MB";
+            valEl.value = String(+Number(encodeFilters.minMb).toFixed(1));
+          }
+        }
+        valEl.focus();
+      }
+      return;
+    }
+    wrap?.classList.add("hidden");
+    encodeFilters.minMb = Number(v || 0);
+    renderQueueList(activeQueue(), activeQueueJobs());
+    renderActionBar();
+  });
+  const applyDrawerCustomSize = () => {
+    const num = parseFloat($("mf-size-custom-val")?.value || "");
+    const unit = $("mf-size-custom-unit")?.value || "MB";
+    encodeFilters.minMb = Number.isFinite(num) && num > 0 ? (unit === "GB" ? num * 1024 : num) : 0;
+    renderQueueList(activeQueue(), activeQueueJobs());
+    renderActionBar();
+  };
+  $("mf-size-custom-val")?.addEventListener("input", applyDrawerCustomSize);
+  $("mf-size-custom-unit")?.addEventListener("change", applyDrawerCustomSize);
   [
     ["mf-codec", "codec", false],
     ["mf-res", "res", false],
     ["mf-dur", "duration", false],
-    ["mf-size", "minMb", true],
     ["mf-mbps", "minMbps", true],
     ["mf-target", "target", false],
     ["mf-status", "status", false],

@@ -434,14 +434,24 @@
                 </label>
                 <label class="enc-mf-field">
                   <span>Size</span>
-                  <select id="mf-size" class="compact-sel">
-                    <option value="0">Any Size</option>
-                    <option value="100">≥ 100 MB</option>
-                    <option value="500">≥ 500 MB</option>
-                    <option value="1024">≥ 1 GB</option>
-                    <option value="2048">≥ 2 GB</option>
-                    <option value="5120">≥ 5 GB</option>
-                  </select>
+                  <div class="inline-row" style="gap:4px;">
+                    <select id="mf-size" class="compact-sel">
+                      <option value="0">Any Size</option>
+                      <option value="100">≥ 100 MB</option>
+                      <option value="500">≥ 500 MB</option>
+                      <option value="1024">≥ 1 GB</option>
+                      <option value="2048">≥ 2 GB</option>
+                      <option value="5120">≥ 5 GB</option>
+                      <option value="custom">Custom…</option>
+                    </select>
+                    <span id="mf-size-custom-wrap" class="inline-row hidden" style="gap:4px;">
+                      <input id="mf-size-custom-val" class="full-input" type="number" min="0" step="any" placeholder="Size" style="width:68px;height:26px;font-size:12px;" />
+                      <select id="mf-size-custom-unit" class="compact-sel">
+                        <option value="MB">MB</option>
+                        <option value="GB">GB</option>
+                      </select>
+                    </span>
+                  </div>
                 </label>
                 <label class="enc-mf-field">
                   <span>Bitrate</span>
