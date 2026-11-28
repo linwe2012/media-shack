@@ -565,21 +565,6 @@
     const showPreview = (mode === "explore" || mode === "encode") && jobs.length > 0;
     prevBtn.classList.toggle("hidden", !showPreview);
 
-    // Compact Policy Chip
-    const chip = $("toolbar-summary-chip");
-    if (mode === "encode") {
-      const r = q.recipe;
-      const recStr = r.family === "remux" ? `Remux · ${r.container.toUpperCase()}` : `${r.codec.toUpperCase()} CRF ${r.crf} · ${r.container.toUpperCase()}`;
-      const polStr = q.cleanup_policy === "keep_originals" ? "Keep originals" : q.cleanup_policy === "review_after_completion" ? "Review originals" : "Trash verified";
-      chip.textContent = `${recStr} · ${polStr}`;
-    } else if (mode === "explore") {
-      chip.textContent = "Sort largest first · Protect masters · Forward rest";
-    } else if (mode === "organize") {
-      chip.textContent = "Largest · Duplicates & Hash Cache · Watermarks · Faces · Folders";
-    } else {
-      chip.textContent = "Non-destructive repair · Writes new verified MP4/MKV";
-    }
-
     // Forward button state + count
     const fwdPlan = getDefaultForwardPlan(q, jobs);
     const fwdBtn = $("btn-forward-tab");
