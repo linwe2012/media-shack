@@ -2098,63 +2098,66 @@
     if (pts.length < 2) {
       return `<div class="muted" style="font-size:11px;padding:18px 0;text-align:center;">Collecting live speed samples… diagram renders once 2+ progress ticks arrive.</div>`;
     }
-    const W = 640;
-    const H = 118;
-    const padL = 40;
-    const padR = 12;
-    const padT = 10;
-    const padB = 20;
-    const plotW = W - padL - padR;
-    const plotH = H - padT - padB;
-
     const minT = pts[0].elapsed_secs;
     const maxT = Math.max(minT + 1, pts[pts.length - 1].elapsed_secs);
     const rawMaxSp = Math.max(...pts.map((p) => p.speed));
     const maxSp = Math.max(0.25, rawMaxSp * 1.15);
 
-    const xOf = (t) => padL + ((t - minT) / (maxT - minT)) * plotW;
-    const yOf = (sp) => padT + plotH - (Math.min(sp, maxSp) / maxSp) * plotH;
+    const xPct = (t) => ((t - minT) / (maxT - minT)) * 100;
+    const yPct = (sp) => 100 - (Math.min(sp, maxSp) / maxSp) * 100;
 
-    const polyCoords = pts.map((p) => `${xOf(p.elapsed_secs).toFixed(1)},${yOf(p.speed).toFixed(1)}`);
+    const polyCoords = pts.map((p) => `${xPct(p.elapsed_secs).toFixed(2)},${yPct(p.speed).toFixed(2)}`);
     const linePath = `M ${polyCoords.join(" L ")}`;
-    const areaPath = `${linePath} L ${xOf(pts[pts.length - 1].elapsed_secs).toFixed(1)},${(padT + plotH).toFixed(1)} L ${xOf(pts[0].elapsed_secs).toFixed(1)},${(padT + plotH).toFixed(1)} Z`;
+    const areaPath = `${linePath} L ${xPct(pts[pts.length - 1].elapsed_secs).toFixed(2)},100 L ${xPct(pts[0].elapsed_secs).toFixed(2)},100 Z`;
 
     const last = pts[pts.length - 1];
     const peak = pts.reduce((a, b) => (b.speed > a.speed ? b : a), pts[0]);
 
-    const yTicks = [0, maxSp * 0.5, maxSp];
-    const gridSvg = yTicks.map((v) => {
-      const y = yOf(v).toFixed(1);
-      return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="currentColor" stroke-opacity="0.12" stroke-dasharray="3 3" /><text x="${padL - 5}" y="${Number(y) + 3}" text-anchor="end" font-size="9.5" fill="currentColor" fill-opacity="0.6">${v.toFixed(v >= 2 ? 1 : 2)}x</text>`;
-    }).join("");
-
-    const ref1x = maxSp >= 1.0
-      ? `<line x1="${padL}" y1="${yOf(1.0).toFixed(1)}" x2="${W - padR}" y2="${yOf(1.0).toFixed(1)}" stroke="currentColor" stroke-opacity="0.32" stroke-dasharray="4 3" /><text x="${W - padR - 2}" y="${(yOf(1.0) - 3).toFixed(1)}" text-anchor="end" font-size="9" fill="currentColor" fill-opacity="0.65">1.0x realtime</text>`
+    const ref1y = yPct(1.0);
+    const ref1Line = maxSp >= 1.0
+      ? `<line x1="0" y1="${ref1y.toFixed(2)}" x2="100" y2="${ref1y.toFixed(2)}" stroke="currentColor" stroke-opacity="0.32" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke" />`
+      : "";
+    const ref1Tag = maxSp >= 1.0
+      ? `<span class="qp-ref-tag" style="top:${ref1y.toFixed(2)}%;">1.0x realtime</span>`
       : "";
 
     const midT = (minT + maxT) * 0.5;
-    const xAxisSvg = `
-      <text x="${padL}" y="${H - 4}" text-anchor="start" font-size="9.5" fill="currentColor" fill-opacity="0.6">${fmtDuration(minT)}</text>
-      <text x="${(padL + plotW * 0.5).toFixed(1)}" y="${H - 4}" text-anchor="middle" font-size="9.5" fill="currentColor" fill-opacity="0.6">${fmtDuration(midT)}</text>
-      <text x="${W - padR}" y="${H - 4}" text-anchor="end" font-size="9.5" fill="currentColor" fill-opacity="0.6">${fmtDuration(maxT)}</text>
-    `;
+    const fmtTick = (v) => `${v.toFixed(v >= 2 ? 1 : 2)}x`;
 
     return `
-      <svg class="qp-speed-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="color:var(--text);">
-        <defs>
-          <linearGradient id="qpSpeedGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="var(--accent, #3b82f6)" stop-opacity="0.32" />
-            <stop offset="100%" stop-color="var(--accent, #3b82f6)" stop-opacity="0.02" />
-          </linearGradient>
-        </defs>
-        ${gridSvg}
-        ${ref1x}
-        <path d="${areaPath}" fill="url(#qpSpeedGrad)" />
-        <path d="${linePath}" fill="none" stroke="var(--accent-text, var(--accent, #3b82f6))" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
-        <circle cx="${xOf(peak.elapsed_secs).toFixed(1)}" cy="${yOf(peak.speed).toFixed(1)}" r="2.8" fill="var(--ok, #10b981)" />
-        <circle cx="${xOf(last.elapsed_secs).toFixed(1)}" cy="${yOf(last.speed).toFixed(1)}" r="3.6" fill="var(--accent-text, var(--accent, #3b82f6))" />
-        ${xAxisSvg}
-      </svg>
+      <div class="qp-chart-layout">
+        <div class="qp-y-axis">
+          <span>${fmtTick(maxSp)}</span>
+          <span>${fmtTick(maxSp * 0.5)}</span>
+          <span>0.00x</span>
+        </div>
+        <div class="qp-plot-col">
+          <div class="qp-plot-area">
+            <svg class="qp-speed-svg" viewBox="0 0 100 100" preserveAspectRatio="none" style="color:var(--text);">
+              <defs>
+                <linearGradient id="qpSpeedGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="var(--accent, #3b82f6)" stop-opacity="0.30" />
+                  <stop offset="100%" stop-color="var(--accent, #3b82f6)" stop-opacity="0.02" />
+                </linearGradient>
+              </defs>
+              <line x1="0" y1="0.5" x2="100" y2="0.5" stroke="currentColor" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
+              <line x1="0" y1="50" x2="100" y2="50" stroke="currentColor" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
+              <line x1="0" y1="99.5" x2="100" y2="99.5" stroke="currentColor" stroke-opacity="0.14" stroke-width="1" vector-effect="non-scaling-stroke" />
+              ${ref1Line}
+              <path d="${areaPath}" fill="url(#qpSpeedGrad)" />
+              <path d="${linePath}" fill="none" stroke="var(--accent-text, var(--accent, #3b82f6))" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
+            </svg>
+            ${ref1Tag}
+            <span class="qp-dot-marker qp-dot-peak" style="left:${xPct(peak.elapsed_secs).toFixed(2)}%;top:${yPct(peak.speed).toFixed(2)}%;" title="Peak ${peak.speed.toFixed(2)}x"></span>
+            <span class="qp-dot-marker qp-dot-cur" style="left:${xPct(last.elapsed_secs).toFixed(2)}%;top:${yPct(last.speed).toFixed(2)}%;" title="Current ${last.speed.toFixed(2)}x"></span>
+          </div>
+          <div class="qp-x-axis">
+            <span>${fmtDuration(minT)}</span>
+            <span>${fmtDuration(midT)}</span>
+            <span>${fmtDuration(maxT)}</span>
+          </div>
+        </div>
+      </div>
     `;
   }
 

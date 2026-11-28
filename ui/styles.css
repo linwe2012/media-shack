@@ -3955,10 +3955,85 @@ input[type="radio"] {
   margin-bottom: 4px;
 }
 
+.qp-chart-layout {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.qp-y-axis {
+  width: 40px;
+  flex-shrink: 0;
+  height: 98px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.qp-plot-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.qp-plot-area {
+  position: relative;
+  width: 100%;
+  height: 98px;
+  overflow: visible;
+}
+
 .qp-speed-svg {
   width: 100%;
-  height: 118px;
+  height: 100%;
   display: block;
+}
+
+.qp-ref-tag {
+  position: absolute;
+  right: 4px;
+  transform: translateY(-100%);
+  padding-bottom: 2px;
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.qp-dot-marker {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.qp-dot-peak {
+  background: var(--ok, #10b981);
+}
+
+.qp-dot-cur {
+  width: 8px;
+  height: 8px;
+  background: var(--accent-text, var(--accent, #3b82f6));
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--accent, #3b82f6) 28%, transparent);
+}
+
+.qp-x-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
 }
 
 .help-q-btn {
