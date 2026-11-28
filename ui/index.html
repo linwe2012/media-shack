@@ -373,25 +373,16 @@
           <!-- Mode B: Transcode Queue (Unified Selection Table + Criteria) -->
           <section id="mode-view-encode" class="mode-view hidden" aria-label="Transcode Queue">
             <div id="banner-area" class="banner-area"></div>
-            <div id="queue-controls-bar" class="queue-controls-bar" style="flex-direction:column;align-items:stretch;gap:6px;">
+            <div id="queue-controls-bar" class="queue-controls-bar" style="flex-direction:column;align-items:stretch;gap:8px;">
               <div class="inline-row" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
                 <div class="inline-row" style="flex-wrap:wrap;gap:8px;">
                   <span id="lbl-queue-filter-bar" class="tabular-nums muted">0 files</span>
                   <span id="lbl-encode-sel-pill" class="counts-pill hidden">0 selected</span>
-                  <span class="muted">·</span>
-                  <label class="inline-row muted" style="font-size:12px;">
-                    <span>Sort</span>
-                    <select id="sel-queue-sort" class="compact-sel">
-                      <option value="manual">Queue Order</option>
-                      <option value="largest">Largest First (Max GB)</option>
-                      <option value="bitrate">Highest Bitrate First</option>
-                    </select>
-                  </label>
                 </div>
                 <div class="inline-row" style="flex-wrap:wrap;gap:6px;">
                   <button id="btn-sel-non-modern" class="btn btn-sm btn-secondary" type="button" title="Select all ready files not yet encoded in HEVC or AV1">Select Non-HEVC/AV1</button>
                   <button id="btn-desel-all" class="btn btn-sm btn-ghost hidden" type="button">Clear Selection</button>
-                  <button id="btn-toggle-criteria" class="btn btn-sm btn-ghost" type="button" aria-expanded="false">Criteria ▾</button>
+                  <button id="btn-reset-col-sort" class="btn btn-sm btn-ghost hidden" type="button" title="Restore original queue order">Reset Sort</button>
                   <button id="btn-triage-skip-hevc" class="btn btn-sm btn-warn-outline hidden" type="button">Skip already-HEVC</button>
                   <button id="btn-live-monitor" class="btn btn-sm btn-secondary hidden" type="button">
                     <span class="dot pulse"></span>
@@ -401,29 +392,88 @@
                   <button id="btn-clear-completed" class="btn btn-ghost btn-sm hidden" type="button">Remove finished</button>
                 </div>
               </div>
-              <div id="encode-criteria-drawer" class="inline-row encode-criteria-bar hidden" style="flex-wrap:wrap;gap:6px;padding-top:6px;border-top:1px solid var(--border);font-size:12px;">
-                <select id="crit-codec" class="compact-sel">
-                  <option value="non_modern">Exclude HEVC &amp; AV1</option>
-                  <option value="only_h264">Only H.264 / AVC</option>
-                  <option value="only_legacy">Only Legacy (MPEG/AVI/WMV/VP8)</option>
-                  <option value="all">Any Codec</option>
-                </select>
-                <select id="crit-min-mb" class="compact-sel">
-                  <option value="0">Any Size</option>
-                  <option value="100">≥ 100 MB</option>
-                  <option value="500">≥ 500 MB</option>
-                  <option value="1024">≥ 1 GB</option>
-                  <option value="2048">≥ 2 GB</option>
-                </select>
-                <select id="crit-min-mbps" class="compact-sel">
-                  <option value="0">Any Bitrate</option>
-                  <option value="5">≥ 5 Mbps</option>
-                  <option value="10">≥ 10 Mbps</option>
-                  <option value="20">≥ 20 Mbps</option>
-                </select>
-                <button id="btn-apply-criteria" class="btn btn-sm btn-secondary" type="button">Select Matching</button>
-                <button id="btn-sel-all-ready" class="btn btn-sm btn-ghost" type="button">All Ready</button>
-                <button id="btn-desel-modern" class="btn btn-sm btn-ghost" type="button">Deselect HEVC/AV1</button>
+              <div class="enc-filter-bar">
+                <div class="enc-search-wrap">
+                  <svg class="enc-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                  <input id="enc-search-input" class="enc-search-input" type="search" placeholder="Search files by name…" autocomplete="off" />
+                </div>
+                <div id="enc-active-chips" class="enc-active-chips"></div>
+                <button id="btn-more-filters" class="btn btn-sm btn-ghost" type="button" aria-expanded="false">More Filter ▾</button>
+              </div>
+              <div id="encode-more-filter-drawer" class="enc-more-drawer hidden">
+                <label class="enc-mf-field">
+                  <span>Codec</span>
+                  <select id="mf-codec" class="compact-sel">
+                    <option value="all">All Codecs</option>
+                    <option value="non_modern">Exclude HEVC &amp; AV1</option>
+                    <option value="only_h264">Only H.264 / AVC</option>
+                    <option value="only_legacy">Only Legacy</option>
+                    <option value="modern_only">HEVC / AV1 only</option>
+                  </select>
+                </label>
+                <label class="enc-mf-field">
+                  <span>Resolution</span>
+                  <select id="mf-res" class="compact-sel">
+                    <option value="all">All Resolutions</option>
+                    <option value="4k">≥ 4K (2160p+)</option>
+                    <option value="1080p">≥ 1080p</option>
+                    <option value="720p">≥ 720p</option>
+                    <option value="sd">&lt; 720p</option>
+                  </select>
+                </label>
+                <label class="enc-mf-field">
+                  <span>Duration</span>
+                  <select id="mf-dur" class="compact-sel">
+                    <option value="all">Any Duration</option>
+                    <option value="ge_60">≥ 1 min</option>
+                    <option value="ge_300">≥ 5 min</option>
+                    <option value="ge_900">≥ 15 min</option>
+                    <option value="ge_3600">≥ 1 hour</option>
+                    <option value="lt_60">&lt; 1 min</option>
+                  </select>
+                </label>
+                <label class="enc-mf-field">
+                  <span>Size</span>
+                  <select id="mf-size" class="compact-sel">
+                    <option value="0">Any Size</option>
+                    <option value="100">≥ 100 MB</option>
+                    <option value="500">≥ 500 MB</option>
+                    <option value="1024">≥ 1 GB</option>
+                    <option value="2048">≥ 2 GB</option>
+                    <option value="5120">≥ 5 GB</option>
+                  </select>
+                </label>
+                <label class="enc-mf-field">
+                  <span>Bitrate</span>
+                  <select id="mf-mbps" class="compact-sel">
+                    <option value="0">Any Bitrate</option>
+                    <option value="5">≥ 5 Mbps</option>
+                    <option value="10">≥ 10 Mbps</option>
+                    <option value="20">≥ 20 Mbps</option>
+                    <option value="50">≥ 50 Mbps</option>
+                  </select>
+                </label>
+                <label class="enc-mf-field">
+                  <span>Target Recipe</span>
+                  <select id="mf-target" class="compact-sel">
+                    <option value="all">All Recipes</option>
+                    <option value="hevc">HEVC</option>
+                    <option value="av1">AV1</option>
+                    <option value="remux">Remux</option>
+                  </select>
+                </label>
+                <label class="enc-mf-field">
+                  <span>Queue Status</span>
+                  <select id="mf-status" class="compact-sel">
+                    <option value="all">All Statuses</option>
+                    <option value="selected">Selected</option>
+                    <option value="ready">Ready / Queued</option>
+                    <option value="completed">Completed</option>
+                    <option value="needs_attention">Needs Attention</option>
+                    <option value="failed">Failed / Interrupted</option>
+                  </select>
+                </label>
+                <button id="btn-clear-more-filters" class="btn btn-sm btn-ghost" type="button" style="align-self:flex-end;">Clear All</button>
               </div>
             </div>
             <div id="queue-rows" class="transcode-table-wrap"></div>

@@ -3548,6 +3548,232 @@ input[type="radio"] {
   border-bottom: 1px solid var(--border);
 }
 
+.enc-filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.enc-search-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 190px;
+  flex: 0 1 230px;
+}
+
+.enc-search-icon {
+  position: absolute;
+  left: 9px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.enc-search-input {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px 0 27px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.enc-search-input:focus {
+  outline: none;
+  border-color: var(--accent-solid);
+}
+
+.enc-active-chips {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.enc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent-solid) 40%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.enc-chip button {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.78;
+}
+
+.enc-chip button:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+}
+
+.enc-more-drawer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+}
+
+.enc-mf-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.col-th {
+  user-select: none;
+}
+
+.col-th-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.col-th-right .col-th-inner {
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.col-sort-btn {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: 5px;
+  color: inherit;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.col-sort-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.col-sort-btn.is-sorted {
+  color: var(--accent-text);
+}
+
+.col-sort-icon {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  font-size: 10px;
+}
+
+.transcode-table thead th:hover .col-sort-icon,
+.col-sort-btn.is-sorted .col-sort-icon {
+  opacity: 1;
+}
+
+.col-flt-btn {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.transcode-table thead th:hover .col-flt-btn,
+.col-flt-btn.is-filtered,
+.col-flt-btn.is-open {
+  opacity: 1;
+}
+
+.col-flt-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.col-flt-btn.is-filtered {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.col-filter-popover {
+  position: fixed;
+  z-index: 950;
+  min-width: 196px;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.32);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.col-filter-popover-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.col-filter-opt {
+  all: unset;
+  cursor: pointer;
+  padding: 5px 8px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.col-filter-opt:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.col-filter-opt.active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
 .help-q-btn {
   display: inline-flex;
   align-items: center;

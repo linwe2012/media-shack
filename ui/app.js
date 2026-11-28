@@ -56,9 +56,20 @@
   let selectedJobId = null;
   let sidebarOpen = true;
   let sidebarMode = "setup"; // "setup" | "job"
-  let encodeFilterMode = "all"; // "all" | "review"
   let exploreFilterMode = "all"; // "all" | "unreviewed" | "compress" | "protected" | "repair"
-  let sortMode = "manual"; // "manual" | "largest" | "bitrate"
+  let sortMode = "manual"; // "manual" | "largest" | "bitrate" (Explore)
+  let encodeSort = { col: null, dir: "desc" }; // Transcode table column sort
+  const encodeFilters = {
+    search: "",
+    codec: "all",
+    res: "all",
+    duration: "all",
+    minMb: 0,
+    minMbps: 0,
+    target: "all",
+    status: "all",
+  };
+  let activeColPopover = null; // DOM ref for column filter popover
   let dedupeAlsoSha256 = true;
   let dedupePerceptual = true;
   let dedupeScanning = false;
@@ -506,17 +517,21 @@
       if (readyCount > 0 || activeJob) {
         const b = document.createElement("button");
         b.type = "button";
-        b.className = "pill-filter-btn" + (encodeFilterMode === "all" ? " active" : "");
+        b.className = "pill-filter-btn" + (encodeFilters.status === "all" ? " active" : "");
         b.textContent = activeJob ? `1 active · ${jobs.length} total` : `${jobs.length} files`;
-        b.onclick = () => { encodeFilterMode = "all"; renderWorkspace(); renderActionBar(); };
+        b.onclick = () => { encodeFilters.status = "all"; renderWorkspace(); renderActionBar(); };
         pills.appendChild(b);
       }
       if (attCount > 0) {
         const b = document.createElement("button");
         b.type = "button";
-        b.className = "pill-filter-btn" + (encodeFilterMode === "review" ? " active" : "");
+        b.className = "pill-filter-btn" + (encodeFilters.status === "needs_attention" ? " active" : "");
         b.textContent = `${attCount} need review`;
-        b.onclick = () => { encodeFilterMode = encodeFilterMode === "review" ? "all" : "review"; renderWorkspace(); renderActionBar(); };
+        b.onclick = () => {
+          encodeFilters.status = encodeFilters.status === "needs_attention" ? "all" : "needs_attention";
+          renderWorkspace();
+          renderActionBar();
+        };
         pills.appendChild(b);
       }
 
@@ -878,16 +893,325 @@
     return ["queued", "ready", "canceled"].includes(j.status) && !j.error_message;
   }
 
+  function closeColFilterPopover() {
+    if (activeColPopover) {
+      activeColPopover.remove();
+      activeColPopover = null;
+    }
+  }
+
+  function resetAllEncodeFilters() {
+    encodeFilters.search = "";
+    encodeFilters.codec = "all";
+    encodeFilters.res = "all";
+    encodeFilters.duration = "all";
+    encodeFilters.minMb = 0;
+    encodeFilters.minMbps = 0;
+    encodeFilters.target = "all";
+    encodeFilters.status = "all";
+    if ($("enc-search-input")) $("enc-search-input").value = "";
+  }
+
+  function encodeFilterColumnMatch(j) {
+    const info = jobVideoInfo(j);
+    if (encodeFilters.search.trim()) {
+      const qLower = encodeFilters.search.trim().toLowerCase();
+      const hay = `${jobFileName(j)} ${j.source_rel_path || ""}`.toLowerCase();
+      if (!hay.includes(qLower)) return false;
+    }
+    const codec = (info.codec || "").toUpperCase();
+    if (encodeFilters.codec === "non_modern" && (!j.probe || isModernCodec(codec))) return false;
+    if (encodeFilters.codec === "only_h264" && !["H264", "AVC", "AVC1"].includes(codec)) return false;
+    if (encodeFilters.codec === "only_legacy" && (isModernCodec(codec) || ["H264", "AVC", "AVC1", "VIDEO", "STATS…"].includes(codec))) return false;
+    if (encodeFilters.codec === "modern_only" && !isModernCodec(codec)) return false;
+
+    const h = info.v?.height || 0;
+    const w = info.v?.width || 0;
+    if (encodeFilters.res === "4k" && !(h >= 2160 || w >= 3840)) return false;
+    if (encodeFilters.res === "1080p" && !(h >= 1080 || w >= 1920)) return false;
+    if (encodeFilters.res === "720p" && !(h >= 720 || w >= 1280)) return false;
+    if (encodeFilters.res === "sd" && (h === 0 || h >= 720)) return false;
+
+    const dur = info.dur || 0;
+    if (encodeFilters.duration === "ge_60" && dur < 60) return false;
+    if (encodeFilters.duration === "ge_300" && dur < 300) return false;
+    if (encodeFilters.duration === "ge_900" && dur < 900) return false;
+    if (encodeFilters.duration === "ge_3600" && dur < 3600) return false;
+    if (encodeFilters.duration === "lt_60" && (dur <= 0 || dur >= 60)) return false;
+
+    if (encodeFilters.minMb > 0 && (j.input_bytes || 0) < encodeFilters.minMb * 1024 * 1024) return false;
+    if (encodeFilters.minMbps > 0 && (info.mbps || 0) < encodeFilters.minMbps) return false;
+
+    const targetKind = j.recipe.family === "remux" ? "remux" : String(j.recipe.codec || "").toLowerCase();
+    if (encodeFilters.target !== "all" && targetKind !== encodeFilters.target) return false;
+
+    if (encodeFilters.status === "selected" && !(isEncodeSelectableJob(j) && checkedJobIds.has(j.id))) return false;
+    if (encodeFilters.status === "ready" && !["queued", "ready"].includes(j.status)) return false;
+    if (encodeFilters.status === "completed" && j.status !== "completed") return false;
+    if (encodeFilters.status === "needs_attention" && j.status !== "needs_attention") return false;
+    if (encodeFilters.status === "failed" && !["failed", "interrupted", "canceled"].includes(j.status)) return false;
+
+    return true;
+  }
+
+  function sortEncodeJobs(list) {
+    if (!encodeSort.col) return list;
+    const mul = encodeSort.dir === "asc" ? 1 : -1;
+    const cmpText = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }) * mul;
+    const cmpNum = (a, b) => (a - b) * mul;
+    return list.sort((a, b) => {
+      const ia = jobVideoInfo(a);
+      const ib = jobVideoInfo(b);
+      switch (encodeSort.col) {
+        case "file":
+          return cmpText(jobFileName(a), jobFileName(b));
+        case "codec":
+          return cmpText(ia.codec || "", ib.codec || "");
+        case "res": {
+          const pxA = (ia.v?.width || 0) * (ia.v?.height || 0);
+          const pxB = (ib.v?.width || 0) * (ib.v?.height || 0);
+          return cmpNum(pxA, pxB);
+        }
+        case "duration":
+          return cmpNum(ia.dur || 0, ib.dur || 0);
+        case "size":
+          return cmpNum(a.input_bytes || 0, b.input_bytes || 0);
+        case "bitrate":
+          return cmpNum(ia.br || 0, ib.br || 0);
+        case "target": {
+          const ta = a.recipe.family === "remux" ? `remux ${a.recipe.container}` : `${a.recipe.codec} ${a.recipe.crf}`;
+          const tb = b.recipe.family === "remux" ? `remux ${b.recipe.container}` : `${b.recipe.codec} ${b.recipe.crf}`;
+          return cmpText(ta, tb);
+        }
+        case "status":
+          return cmpText(a.status || "", b.status || "");
+        default:
+          return 0;
+      }
+    });
+  }
+
+  function syncEncodeFilterControls() {
+    if ($("enc-search-input") && document.activeElement !== $("enc-search-input")) {
+      $("enc-search-input").value = encodeFilters.search;
+    }
+    if ($("mf-codec")) $("mf-codec").value = encodeFilters.codec;
+    if ($("mf-res")) $("mf-res").value = encodeFilters.res;
+    if ($("mf-dur")) $("mf-dur").value = encodeFilters.duration;
+    if ($("mf-size")) $("mf-size").value = String(encodeFilters.minMb);
+    if ($("mf-mbps")) $("mf-mbps").value = String(encodeFilters.minMbps);
+    if ($("mf-target")) $("mf-target").value = encodeFilters.target;
+    if ($("mf-status")) $("mf-status").value = encodeFilters.status;
+
+    const chips = [];
+    if (encodeFilters.search.trim()) chips.push({ key: "search", label: `Name: "${encodeFilters.search.trim()}"` });
+    if (encodeFilters.codec !== "all") {
+      const m = { non_modern: "Exclude HEVC & AV1", only_h264: "Only H.264", only_legacy: "Only Legacy", modern_only: "HEVC / AV1 only" };
+      chips.push({ key: "codec", label: `Codec: ${m[encodeFilters.codec] || encodeFilters.codec}` });
+    }
+    if (encodeFilters.res !== "all") {
+      const m = { "4k": "≥ 4K", "1080p": "≥ 1080p", "720p": "≥ 720p", sd: "< 720p" };
+      chips.push({ key: "res", label: `Res: ${m[encodeFilters.res] || encodeFilters.res}` });
+    }
+    if (encodeFilters.duration !== "all") {
+      const m = { ge_60: "≥ 1m", ge_300: "≥ 5m", ge_900: "≥ 15m", ge_3600: "≥ 1h", lt_60: "< 1m" };
+      chips.push({ key: "duration", label: `Duration: ${m[encodeFilters.duration] || encodeFilters.duration}` });
+    }
+    if (encodeFilters.minMb > 0) {
+      chips.push({ key: "minMb", label: `Size: ≥ ${encodeFilters.minMb >= 1024 ? `${encodeFilters.minMb / 1024} GB` : `${encodeFilters.minMb} MB`}` });
+    }
+    if (encodeFilters.minMbps > 0) {
+      chips.push({ key: "minMbps", label: `Bitrate: ≥ ${encodeFilters.minMbps} Mbps` });
+    }
+    if (encodeFilters.target !== "all") {
+      chips.push({ key: "target", label: `Target: ${encodeFilters.target.toUpperCase()}` });
+    }
+    if (encodeFilters.status !== "all") {
+      const m = { selected: "Selected", ready: "Ready", completed: "Completed", needs_attention: "Needs Attention", failed: "Failed / Interrupted" };
+      chips.push({ key: "status", label: `Status: ${m[encodeFilters.status] || encodeFilters.status}` });
+    }
+
+    const chipsEl = $("enc-active-chips");
+    if (chipsEl) {
+      chipsEl.innerHTML = chips.map((c) => `
+        <span class="enc-chip">
+          <span>${escapeHtml(c.label)}</span>
+          <button type="button" data-clear-chip="${c.key}" title="Remove filter">×</button>
+        </span>
+      `).join("") + (chips.length > 1 ? `<button type="button" id="enc-chips-clear-all" class="btn btn-sm btn-ghost" style="height:24px;padding:0 8px;font-size:11px;">Clear all</button>` : "");
+      chipsEl.querySelectorAll("[data-clear-chip]").forEach((btn) => {
+        btn.onclick = () => {
+          const k = btn.getAttribute("data-clear-chip");
+          if (k === "search") encodeFilters.search = "";
+          else if (k === "minMb" || k === "minMbps") encodeFilters[k] = 0;
+          else encodeFilters[k] = "all";
+          renderQueueList(activeQueue(), activeQueueJobs());
+          renderActionBar();
+        };
+      });
+      chipsEl.querySelector("#enc-chips-clear-all")?.addEventListener("click", () => {
+        resetAllEncodeFilters();
+        renderQueueList(activeQueue(), activeQueueJobs());
+        renderActionBar();
+      });
+    }
+
+    const moreBtn = $("btn-more-filters");
+    if (moreBtn) {
+      const nonSearchCount = chips.filter((c) => c.key !== "search").length;
+      const isOpen = !$("encode-more-filter-drawer")?.classList.contains("hidden");
+      moreBtn.textContent = nonSearchCount > 0 ? `More Filter (${nonSearchCount}) ${isOpen ? "▴" : "▾"}` : `More Filter ${isOpen ? "▴" : "▾"}`;
+    }
+    const resetSortBtn = $("btn-reset-col-sort");
+    if (resetSortBtn) resetSortBtn.classList.toggle("hidden", !encodeSort.col);
+  }
+
+  function openColFilterPopover(colKey, anchorEl) {
+    closeColFilterPopover();
+    const pop = document.createElement("div");
+    pop.className = "col-filter-popover";
+
+    const specs = {
+      file: { title: "Filter by Name", type: "search" },
+      codec: {
+        title: "Filter Codec",
+        field: "codec",
+        options: [
+          ["all", "All Codecs"],
+          ["non_modern", "Exclude HEVC & AV1"],
+          ["only_h264", "Only H.264 / AVC"],
+          ["only_legacy", "Only Legacy"],
+          ["modern_only", "HEVC / AV1 only"],
+        ],
+      },
+      res: {
+        title: "Filter Resolution",
+        field: "res",
+        options: [
+          ["all", "All Resolutions"],
+          ["4k", "≥ 4K (2160p+)"],
+          ["1080p", "≥ 1080p"],
+          ["720p", "≥ 720p"],
+          ["sd", "< 720p"],
+        ],
+      },
+      duration: {
+        title: "Filter Duration",
+        field: "duration",
+        options: [
+          ["all", "Any Duration"],
+          ["ge_60", "≥ 1 min"],
+          ["ge_300", "≥ 5 min"],
+          ["ge_900", "≥ 15 min"],
+          ["ge_3600", "≥ 1 hour"],
+          ["lt_60", "< 1 min"],
+        ],
+      },
+      size: {
+        title: "Filter Size",
+        field: "minMb",
+        numeric: true,
+        options: [
+          [0, "Any Size"],
+          [100, "≥ 100 MB"],
+          [500, "≥ 500 MB"],
+          [1024, "≥ 1 GB"],
+          [2048, "≥ 2 GB"],
+          [5120, "≥ 5 GB"],
+        ],
+      },
+      bitrate: {
+        title: "Filter Bitrate",
+        field: "minMbps",
+        numeric: true,
+        options: [
+          [0, "Any Bitrate"],
+          [5, "≥ 5 Mbps"],
+          [10, "≥ 10 Mbps"],
+          [20, "≥ 20 Mbps"],
+          [50, "≥ 50 Mbps"],
+        ],
+      },
+      target: {
+        title: "Filter Target Recipe",
+        field: "target",
+        options: [
+          ["all", "All Recipes"],
+          ["hevc", "HEVC"],
+          ["av1", "AV1"],
+          ["remux", "Remux"],
+        ],
+      },
+      status: {
+        title: "Filter Queue Status",
+        field: "status",
+        options: [
+          ["all", "All Statuses"],
+          ["selected", "Selected"],
+          ["ready", "Ready / Queued"],
+          ["completed", "Completed"],
+          ["needs_attention", "Needs Attention"],
+          ["failed", "Failed / Interrupted"],
+        ],
+      },
+    };
+    const cfg = specs[colKey];
+    if (!cfg) return;
+
+    if (cfg.type === "search") {
+      pop.innerHTML = `
+        <div class="col-filter-popover-title">${cfg.title}</div>
+        <input id="col-pop-search" class="full-input" type="search" value="${escapeHtml(encodeFilters.search)}" placeholder="Contains text…" style="height:28px;font-size:12px;" />
+      `;
+    } else {
+      const curVal = encodeFilters[cfg.field];
+      pop.innerHTML = `<div class="col-filter-popover-title">${cfg.title}</div>` +
+        cfg.options.map(([val, lbl]) => `
+          <button type="button" class="col-filter-opt ${curVal === val ? "active" : ""}" data-pop-val="${escapeHtml(String(val))}">
+            <span>${escapeHtml(lbl)}</span>
+            <span>${curVal === val ? "✓" : ""}</span>
+          </button>
+        `).join("");
+    }
+
+    document.body.appendChild(pop);
+    activeColPopover = pop;
+    const rect = anchorEl.getBoundingClientRect();
+    const left = Math.min(window.innerWidth - pop.offsetWidth - 10, Math.max(8, rect.left - 8));
+    pop.style.left = `${left}px`;
+    pop.style.top = `${Math.min(window.innerHeight - pop.offsetHeight - 10, rect.bottom + 6)}px`;
+
+    if (cfg.type === "search") {
+      const inp = pop.querySelector("#col-pop-search");
+      inp.focus();
+      inp.select();
+      inp.addEventListener("input", () => {
+        encodeFilters.search = inp.value;
+        renderQueueList(activeQueue(), activeQueueJobs());
+      });
+    } else {
+      pop.querySelectorAll("[data-pop-val]").forEach((btn) => {
+        btn.onclick = () => {
+          const raw = btn.getAttribute("data-pop-val");
+          encodeFilters[cfg.field] = cfg.numeric ? Number(raw) : raw;
+          closeColFilterPopover();
+          renderQueueList(activeQueue(), activeQueueJobs());
+          renderActionBar();
+        };
+      });
+    }
+  }
+
   function renderQueueList(q, allJobs) {
-    let jobs = [...allJobs];
-    if (encodeFilterMode === "review") jobs = jobs.filter((j) => j.status === "needs_attention");
-    if (sortMode === "largest") jobs.sort((a, b) => b.input_bytes - a.input_bytes);
-    else if (sortMode === "bitrate") jobs.sort((a, b) => jobVideoInfo(b).br - jobVideoInfo(a).br);
+    let jobs = sortEncodeJobs(allJobs.filter(encodeFilterColumnMatch));
 
     const totalBytes = allJobs.reduce((a, b) => a + (b.input_bytes || 0), 0);
+    const visibleBytes = jobs.reduce((a, b) => a + (b.input_bytes || 0), 0);
     const checkedJobs = allJobs.filter((j) => checkedJobIds.has(j.id) && isEncodeSelectableJob(j));
     const checkedBytes = checkedJobs.reduce((a, b) => a + (b.input_bytes || 0), 0);
-    $("lbl-queue-filter-bar").textContent = `${jobs.length} of ${allJobs.length} files · ${fmtBytes(totalBytes)} source`;
+    $("lbl-queue-filter-bar").textContent = jobs.length === allJobs.length
+      ? `${allJobs.length} files · ${fmtBytes(totalBytes)} source`
+      : `${jobs.length} of ${allJobs.length} matching (${fmtBytes(visibleBytes)})`;
     if ($("lbl-encode-sel-pill")) {
       $("lbl-encode-sel-pill").textContent = `${checkedJobs.length} selected (${fmtBytes(checkedBytes)})`;
       $("lbl-encode-sel-pill").classList.toggle("hidden", checkedJobs.length === 0);
@@ -895,7 +1219,7 @@
     if ($("btn-desel-all")) {
       $("btn-desel-all").classList.toggle("hidden", checkedJobs.length === 0);
     }
-    $("sel-queue-sort").value = sortMode;
+    syncEncodeFilterControls();
 
     const alreadyHevc = allJobs.filter((j) => ["queued", "ready"].includes(j.status) && isModernCodec(jobVideoInfo(j).codec));
     const skipBtn = $("btn-triage-skip-hevc");
@@ -919,20 +1243,42 @@
     const allVisibleChecked = selectableVisible.length > 0 && checkedVisibleCount === selectableVisible.length;
     const someVisibleChecked = checkedVisibleCount > 0 && !allVisibleChecked;
 
+    const funnelSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>`;
+    const colHdr = (key, label, rightAlign, filtered) => {
+      const sorted = encodeSort.col === key;
+      const sortGlyph = sorted ? (encodeSort.dir === "asc" ? "↑" : "↓") : "⇅";
+      const sortTitle = sorted
+        ? `Sorted ${encodeSort.dir === "asc" ? "ascending" : "descending"} (click to switch / reset)`
+        : `Click to sort by ${label}`;
+      return `
+        <th class="col-th ${rightAlign ? "col-th-right" : ""}" style="${rightAlign ? "text-align:right;" : ""}">
+          <span class="col-th-inner">
+            <button type="button" class="col-sort-btn ${sorted ? "is-sorted" : ""}" data-col-sort="${key}" title="${escapeHtml(sortTitle)}">
+              <span>${label}</span>
+              <span class="col-sort-icon" aria-hidden="true">${sortGlyph}</span>
+            </button>
+            <button type="button" class="col-flt-btn ${filtered ? "is-filtered" : ""}" data-col-flt="${key}" title="Filter ${label}">
+              ${funnelSvg}
+            </button>
+          </span>
+        </th>
+      `;
+    };
+
     const tbl = document.createElement("table");
     tbl.className = "transcode-table";
     tbl.innerHTML = `
       <thead>
         <tr>
-          <th style="width:34px;"><input type="checkbox" id="tc-chk-master" ${allVisibleChecked ? "checked" : ""} ${selectableVisible.length === 0 ? "disabled" : ""} title="Toggle all selectable files" /></th>
-          <th>File</th>
-          <th>Codec</th>
-          <th>Resolution</th>
-          <th>Duration</th>
-          <th style="text-align:right;">Size</th>
-          <th style="text-align:right;">Bitrate</th>
-          <th>Target Recipe</th>
-          <th>Queue Status</th>
+          <th style="width:34px;"><input type="checkbox" id="tc-chk-master" ${allVisibleChecked ? "checked" : ""} ${selectableVisible.length === 0 ? "disabled" : ""} title="Toggle all visible selectable files" /></th>
+          ${colHdr("file", "File", false, Boolean(encodeFilters.search.trim()))}
+          ${colHdr("codec", "Codec", false, encodeFilters.codec !== "all")}
+          ${colHdr("res", "Resolution", false, encodeFilters.res !== "all")}
+          ${colHdr("duration", "Duration", false, encodeFilters.duration !== "all")}
+          ${colHdr("size", "Size", true, encodeFilters.minMb > 0)}
+          ${colHdr("bitrate", "Bitrate", true, encodeFilters.minMbps > 0)}
+          ${colHdr("target", "Target Recipe", false, encodeFilters.target !== "all")}
+          ${colHdr("status", "Queue Status", false, encodeFilters.status !== "all")}
           <th style="text-align:right;">Actions</th>
         </tr>
       </thead>
@@ -948,6 +1294,34 @@
       renderQueueList(q, allJobs);
       renderActionBar();
       renderSidebar();
+    });
+
+    tbl.querySelectorAll("[data-col-sort]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const col = btn.getAttribute("data-col-sort");
+        const numFirst = ["res", "duration", "size", "bitrate"].includes(col);
+        if (encodeSort.col !== col) {
+          encodeSort = { col, dir: numFirst ? "desc" : "asc" };
+        } else if (encodeSort.dir === (numFirst ? "desc" : "asc")) {
+          encodeSort = { col, dir: numFirst ? "asc" : "desc" };
+        } else {
+          encodeSort = { col: null, dir: "desc" };
+        }
+        renderQueueList(q, allJobs);
+      });
+    });
+
+    tbl.querySelectorAll("[data-col-flt]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const col = btn.getAttribute("data-col-flt");
+        if (activeColPopover && activeColPopover.dataset?.col === col) {
+          closeColFilterPopover();
+          return;
+        }
+        openColFilterPopover(col, btn);
+        if (activeColPopover) activeColPopover.dataset.col = col;
+      });
     });
 
     jobs.forEach((j) => {
@@ -3328,10 +3702,49 @@
     const enc = activeQueueJobs().find((j) => j.status === "encoding");
     if (enc) openLivePreviewModal(enc.id);
   };
-  $("sel-queue-sort").onchange = (e) => {
-    sortMode = e.target.value;
+  $("btn-reset-col-sort")?.addEventListener("click", () => {
+    encodeSort = { col: null, dir: "desc" };
     renderQueueList(activeQueue(), activeQueueJobs());
-  };
+  });
+  $("enc-search-input")?.addEventListener("input", (e) => {
+    encodeFilters.search = e.target.value;
+    renderQueueList(activeQueue(), activeQueueJobs());
+  });
+  $("btn-more-filters")?.addEventListener("click", () => {
+    const dr = $("encode-more-filter-drawer");
+    if (!dr) return;
+    const isHidden = dr.classList.toggle("hidden");
+    $("btn-more-filters").setAttribute("aria-expanded", String(!isHidden));
+    syncEncodeFilterControls();
+  });
+  $("btn-clear-more-filters")?.addEventListener("click", () => {
+    resetAllEncodeFilters();
+    renderQueueList(activeQueue(), activeQueueJobs());
+    renderActionBar();
+  });
+  [
+    ["mf-codec", "codec", false],
+    ["mf-res", "res", false],
+    ["mf-dur", "duration", false],
+    ["mf-size", "minMb", true],
+    ["mf-mbps", "minMbps", true],
+    ["mf-target", "target", false],
+    ["mf-status", "status", false],
+  ].forEach(([id, field, isNum]) => {
+    $(id)?.addEventListener("change", (e) => {
+      encodeFilters[field] = isNum ? Number(e.target.value || 0) : e.target.value;
+      renderQueueList(activeQueue(), activeQueueJobs());
+      renderActionBar();
+    });
+  });
+  document.addEventListener("click", (e) => {
+    if (activeColPopover && !activeColPopover.contains(e.target) && !e.target.closest("[data-col-flt]")) {
+      closeColFilterPopover();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeColFilterPopover();
+  });
   $("btn-sel-non-modern").onclick = () => {
     const jobs = activeQueueJobs();
     checkedJobIds.clear();
@@ -3348,62 +3761,11 @@
     renderSidebar();
     showToast(`Selected ${count} non-HEVC/AV1 file${count === 1 ? "" : "s"}.`, "info");
   };
-  $("btn-desel-modern").onclick = () => {
-    const jobs = activeQueueJobs();
-    let removed = 0;
-    for (const j of jobs) {
-      if (checkedJobIds.has(j.id) && isModernCodec(jobVideoInfo(j).codec)) {
-        checkedJobIds.delete(j.id);
-        removed++;
-      }
-    }
-    renderQueueList(activeQueue(), jobs);
-    renderActionBar();
-    renderSidebar();
-    showToast(`Deselected ${removed} HEVC/AV1 file${removed === 1 ? "" : "s"}.`, "info");
-  };
-  $("btn-sel-all-ready").onclick = () => {
-    const jobs = activeQueueJobs();
-    jobs.filter(isEncodeSelectableJob).forEach((j) => checkedJobIds.add(j.id));
-    renderQueueList(activeQueue(), jobs);
-    renderActionBar();
-    renderSidebar();
-  };
   $("btn-desel-all").onclick = () => {
     checkedJobIds.clear();
     renderQueueList(activeQueue(), activeQueueJobs());
     renderActionBar();
     renderSidebar();
-  };
-  $("btn-toggle-criteria")?.addEventListener("click", () => {
-    const dr = $("encode-criteria-drawer");
-    if (!dr) return;
-    const isHidden = dr.classList.toggle("hidden");
-    $("btn-toggle-criteria").setAttribute("aria-expanded", String(!isHidden));
-  });
-  $("btn-apply-criteria").onclick = () => {
-    const jobs = activeQueueJobs();
-    const codecRule = $("crit-codec").value;
-    const minBytes = Number($("crit-min-mb").value || 0) * 1000 * 1000;
-    const minMbps = Number($("crit-min-mbps").value || 0);
-    checkedJobIds.clear();
-    let count = 0;
-    for (const j of jobs) {
-      if (!isEncodeSelectableJob(j)) continue;
-      const info = jobVideoInfo(j);
-      const codec = (info.codec || "").toUpperCase();
-      if (codecRule === "non_modern" && (!j.probe || isModernCodec(codec))) continue;
-      if (codecRule === "only_h264" && !["H264", "AVC", "AVC1"].includes(codec)) continue;
-      if (codecRule === "only_legacy" && (isModernCodec(codec) || ["H264", "AVC", "AVC1", "VIDEO", "STATS…"].includes(codec))) continue;
-      if (minBytes > 0 && (j.input_bytes || 0) < minBytes) continue;
-      if (minMbps > 0 && (info.mbps || 0) < minMbps) continue;
-      checkedJobIds.add(j.id);
-      count++;
-    }
-    renderQueueList(activeQueue(), jobs);
-    renderActionBar();
-    renderSidebar();
-    showToast(`Criteria matched & selected ${count} file${count === 1 ? "" : "s"}.`, count > 0 ? "success" : "info");
   };
   $("btn-triage-skip-hevc").onclick = async () => {
     const ids = activeQueueJobs().filter((j) => ["queued", "ready"].includes(j.status) && isModernCodec(jobVideoInfo(j).codec)).map((j) => j.id);
