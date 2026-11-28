@@ -431,40 +431,66 @@
                   </select>
                 </label>
                 <label class="enc-mf-field">
-                  <span>Resolution</span>
-                  <select id="mf-res" class="compact-sel">
-                    <option value="all">All Resolutions</option>
-                    <option value="4k">≥ 4K (2160p+)</option>
-                    <option value="1080p">≥ 1080p</option>
-                    <option value="720p">≥ 720p</option>
-                    <option value="sd">&lt; 720p</option>
-                  </select>
+                  <span>Resolution (<span id="mf-res-readout">Any</span>)</span>
+                  <div class="inline-row" style="gap:5px;">
+                    <select id="mf-res-op" class="compact-sel" title="Resolution comparison">
+                      <option value="ge">≥</option>
+                      <option value="lt">&lt;</option>
+                    </select>
+                    <input id="mf-res-slider" type="range" min="0" max="2160" step="60" value="0" style="width:92px;accent-color:var(--accent-solid);" title="Minimum or maximum vertical resolution (0 = Any)" />
+                    <select id="mf-res-preset" class="compact-sel" style="width:72px;">
+                      <option value="0">Any</option>
+                      <option value="480">480p</option>
+                      <option value="720">720p</option>
+                      <option value="1080">1080p</option>
+                      <option value="1440">1440p</option>
+                      <option value="2160">4K</option>
+                    </select>
+                  </div>
                 </label>
                 <label class="enc-mf-field">
                   <span>Duration</span>
-                  <select id="mf-dur" class="compact-sel">
-                    <option value="all">Any Duration</option>
-                    <option value="ge_60">≥ 1 min</option>
-                    <option value="ge_300">≥ 5 min</option>
-                    <option value="ge_900">≥ 15 min</option>
-                    <option value="ge_3600">≥ 1 hour</option>
-                    <option value="lt_60">&lt; 1 min</option>
-                  </select>
+                  <div class="inline-row" style="gap:4px;">
+                    <select id="mf-dur-op" class="compact-sel" title="Duration comparison">
+                      <option value="ge">≥</option>
+                      <option value="lt">&lt;</option>
+                    </select>
+                    <select id="mf-dur" class="compact-sel">
+                      <option value="0">Any</option>
+                      <option value="60">1 min</option>
+                      <option value="300">5 min</option>
+                      <option value="900">15 min</option>
+                      <option value="3600">1 hour</option>
+                      <option value="custom">Custom…</option>
+                    </select>
+                    <span id="mf-dur-custom-wrap" class="inline-row hidden" style="gap:4px;">
+                      <input id="mf-dur-custom-val" class="full-input" type="number" min="0" step="any" placeholder="Len" style="width:58px;height:26px;font-size:12px;" />
+                      <select id="mf-dur-custom-unit" class="compact-sel">
+                        <option value="s">sec</option>
+                        <option value="m">min</option>
+                        <option value="h">hr</option>
+                      </select>
+                    </span>
+                  </div>
                 </label>
                 <label class="enc-mf-field">
                   <span>Size</span>
                   <div class="inline-row" style="gap:4px;">
+                    <select id="mf-size-op" class="compact-sel" title="File size comparison">
+                      <option value="ge">≥</option>
+                      <option value="lt">&lt;</option>
+                    </select>
                     <select id="mf-size" class="compact-sel">
                       <option value="0">Any Size</option>
-                      <option value="100">≥ 100 MB</option>
-                      <option value="500">≥ 500 MB</option>
-                      <option value="1024">≥ 1 GB</option>
-                      <option value="2048">≥ 2 GB</option>
-                      <option value="5120">≥ 5 GB</option>
+                      <option value="100">100 MB</option>
+                      <option value="500">500 MB</option>
+                      <option value="1024">1 GB</option>
+                      <option value="2048">2 GB</option>
+                      <option value="5120">5 GB</option>
                       <option value="custom">Custom…</option>
                     </select>
                     <span id="mf-size-custom-wrap" class="inline-row hidden" style="gap:4px;">
-                      <input id="mf-size-custom-val" class="full-input" type="number" min="0" step="any" placeholder="Size" style="width:68px;height:26px;font-size:12px;" />
+                      <input id="mf-size-custom-val" class="full-input" type="number" min="0" step="any" placeholder="Size" style="width:62px;height:26px;font-size:12px;" />
                       <select id="mf-size-custom-unit" class="compact-sel">
                         <option value="MB">MB</option>
                         <option value="GB">GB</option>
@@ -474,13 +500,24 @@
                 </label>
                 <label class="enc-mf-field">
                   <span>Bitrate</span>
-                  <select id="mf-mbps" class="compact-sel">
-                    <option value="0">Any Bitrate</option>
-                    <option value="5">≥ 5 Mbps</option>
-                    <option value="10">≥ 10 Mbps</option>
-                    <option value="20">≥ 20 Mbps</option>
-                    <option value="50">≥ 50 Mbps</option>
-                  </select>
+                  <div class="inline-row" style="gap:4px;">
+                    <select id="mf-mbps-op" class="compact-sel" title="Bitrate comparison">
+                      <option value="ge">≥</option>
+                      <option value="lt">&lt;</option>
+                    </select>
+                    <select id="mf-mbps" class="compact-sel">
+                      <option value="0">Any</option>
+                      <option value="5">5 Mbps</option>
+                      <option value="10">10 Mbps</option>
+                      <option value="20">20 Mbps</option>
+                      <option value="50">50 Mbps</option>
+                      <option value="custom">Custom…</option>
+                    </select>
+                    <span id="mf-mbps-custom-wrap" class="inline-row hidden" style="gap:4px;">
+                      <input id="mf-mbps-custom-val" class="full-input" type="number" min="0" step="any" placeholder="Mbps" style="width:60px;height:26px;font-size:12px;" />
+                      <span class="muted" style="font-size:11px;">Mbps</span>
+                    </span>
+                  </div>
                 </label>
                 <label class="enc-mf-field">
                   <span>Target Recipe</span>

@@ -64,9 +64,13 @@
     searchMode: "name", // "name" | "path" | "regex"
     searchInvert: false,
     codec: "all",
-    res: "all",
-    duration: "all",
+    resOp: "ge",
+    resHeight: 0,
+    durOp: "ge",
+    durSecs: 0,
+    sizeOp: "ge",
     minMb: 0,
+    bitrateOp: "ge",
     minMbps: 0,
     target: "all",
     status: "all",
@@ -907,17 +911,31 @@
     encodeFilters.searchMode = "name";
     encodeFilters.searchInvert = false;
     encodeFilters.codec = "all";
-    encodeFilters.res = "all";
-    encodeFilters.duration = "all";
+    encodeFilters.resOp = "ge";
+    encodeFilters.resHeight = 0;
+    encodeFilters.durOp = "ge";
+    encodeFilters.durSecs = 0;
+    encodeFilters.sizeOp = "ge";
     encodeFilters.minMb = 0;
+    encodeFilters.bitrateOp = "ge";
     encodeFilters.minMbps = 0;
     encodeFilters.target = "all";
     encodeFilters.status = "all";
     if ($("enc-search-input")) $("enc-search-input").value = "";
     if ($("mf-search-mode")) $("mf-search-mode").value = "name";
     if ($("mf-search-invert")) $("mf-search-invert").checked = false;
+    if ($("mf-res-op")) $("mf-res-op").value = "ge";
+    if ($("mf-res-slider")) $("mf-res-slider").value = "0";
+    if ($("mf-res-preset")) $("mf-res-preset").value = "0";
+    if ($("mf-dur-op")) $("mf-dur-op").value = "ge";
+    if ($("mf-dur")) $("mf-dur").value = "0";
+    $("mf-dur-custom-wrap")?.classList.add("hidden");
+    if ($("mf-size-op")) $("mf-size-op").value = "ge";
     if ($("mf-size")) $("mf-size").value = "0";
     $("mf-size-custom-wrap")?.classList.add("hidden");
+    if ($("mf-mbps-op")) $("mf-mbps-op").value = "ge";
+    if ($("mf-mbps")) $("mf-mbps").value = "0";
+    $("mf-mbps-custom-wrap")?.classList.add("hidden");
   }
 
   function compileEncodeSearchMatcher() {
@@ -969,20 +987,45 @@
 
     const h = info.v?.height || 0;
     const w = info.v?.width || 0;
-    if (encodeFilters.res === "4k" && !(h >= 2160 || w >= 3840)) return false;
-    if (encodeFilters.res === "1080p" && !(h >= 1080 || w >= 1920)) return false;
-    if (encodeFilters.res === "720p" && !(h >= 720 || w >= 1280)) return false;
-    if (encodeFilters.res === "sd" && (h === 0 || h >= 720)) return false;
+    if (encodeFilters.resHeight > 0) {
+      if (h === 0 && w === 0) return false;
+      const effH = Math.max(Math.min(w, h), Math.round(Math.max(w, h) * 9 / 16));
+      if (encodeFilters.resOp === "lt") {
+        if (effH >= encodeFilters.resHeight) return false;
+      } else if (effH < encodeFilters.resHeight) {
+        return false;
+      }
+    }
 
     const dur = info.dur || 0;
-    if (encodeFilters.duration === "ge_60" && dur < 60) return false;
-    if (encodeFilters.duration === "ge_300" && dur < 300) return false;
-    if (encodeFilters.duration === "ge_900" && dur < 900) return false;
-    if (encodeFilters.duration === "ge_3600" && dur < 3600) return false;
-    if (encodeFilters.duration === "lt_60" && (dur <= 0 || dur >= 60)) return false;
+    if (encodeFilters.durSecs > 0) {
+      if (dur <= 0) return false;
+      if (encodeFilters.durOp === "lt") {
+        if (dur >= encodeFilters.durSecs) return false;
+      } else if (dur < encodeFilters.durSecs) {
+        return false;
+      }
+    }
 
-    if (encodeFilters.minMb > 0 && (j.input_bytes || 0) < encodeFilters.minMb * 1024 * 1024) return false;
-    if (encodeFilters.minMbps > 0 && (info.mbps || 0) < encodeFilters.minMbps) return false;
+    if (encodeFilters.minMb > 0) {
+      const threshBytes = encodeFilters.minMb * 1024 * 1024;
+      const sz = j.input_bytes || 0;
+      if (encodeFilters.sizeOp === "lt") {
+        if (sz >= threshBytes) return false;
+      } else if (sz < threshBytes) {
+        return false;
+      }
+    }
+
+    if (encodeFilters.minMbps > 0) {
+      const mbpsVal = info.mbps || 0;
+      if (mbpsVal <= 0) return false;
+      if (encodeFilters.bitrateOp === "lt") {
+        if (mbpsVal >= encodeFilters.minMbps) return false;
+      } else if (mbpsVal < encodeFilters.minMbps) {
+        return false;
+      }
+    }
 
     const targetKind = j.recipe.family === "remux" ? "remux" : String(j.recipe.codec || "").toLowerCase();
     if (encodeFilters.target !== "all" && targetKind !== encodeFilters.target) return false;
@@ -1034,14 +1077,38 @@
   }
 
   const SIZE_FILTER_PRESETS = [0, 100, 500, 1024, 2048, 5120];
-  function formatMinSizeLabel(minMb) {
+  const DUR_FILTER_PRESETS = [0, 60, 300, 900, 3600];
+  const BITRATE_FILTER_PRESETS = [0, 5, 10, 20, 50];
+  const RES_FILTER_PRESETS = [0, 480, 720, 1080, 1440, 2160];
+
+  function opSym(op) {
+    return op === "lt" ? "<" : "≥";
+  }
+  function formatResFilterLabel(op, h) {
+    if (!h || h <= 0) return "Any";
+    const name = h === 2160 ? "4K (2160p)" : `${h}p`;
+    return `${opSym(op)} ${name}`;
+  }
+  function formatDurFilterLabel(op, secs) {
+    if (!secs || secs <= 0) return "Any";
+    let txt;
+    if (secs >= 3600 && secs % 60 === 0) txt = `${+(secs / 3600).toFixed(2)}h`;
+    else if (secs >= 60) txt = `${+(secs / 60).toFixed(1)}m`;
+    else txt = `${+Number(secs).toFixed(1)}s`;
+    return `${opSym(op)} ${txt}`;
+  }
+  function formatMinSizeLabel(minMb, op = "ge") {
     if (!minMb || minMb <= 0) return "Any Size";
     if (minMb >= 1024) {
       const gb = +(minMb / 1024).toFixed(2);
-      return `≥ ${gb} GB`;
+      return `${opSym(op)} ${gb} GB`;
     }
     const mb = +Number(minMb).toFixed(1);
-    return `≥ ${mb} MB`;
+    return `${opSym(op)} ${mb} MB`;
+  }
+  function formatBitrateFilterLabel(op, mbps) {
+    if (!mbps || mbps <= 0) return "Any";
+    return `${opSym(op)} ${+Number(mbps).toFixed(1)} Mbps`;
   }
 
   function syncEncodeFilterControls(searchMatcher = null) {
@@ -1064,8 +1131,47 @@
     if ($("mf-search-mode")) $("mf-search-mode").value = encodeFilters.searchMode;
     if ($("mf-search-invert")) $("mf-search-invert").checked = !!encodeFilters.searchInvert;
     if ($("mf-codec")) $("mf-codec").value = encodeFilters.codec;
-    if ($("mf-res")) $("mf-res").value = encodeFilters.res;
-    if ($("mf-dur")) $("mf-dur").value = encodeFilters.duration;
+
+    if ($("mf-res-op")) $("mf-res-op").value = encodeFilters.resOp;
+    if ($("mf-res-slider") && document.activeElement !== $("mf-res-slider")) {
+      $("mf-res-slider").value = String(encodeFilters.resHeight || 0);
+    }
+    if ($("mf-res-preset")) {
+      $("mf-res-preset").value = RES_FILTER_PRESETS.includes(encodeFilters.resHeight) ? String(encodeFilters.resHeight) : "0";
+    }
+    if ($("mf-res-readout")) {
+      $("mf-res-readout").textContent = formatResFilterLabel(encodeFilters.resOp, encodeFilters.resHeight);
+    }
+
+    if ($("mf-dur-op")) $("mf-dur-op").value = encodeFilters.durOp;
+    if ($("mf-dur")) {
+      const isPreset = DUR_FILTER_PRESETS.includes(encodeFilters.durSecs);
+      const wrap = $("mf-dur-custom-wrap");
+      const valEl = $("mf-dur-custom-val");
+      const unitEl = $("mf-dur-custom-unit");
+      const editing = document.activeElement === valEl || document.activeElement === unitEl;
+      if (isPreset && !editing && $("mf-dur").value !== "custom") {
+        $("mf-dur").value = String(encodeFilters.durSecs);
+        wrap?.classList.add("hidden");
+      } else if (!isPreset && encodeFilters.durSecs > 0) {
+        $("mf-dur").value = "custom";
+        wrap?.classList.remove("hidden");
+        if (valEl && document.activeElement !== valEl && unitEl && document.activeElement !== unitEl) {
+          if (encodeFilters.durSecs >= 3600 && encodeFilters.durSecs % 3600 === 0) {
+            unitEl.value = "h";
+            valEl.value = String(encodeFilters.durSecs / 3600);
+          } else if (encodeFilters.durSecs >= 60) {
+            unitEl.value = "m";
+            valEl.value = String(+(encodeFilters.durSecs / 60).toFixed(1));
+          } else {
+            unitEl.value = "s";
+            valEl.value = String(+Number(encodeFilters.durSecs).toFixed(1));
+          }
+        }
+      }
+    }
+
+    if ($("mf-size-op")) $("mf-size-op").value = encodeFilters.sizeOp;
     if ($("mf-size")) {
       const isPreset = SIZE_FILTER_PRESETS.includes(encodeFilters.minMb);
       const wrap = $("mf-size-custom-wrap");
@@ -1089,7 +1195,25 @@
         }
       }
     }
-    if ($("mf-mbps")) $("mf-mbps").value = String(encodeFilters.minMbps);
+
+    if ($("mf-mbps-op")) $("mf-mbps-op").value = encodeFilters.bitrateOp;
+    if ($("mf-mbps")) {
+      const isPreset = BITRATE_FILTER_PRESETS.includes(encodeFilters.minMbps);
+      const wrap = $("mf-mbps-custom-wrap");
+      const valEl = $("mf-mbps-custom-val");
+      const editing = document.activeElement === valEl;
+      if (isPreset && !editing && $("mf-mbps").value !== "custom") {
+        $("mf-mbps").value = String(encodeFilters.minMbps);
+        wrap?.classList.add("hidden");
+      } else if (!isPreset && encodeFilters.minMbps > 0) {
+        $("mf-mbps").value = "custom";
+        wrap?.classList.remove("hidden");
+        if (valEl && document.activeElement !== valEl) {
+          valEl.value = String(+Number(encodeFilters.minMbps).toFixed(1));
+        }
+      }
+    }
+
     if ($("mf-target")) $("mf-target").value = encodeFilters.target;
     if ($("mf-status")) $("mf-status").value = encodeFilters.status;
 
@@ -1104,19 +1228,17 @@
       const m = { non_modern: "Exclude HEVC & AV1", only_h264: "Only H.264", only_legacy: "Only Legacy", modern_only: "HEVC / AV1 only" };
       chips.push({ key: "codec", col: "codec", label: `Codec: ${m[encodeFilters.codec] || encodeFilters.codec}` });
     }
-    if (encodeFilters.res !== "all") {
-      const m = { "4k": "≥ 4K", "1080p": "≥ 1080p", "720p": "≥ 720p", sd: "< 720p" };
-      chips.push({ key: "res", col: "res", label: `Res: ${m[encodeFilters.res] || encodeFilters.res}` });
+    if (encodeFilters.resHeight > 0) {
+      chips.push({ key: "resHeight", col: "res", label: `Res: ${formatResFilterLabel(encodeFilters.resOp, encodeFilters.resHeight)}` });
     }
-    if (encodeFilters.duration !== "all") {
-      const m = { ge_60: "≥ 1m", ge_300: "≥ 5m", ge_900: "≥ 15m", ge_3600: "≥ 1h", lt_60: "< 1m" };
-      chips.push({ key: "duration", col: "duration", label: `Duration: ${m[encodeFilters.duration] || encodeFilters.duration}` });
+    if (encodeFilters.durSecs > 0) {
+      chips.push({ key: "durSecs", col: "duration", label: `Duration: ${formatDurFilterLabel(encodeFilters.durOp, encodeFilters.durSecs)}` });
     }
     if (encodeFilters.minMb > 0) {
-      chips.push({ key: "minMb", col: "size", label: `Size: ${formatMinSizeLabel(encodeFilters.minMb)}` });
+      chips.push({ key: "minMb", col: "size", label: `Size: ${formatMinSizeLabel(encodeFilters.minMb, encodeFilters.sizeOp)}` });
     }
     if (encodeFilters.minMbps > 0) {
-      chips.push({ key: "minMbps", col: "bitrate", label: `Bitrate: ≥ ${encodeFilters.minMbps} Mbps` });
+      chips.push({ key: "minMbps", col: "bitrate", label: `Bitrate: ${formatBitrateFilterLabel(encodeFilters.bitrateOp, encodeFilters.minMbps)}` });
     }
     if (encodeFilters.target !== "all") {
       chips.push({ key: "target", col: "target", label: `Target: ${encodeFilters.target.toUpperCase()}` });
@@ -1157,12 +1279,23 @@
           if (k === "search") {
             encodeFilters.search = "";
             encodeFilters.searchInvert = false;
+          } else if (k === "resHeight") {
+            encodeFilters.resHeight = 0;
+            if ($("mf-res-slider")) $("mf-res-slider").value = "0";
+            if ($("mf-res-preset")) $("mf-res-preset").value = "0";
+          } else if (k === "durSecs") {
+            encodeFilters.durSecs = 0;
+            if ($("mf-dur")) $("mf-dur").value = "0";
+            $("mf-dur-custom-wrap")?.classList.add("hidden");
           } else if (k === "minMb") {
             encodeFilters.minMb = 0;
             if ($("mf-size")) $("mf-size").value = "0";
             $("mf-size-custom-wrap")?.classList.add("hidden");
-          } else if (k === "minMbps") encodeFilters.minMbps = 0;
-          else encodeFilters[k] = "all";
+          } else if (k === "minMbps") {
+            encodeFilters.minMbps = 0;
+            if ($("mf-mbps")) $("mf-mbps").value = "0";
+            $("mf-mbps-custom-wrap")?.classList.add("hidden");
+          } else encodeFilters[k] = "all";
           renderQueueList(activeQueue(), activeQueueJobs());
           renderActionBar();
         };
@@ -1205,51 +1338,53 @@
       },
       res: {
         title: "Filter Resolution",
-        field: "res",
-        options: [
-          ["all", "All Resolutions"],
-          ["4k", "≥ 4K (2160p+)"],
-          ["1080p", "≥ 1080p"],
-          ["720p", "≥ 720p"],
-          ["sd", "< 720p"],
-        ],
+        type: "res_slider",
       },
       duration: {
         title: "Filter Duration",
-        field: "duration",
+        type: "numeric_custom",
+        opField: "durOp",
+        valField: "durSecs",
         options: [
-          ["all", "Any Duration"],
-          ["ge_60", "≥ 1 min"],
-          ["ge_300", "≥ 5 min"],
-          ["ge_900", "≥ 15 min"],
-          ["ge_3600", "≥ 1 hour"],
-          ["lt_60", "< 1 min"],
+          [0, "Any Duration"],
+          [60, "1 min"],
+          [300, "5 min"],
+          [900, "15 min"],
+          [3600, "1 hour"],
         ],
+        units: [["s", "sec", 1], ["m", "min", 60], ["h", "hr", 3600]],
+        placeholder: "e.g. 12",
       },
       size: {
-        title: "Filter Size",
-        field: "minMb",
-        numeric: true,
+        title: "Filter File Size",
+        type: "numeric_custom",
+        opField: "sizeOp",
+        valField: "minMb",
         options: [
           [0, "Any Size"],
-          [100, "≥ 100 MB"],
-          [500, "≥ 500 MB"],
-          [1024, "≥ 1 GB"],
-          [2048, "≥ 2 GB"],
-          [5120, "≥ 5 GB"],
+          [100, "100 MB"],
+          [500, "500 MB"],
+          [1024, "1 GB"],
+          [2048, "2 GB"],
+          [5120, "5 GB"],
         ],
+        units: [["MB", "MB", 1], ["GB", "GB", 1024]],
+        placeholder: "e.g. 250",
       },
       bitrate: {
         title: "Filter Bitrate",
-        field: "minMbps",
-        numeric: true,
+        type: "numeric_custom",
+        opField: "bitrateOp",
+        valField: "minMbps",
         options: [
           [0, "Any Bitrate"],
-          [5, "≥ 5 Mbps"],
-          [10, "≥ 10 Mbps"],
-          [20, "≥ 20 Mbps"],
-          [50, "≥ 50 Mbps"],
+          [5, "5 Mbps"],
+          [10, "10 Mbps"],
+          [20, "20 Mbps"],
+          [50, "50 Mbps"],
         ],
+        units: [["Mbps", "Mbps", 1]],
+        placeholder: "e.g. 8.5",
       },
       target: {
         title: "Filter Target Recipe",
@@ -1297,28 +1432,71 @@
           <span>Exclude matching files (invert)</span>
         </label>
       `;
-    } else {
-      const curVal = encodeFilters[cfg.field];
-      const customSizeHtml = colKey === "size" ? `
+    } else if (cfg.type === "res_slider") {
+      pop.style.minWidth = "250px";
+      pop.innerHTML = `
+        <div class="col-filter-popover-title">${cfg.title}</div>
+        <div class="inline-row" style="gap:4px;">
+          <button type="button" class="pill-filter-btn ${encodeFilters.resOp === "ge" ? "active" : ""}" data-pop-res-op="ge" style="flex:1;justify-content:center;font-size:11px;padding:4px 6px;">At least (≥)</button>
+          <button type="button" class="pill-filter-btn ${encodeFilters.resOp === "lt" ? "active" : ""}" data-pop-res-op="lt" style="flex:1;justify-content:center;font-size:11px;padding:4px 6px;">Smaller than (&lt;)</button>
+        </div>
+        <div style="margin-top:4px;">
+          <div class="setup-row-between" style="font-size:12px;margin-bottom:3px;">
+            <span class="muted">Threshold</span>
+            <strong id="col-pop-res-readout">${escapeHtml(formatResFilterLabel(encodeFilters.resOp, encodeFilters.resHeight))}</strong>
+          </div>
+          <input id="col-pop-res-slider" type="range" min="0" max="2160" step="60" value="${encodeFilters.resHeight || 0}" style="width:100%;accent-color:var(--accent-solid);" />
+        </div>
+        <div class="inline-row" style="gap:4px;flex-wrap:wrap;margin-top:2px;">
+          ${[
+            [0, "Any"],
+            [480, "480p"],
+            [720, "720p"],
+            [1080, "1080p"],
+            [1440, "1440p"],
+            [2160, "4K"],
+          ].map(([rv, rlbl]) => `<button type="button" class="pill-filter-btn ${encodeFilters.resHeight === rv ? "active" : ""}" data-pop-res-snap="${rv}" style="font-size:11px;padding:2px 7px;">${rlbl}</button>`).join("")}
+        </div>
+      `;
+    } else if (cfg.type === "numeric_custom") {
+      const curOp = encodeFilters[cfg.opField] || "ge";
+      const curVal = encodeFilters[cfg.valField] || 0;
+      const opSign = opSym(curOp);
+      pop.style.minWidth = "235px";
+      pop.innerHTML = `
+        <div class="col-filter-popover-title">${cfg.title}</div>
+        <div class="inline-row" style="gap:4px;margin-bottom:2px;">
+          <button type="button" class="pill-filter-btn ${curOp === "ge" ? "active" : ""}" data-pop-num-op="ge" style="flex:1;justify-content:center;font-size:11px;padding:3px 6px;">At least (≥)</button>
+          <button type="button" class="pill-filter-btn ${curOp === "lt" ? "active" : ""}" data-pop-num-op="lt" style="flex:1;justify-content:center;font-size:11px;padding:3px 6px;">Smaller than (&lt;)</button>
+        </div>
+        ${cfg.options.map(([val, lbl]) => `
+          <button type="button" class="col-filter-opt ${curVal === val ? "active" : ""}" data-pop-val="${val}">
+            <span>${val === 0 ? escapeHtml(lbl) : `<span class="pop-op-txt">${opSign}</span> ${escapeHtml(lbl)}`}</span>
+            <span>${curVal === val ? "✓" : ""}</span>
+          </button>
+        `).join("")}
         <div style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;">
-          <div class="col-filter-popover-title" style="margin-bottom:4px;">Custom Minimum Size (≥)</div>
+          <div class="col-filter-popover-title" style="margin-bottom:4px;">Custom Threshold (<span class="pop-op-txt">${opSign}</span>)</div>
           <div class="inline-row" style="gap:4px;">
-            <input id="col-pop-size-val" class="full-input" type="number" min="0" step="any" placeholder="e.g. 250" style="width:74px;height:26px;font-size:12px;" />
-            <select id="col-pop-size-unit" class="compact-sel" style="height:26px;">
-              <option value="MB">MB</option>
-              <option value="GB">GB</option>
-            </select>
-            <button id="col-pop-size-apply" class="btn btn-sm btn-primary" type="button" style="height:26px;padding:0 8px;">Apply</button>
+            <input id="col-pop-num-val" class="full-input" type="number" min="0" step="any" placeholder="${escapeHtml(cfg.placeholder || "")}" style="width:74px;height:26px;font-size:12px;" />
+            ${cfg.units.length > 1 ? `
+              <select id="col-pop-num-unit" class="compact-sel" style="height:26px;">
+                ${cfg.units.map(([u, ul]) => `<option value="${u}">${ul}</option>`).join("")}
+              </select>
+            ` : `<span class="muted" style="font-size:11px;">${cfg.units[0][1]}</span>`}
+            <button id="col-pop-num-apply" class="btn btn-sm btn-primary" type="button" style="height:26px;padding:0 8px;">Apply</button>
           </div>
         </div>
-      ` : "";
+      `;
+    } else {
+      const curVal = encodeFilters[cfg.field];
       pop.innerHTML = `<div class="col-filter-popover-title">${cfg.title}</div>` +
         cfg.options.map(([val, lbl]) => `
           <button type="button" class="col-filter-opt ${curVal === val ? "active" : ""}" data-pop-val="${escapeHtml(String(val))}">
             <span>${escapeHtml(lbl)}</span>
             <span>${curVal === val ? "✓" : ""}</span>
           </button>
-        `).join("") + customSizeHtml;
+        `).join("");
     }
 
     document.body.appendChild(pop);
@@ -1358,48 +1536,93 @@
         encodeFilters.searchInvert = !!ev.target.checked;
         renderQueueList(activeQueue(), activeQueueJobs());
       });
-    } else {
+    } else if (cfg.type === "res_slider") {
+      const slider = pop.querySelector("#col-pop-res-slider");
+      const readout = pop.querySelector("#col-pop-res-readout");
+      const syncResPopUI = () => {
+        readout.textContent = formatResFilterLabel(encodeFilters.resOp, encodeFilters.resHeight);
+        slider.value = String(encodeFilters.resHeight || 0);
+        pop.querySelectorAll("[data-pop-res-op]").forEach((b) => b.classList.toggle("active", b.getAttribute("data-pop-res-op") === encodeFilters.resOp));
+        pop.querySelectorAll("[data-pop-res-snap]").forEach((b) => b.classList.toggle("active", Number(b.getAttribute("data-pop-res-snap")) === encodeFilters.resHeight));
+      };
+      pop.querySelectorAll("[data-pop-res-op]").forEach((b) => {
+        b.onclick = () => {
+          encodeFilters.resOp = b.getAttribute("data-pop-res-op");
+          syncResPopUI();
+          renderQueueList(activeQueue(), activeQueueJobs());
+          renderActionBar();
+        };
+      });
+      slider.addEventListener("input", () => {
+        encodeFilters.resHeight = Number(slider.value || 0);
+        syncResPopUI();
+        renderQueueList(activeQueue(), activeQueueJobs());
+        renderActionBar();
+      });
+      pop.querySelectorAll("[data-pop-res-snap]").forEach((b) => {
+        b.onclick = () => {
+          encodeFilters.resHeight = Number(b.getAttribute("data-pop-res-snap") || 0);
+          syncResPopUI();
+          renderQueueList(activeQueue(), activeQueueJobs());
+          renderActionBar();
+        };
+      });
+    } else if (cfg.type === "numeric_custom") {
+      const nVal = pop.querySelector("#col-pop-num-val");
+      const nUnit = pop.querySelector("#col-pop-num-unit");
+      const nApply = pop.querySelector("#col-pop-num-apply");
+      const curRaw = encodeFilters[cfg.valField] || 0;
+      if (curRaw > 0 && nVal) {
+        let picked = cfg.units[0];
+        for (let i = cfg.units.length - 1; i >= 0; i--) {
+          if (curRaw >= cfg.units[i][2]) { picked = cfg.units[i]; break; }
+        }
+        if (nUnit) nUnit.value = picked[0];
+        nVal.value = String(+(curRaw / picked[2]).toFixed(2));
+      }
+      pop.querySelectorAll("[data-pop-num-op]").forEach((b) => {
+        b.onclick = () => {
+          const nextOp = b.getAttribute("data-pop-num-op");
+          encodeFilters[cfg.opField] = nextOp;
+          pop.querySelectorAll("[data-pop-num-op]").forEach((x) => x.classList.toggle("active", x === b));
+          pop.querySelectorAll(".pop-op-txt").forEach((s) => { s.textContent = opSym(nextOp); });
+          if (encodeFilters[cfg.valField] > 0) {
+            renderQueueList(activeQueue(), activeQueueJobs());
+            renderActionBar();
+          }
+        };
+      });
       pop.querySelectorAll("[data-pop-val]").forEach((btn) => {
         btn.onclick = () => {
-          const raw = btn.getAttribute("data-pop-val");
-          encodeFilters[cfg.field] = cfg.numeric ? Number(raw) : raw;
-          if (colKey === "size" && $("mf-size")) {
-            $("mf-size").value = String(encodeFilters.minMb);
-          }
+          encodeFilters[cfg.valField] = Number(btn.getAttribute("data-pop-val") || 0);
           closeColFilterPopover();
           renderQueueList(activeQueue(), activeQueueJobs());
           renderActionBar();
         };
       });
-      if (colKey === "size") {
-        const sVal = pop.querySelector("#col-pop-size-val");
-        const sUnit = pop.querySelector("#col-pop-size-unit");
-        const sApply = pop.querySelector("#col-pop-size-apply");
-        if (encodeFilters.minMb > 0) {
-          if (encodeFilters.minMb >= 1024) {
-            sUnit.value = "GB";
-            sVal.value = String(+(encodeFilters.minMb / 1024).toFixed(2));
-          } else {
-            sUnit.value = "MB";
-            sVal.value = String(+Number(encodeFilters.minMb).toFixed(1));
-          }
-        }
-        const applyCustom = () => {
-          const num = parseFloat(sVal.value);
-          if (!Number.isFinite(num) || num <= 0) {
-            encodeFilters.minMb = 0;
-          } else {
-            encodeFilters.minMb = sUnit.value === "GB" ? num * 1024 : num;
-          }
+      const applyCustomNum = () => {
+        const num = parseFloat(nVal?.value || "");
+        const mult = nUnit
+          ? (cfg.units.find((u) => u[0] === nUnit.value)?.[2] || 1)
+          : cfg.units[0][2];
+        encodeFilters[cfg.valField] = Number.isFinite(num) && num > 0 ? num * mult : 0;
+        closeColFilterPopover();
+        renderQueueList(activeQueue(), activeQueueJobs());
+        renderActionBar();
+      };
+      nApply.onclick = applyCustomNum;
+      nVal?.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); applyCustomNum(); }
+      });
+    } else {
+      pop.querySelectorAll("[data-pop-val]").forEach((btn) => {
+        btn.onclick = () => {
+          encodeFilters[cfg.field] = btn.getAttribute("data-pop-val");
           closeColFilterPopover();
           renderQueueList(activeQueue(), activeQueueJobs());
           renderActionBar();
         };
-        sApply.onclick = applyCustom;
-        sVal.addEventListener("keydown", (e) => {
-          if (e.key === "Enter") { e.preventDefault(); applyCustom(); }
-        });
-      }
+      });
     }
   }
 
@@ -1475,8 +1698,8 @@
           <th style="width:34px;"><input type="checkbox" id="tc-chk-master" ${allVisibleChecked ? "checked" : ""} ${selectableVisible.length === 0 ? "disabled" : ""} title="Toggle all visible selectable files" /></th>
           ${colHdr("file", "File", false, Boolean(encodeFilters.search.trim()))}
           ${colHdr("codec", "Codec", false, encodeFilters.codec !== "all")}
-          ${colHdr("res", "Resolution", false, encodeFilters.res !== "all")}
-          ${colHdr("duration", "Duration", false, encodeFilters.duration !== "all")}
+          ${colHdr("res", "Resolution", false, encodeFilters.resHeight > 0)}
+          ${colHdr("duration", "Duration", false, encodeFilters.durSecs > 0)}
           ${colHdr("size", "Size", true, encodeFilters.minMb > 0)}
           ${colHdr("bitrate", "Bitrate", true, encodeFilters.minMbps > 0)}
           ${colHdr("target", "Target Recipe", false, encodeFilters.target !== "all")}
@@ -3931,52 +4154,112 @@
     if (!dr) return;
     const isHidden = dr.classList.toggle("hidden");
     $("btn-more-filters").setAttribute("aria-expanded", String(!isHidden));
-    syncEncodeFilterControls(searchMatcher);
+    syncEncodeFilterControls();
   });
   $("btn-clear-more-filters")?.addEventListener("click", () => {
     resetAllEncodeFilters();
     renderQueueList(activeQueue(), activeQueueJobs());
     renderActionBar();
   });
-  $("mf-size")?.addEventListener("change", (e) => {
-    const v = e.target.value;
-    const wrap = $("mf-size-custom-wrap");
-    if (v === "custom") {
-      wrap?.classList.remove("hidden");
-      const valEl = $("mf-size-custom-val");
-      if (valEl) {
-        if (encodeFilters.minMb > 0) {
-          if (encodeFilters.minMb >= 1024) {
-            if ($("mf-size-custom-unit")) $("mf-size-custom-unit").value = "GB";
-            valEl.value = String(+(encodeFilters.minMb / 1024).toFixed(2));
-          } else {
-            if ($("mf-size-custom-unit")) $("mf-size-custom-unit").value = "MB";
-            valEl.value = String(+Number(encodeFilters.minMb).toFixed(1));
-          }
-        }
-        valEl.focus();
-      }
-      return;
-    }
-    wrap?.classList.add("hidden");
-    encodeFilters.minMb = Number(v || 0);
+
+  // Resolution slider + op + snap preset
+  $("mf-res-op")?.addEventListener("change", (e) => {
+    encodeFilters.resOp = e.target.value;
     renderQueueList(activeQueue(), activeQueueJobs());
     renderActionBar();
   });
-  const applyDrawerCustomSize = () => {
-    const num = parseFloat($("mf-size-custom-val")?.value || "");
-    const unit = $("mf-size-custom-unit")?.value || "MB";
-    encodeFilters.minMb = Number.isFinite(num) && num > 0 ? (unit === "GB" ? num * 1024 : num) : 0;
+  $("mf-res-slider")?.addEventListener("input", (e) => {
+    encodeFilters.resHeight = Number(e.target.value || 0);
     renderQueueList(activeQueue(), activeQueueJobs());
     renderActionBar();
-  };
-  $("mf-size-custom-val")?.addEventListener("input", applyDrawerCustomSize);
-  $("mf-size-custom-unit")?.addEventListener("change", applyDrawerCustomSize);
+  });
+  $("mf-res-preset")?.addEventListener("change", (e) => {
+    encodeFilters.resHeight = Number(e.target.value || 0);
+    renderQueueList(activeQueue(), activeQueueJobs());
+    renderActionBar();
+  });
+
+  function wireDrawerNumericFilter({ opId, selId, wrapId, valId, unitId, opField, valField, unitMults }) {
+    $(opId)?.addEventListener("change", (e) => {
+      encodeFilters[opField] = e.target.value;
+      renderQueueList(activeQueue(), activeQueueJobs());
+      renderActionBar();
+    });
+    $(selId)?.addEventListener("change", (e) => {
+      const v = e.target.value;
+      const wrap = $(wrapId);
+      if (v === "custom") {
+        wrap?.classList.remove("hidden");
+        const valEl = $(valId);
+        const unitEl = unitId ? $(unitId) : null;
+        if (valEl) {
+          const cur = encodeFilters[valField] || 0;
+          if (cur > 0) {
+            if (unitEl && unitMults) {
+              let chosen = Object.entries(unitMults)[0];
+              for (const entry of Object.entries(unitMults)) {
+                if (cur >= entry[1]) chosen = entry;
+              }
+              unitEl.value = chosen[0];
+              valEl.value = String(+(cur / chosen[1]).toFixed(2));
+            } else {
+              valEl.value = String(+Number(cur).toFixed(1));
+            }
+          }
+          valEl.focus();
+        }
+        return;
+      }
+      wrap?.classList.add("hidden");
+      encodeFilters[valField] = Number(v || 0);
+      renderQueueList(activeQueue(), activeQueueJobs());
+      renderActionBar();
+    });
+    const applyCustom = () => {
+      const num = parseFloat($(valId)?.value || "");
+      const unitKey = unitId ? $(unitId)?.value : null;
+      const mult = unitKey && unitMults ? (unitMults[unitKey] || 1) : 1;
+      encodeFilters[valField] = Number.isFinite(num) && num > 0 ? num * mult : 0;
+      renderQueueList(activeQueue(), activeQueueJobs());
+      renderActionBar();
+    };
+    $(valId)?.addEventListener("input", applyCustom);
+    if (unitId) $(unitId)?.addEventListener("change", applyCustom);
+  }
+
+  wireDrawerNumericFilter({
+    opId: "mf-dur-op",
+    selId: "mf-dur",
+    wrapId: "mf-dur-custom-wrap",
+    valId: "mf-dur-custom-val",
+    unitId: "mf-dur-custom-unit",
+    opField: "durOp",
+    valField: "durSecs",
+    unitMults: { s: 1, m: 60, h: 3600 },
+  });
+  wireDrawerNumericFilter({
+    opId: "mf-size-op",
+    selId: "mf-size",
+    wrapId: "mf-size-custom-wrap",
+    valId: "mf-size-custom-val",
+    unitId: "mf-size-custom-unit",
+    opField: "sizeOp",
+    valField: "minMb",
+    unitMults: { MB: 1, GB: 1024 },
+  });
+  wireDrawerNumericFilter({
+    opId: "mf-mbps-op",
+    selId: "mf-mbps",
+    wrapId: "mf-mbps-custom-wrap",
+    valId: "mf-mbps-custom-val",
+    unitId: null,
+    opField: "bitrateOp",
+    valField: "minMbps",
+    unitMults: null,
+  });
+
   [
     ["mf-codec", "codec", false],
-    ["mf-res", "res", false],
-    ["mf-dur", "duration", false],
-    ["mf-mbps", "minMbps", true],
     ["mf-target", "target", false],
     ["mf-status", "status", false],
   ].forEach(([id, field, isNum]) => {
