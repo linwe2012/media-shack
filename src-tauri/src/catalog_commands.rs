@@ -156,23 +156,35 @@ pub fn catalog_scan_root(
 }
 
 #[tauri::command]
-pub fn catalog_refresh_volumes(state: State<'_, AppState>) -> Result<Vec<VolumeRecord>, String> {
-    refresh_catalog_volumes(&state.scheduler.db)
+pub async fn catalog_refresh_volumes(state: State<'_, AppState>) -> Result<Vec<VolumeRecord>, String> {
+    let db = state.scheduler.db.clone();
+    tokio::task::spawn_blocking(move || refresh_catalog_volumes(&db))
+        .await
+        .map_err(|e| format!("catalog_refresh_volumes task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn catalog_query(state: State<'_, AppState>, filter: CatalogFilter) -> Result<CatalogPage, String> {
-    query_catalog(&state.scheduler.db, &filter)
+pub async fn catalog_query(state: State<'_, AppState>, filter: CatalogFilter) -> Result<CatalogPage, String> {
+    let db = state.scheduler.db.clone();
+    tokio::task::spawn_blocking(move || query_catalog(&db, &filter))
+        .await
+        .map_err(|e| format!("catalog_query task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn catalog_get_asset_detail(state: State<'_, AppState>, file_key: String) -> Result<AssetDetail, String> {
-    get_asset_detail(&state.scheduler.db, &file_key)
+pub async fn catalog_get_asset_detail(state: State<'_, AppState>, file_key: String) -> Result<AssetDetail, String> {
+    let db = state.scheduler.db.clone();
+    tokio::task::spawn_blocking(move || get_asset_detail(&db, &file_key))
+        .await
+        .map_err(|e| format!("catalog_get_asset_detail task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn catalog_get_stats(state: State<'_, AppState>) -> Result<CatalogStats, String> {
-    get_catalog_stats(&state.scheduler.db)
+pub async fn catalog_get_stats(state: State<'_, AppState>) -> Result<CatalogStats, String> {
+    let db = state.scheduler.db.clone();
+    tokio::task::spawn_blocking(move || get_catalog_stats(&db))
+        .await
+        .map_err(|e| format!("catalog_get_stats task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -410,11 +422,14 @@ pub fn duplicates_run_scan(
 }
 
 #[tauri::command]
-pub fn duplicates_list_groups(
+pub async fn duplicates_list_groups(
     state: State<'_, AppState>,
     match_kind: Option<String>,
 ) -> Result<Vec<DuplicateGroup>, String> {
-    list_duplicate_groups(&state.scheduler.db, match_kind.as_deref())
+    let db = state.scheduler.db.clone();
+    tokio::task::spawn_blocking(move || list_duplicate_groups(&db, match_kind.as_deref()))
+        .await
+        .map_err(|e| format!("duplicates_list_groups task failed: {e}"))?
 }
 
 #[tauri::command]

@@ -117,6 +117,7 @@
   let dedupePerceptual = true;
   let dedupeScanning = false;
   let organizeSideTab = "largest"; // "largest" | "duplicates" | "watermarks" | "faces" | "folder" | "library" | "catalog_dups" | "batch" | "catalog_people" | "integrity" | "tasks"
+  let activeEmbeddedTool = null;
   let organizeOverview = null;
   let organizeOverviewQueueId = null;
   let latestTasksCount = 0;
@@ -167,6 +168,7 @@
   }
   let queueJobsById = new Map();
   const storyboardCache = new Map(); // job_id -> array of data/blob URLs
+  const storyboardErrorByJob = new Map(); // job_id -> error message string
   const storyboardInflight = new Set();
   const repairLiveProgress = new Map(); // job_id -> progress obj
 
@@ -754,6 +756,11 @@
       return;
     }
     $("empty-drop-state").classList.add("hidden");
+
+    if (mode !== "organize" && activeEmbeddedTool !== null) {
+      activeEmbeddedTool = null;
+      window.dispatchEvent(new CustomEvent("ms-org-tool-deactivated"));
+    }
 
     if (mode === "explore") {
       views.explore.classList.remove("hidden");
@@ -3446,7 +3453,11 @@
 
     sideRail.querySelectorAll("[data-org-side]").forEach((btn) => {
       btn.onclick = () => {
-        organizeSideTab = btn.getAttribute("data-org-side");
+        const nextTool = btn.getAttribute("data-org-side");
+        if (nextTool === organizeSideTab && EMBEDDED_ORG_PANELS[nextTool]) {
+          activeEmbeddedTool = null;
+        }
+        organizeSideTab = nextTool;
         movePreviewResult = null;
         renderOrganizeView(q, jobs);
         renderActionBar();
@@ -3463,8 +3474,17 @@
         const panel = $(pid);
         if (panel) panel.classList.toggle("hidden", pid !== embeddedPanelId);
       });
-      window.dispatchEvent(new CustomEvent("ms-org-tool-activated", { detail: { tool: organizeSideTab } }));
+      const toolChanged = activeEmbeddedTool !== organizeSideTab;
+      activeEmbeddedTool = organizeSideTab;
+      if (toolChanged) {
+        window.dispatchEvent(new CustomEvent("ms-org-tool-activated", { detail: { tool: organizeSideTab } }));
+      }
       return;
+    }
+
+    if (activeEmbeddedTool !== null) {
+      activeEmbeddedTool = null;
+      window.dispatchEvent(new CustomEvent("ms-org-tool-deactivated"));
     }
 
     embeddedHost.classList.add("hidden");
@@ -4596,21 +4616,26 @@
     const info = jobVideoInfo(j);
     const stamps = [0.10, 0.25, 0.40, 0.60, 0.75, 0.90];
     const cachedUrls = storyboardCache.get(j.id);
+    const sbErr = storyboardErrorByJob.get(j.id);
 
     el.innerHTML = `
       <div class="setup-card">
         <div class="setup-card-head">
           <span class="setup-kicker">6-Frame Scene Preview</span>
-          <button type="button" id="ins-preview-15" class="btn-link">15s Compare</button>
+          <div class="inline-row" style="gap:8px;">
+            ${sbErr ? `<button type="button" id="ins-sb-retry" class="btn-link">Retry Frames</button>` : ""}
+            <button type="button" id="ins-preview-15" class="btn-link">15s Compare</button>
+          </div>
         </div>
         <div class="storyboard-grid">
           ${stamps.map((pct, i) => `
             <div class="storyboard-cell">
-              ${cachedUrls && cachedUrls[i] ? `<img src="${cachedUrls[i]}" alt="Frame ${Math.round(pct * 100)}%" />` : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#71717A;font-size:10px;">Loading…</div>`}
+              ${cachedUrls && cachedUrls[i] ? `<img src="${cachedUrls[i]}" alt="Frame ${Math.round(pct * 100)}%" />` : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#71717A;font-size:10px;">${sbErr ? "Unavailable" : "Loading…"}</div>`}
               <span class="storyboard-ts">${Math.round(pct * 100)}%</span>
             </div>
           `).join("")}
         </div>
+        ${sbErr ? `<div class="muted" style="font-size:10.5px;">Preview frame skipped: ${escapeHtml(sbErr)}</div>` : ""}
         <div>
           <div style="font-size:12px;font-weight:600;word-break:break-all;">${escapeHtml(jobFileName(j))}</div>
           <div class="muted tabular-nums" style="font-size:11px;margin-top:2px;">${fmtBytes(j.input_bytes)} · ${fmtDuration(info.dur)} · ${escapeHtml(info.codec)} ${info.mbps > 0 ? info.mbps + " Mbps" : ""}</div>
@@ -4635,6 +4660,11 @@
       </div>
     `;
 
+    el.querySelector("#ins-sb-retry")?.addEventListener("click", () => {
+      storyboardErrorByJob.delete(j.id);
+      storyboardCache.delete(j.id);
+      renderSidebar();
+    });
     el.querySelector("#ins-preview-15").onclick = () => openSamplePreviewModal(j);
     el.querySelector("#ins-fwd-one").onclick = () => openForwardModal([j.id], dec === "repair" ? "repair" : "encode", "selected file", false);
     el.querySelectorAll("[data-ins-dec]").forEach((b) => {
@@ -4644,7 +4674,7 @@
       };
     });
 
-    if (!cachedUrls && !storyboardInflight.has(j.id)) {
+    if (!cachedUrls && !sbErr && !storyboardInflight.has(j.id)) {
       loadRealStoryboardFrames(j, info.dur, stamps);
     }
   }
@@ -4652,17 +4682,34 @@
   async function loadRealStoryboardFrames(job, durSecs, stamps) {
     storyboardInflight.add(job.id);
     const dur = Math.max(2, durSecs || 12);
+    const urls = [];
+    let firstErr = null;
     try {
-      const urls = await Promise.all(stamps.map(async (frac) => {
+      for (let i = 0; i < stamps.length; i++) {
+        const frac = stamps[i];
         try {
           const ts = Math.min(dur - 0.2, Math.max(0.1, dur * frac));
-          const bytes = await invoke("get_comparison_frame", { mediaPath: job.source_path, timestampSecs: ts, fullResolution: false });
-          return URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }));
-        } catch (_) {
-          return "";
+          const bytes = await invoke("get_comparison_frame", {
+            mediaPath: job.source_path,
+            timestampSecs: ts,
+            fullResolution: false,
+            jobId: job.id,
+          });
+          urls.push(URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" })));
+        } catch (err) {
+          if (i === 0) {
+            firstErr = String(err || "Unable to decode frame");
+            break;
+          }
+          urls.push("");
         }
-      }));
-      storyboardCache.set(job.id, urls);
+      }
+      if (urls.some(Boolean)) {
+        storyboardErrorByJob.delete(job.id);
+        storyboardCache.set(job.id, urls);
+      } else if (firstErr) {
+        storyboardErrorByJob.set(job.id, firstErr);
+      }
       if (selectedJobId === job.id) renderSidebar();
     } finally {
       storyboardInflight.delete(job.id);
@@ -6155,7 +6202,9 @@
     if (q && activeMode(q) === "organize") renderOrganizeView(q, activeQueueJobs());
   });
   window.addEventListener("ms-faces-enabled-changed", (e) => {
-    catalogFacesEnabled = Boolean(e.detail?.enabled);
+    const nextEnabled = Boolean(e.detail?.enabled);
+    if (catalogFacesEnabled === nextEnabled) return;
+    catalogFacesEnabled = nextEnabled;
     const q = activeQueue();
     if (q && activeMode(q) === "organize") renderOrganizeView(q, activeQueueJobs());
   });
@@ -6169,6 +6218,7 @@
       await invoke("set_queue_tab_type", { queueId: q.id, tabType: "organize" });
     }
     organizeSideTab = subtab;
+    activeEmbeddedTool = null;
     const aq = activeQueue();
     if (aq) {
       renderOrganizeView(aq, activeQueueJobs());

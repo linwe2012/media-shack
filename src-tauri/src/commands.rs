@@ -1936,50 +1936,88 @@ pub fn request_sample_preview(
 }
 
 #[tauri::command]
-pub fn get_comparison_frame(
+pub async fn get_comparison_frame(
     state: State<'_, AppState>,
     media_path: String,
     timestamp_secs: f64,
     full_resolution: bool,
+    job_id: Option<String>,
 ) -> Result<Response, String> {
-    let ffmpeg_path = state
+    let ffmpeg_opt = state
         .scheduler
         .tool_status
         .lock()
         .ok()
-        .and_then(|t| t.capabilities.as_ref().map(|c| PathBuf::from(&c.ffmpeg_path)))
-        .ok_or_else(|| "ffmpeg is not configured".to_string())?;
-    // Ensure media_path is either inside previews dir or an active job's source/destination
-    let target = Path::new(&media_path);
-    let canon = target.canonicalize().map_err(|e| e.to_string())?;
-    let preview_canon = state
-        .scheduler
-        .previews
-        .preview_dir
-        .canonicalize()
-        .unwrap_or_else(|_| state.scheduler.previews.preview_dir.clone());
-    if !canon.starts_with(&preview_canon) {
-        let allowed = state
-            .scheduler
-            .db
-            .list_all_jobs()?
-            .iter()
-            .any(|j| {
-                Path::new(&j.source_path) == target
-                    || Path::new(&j.destination_path) == target
-                    || j.staged_path.as_deref() == Some(media_path.as_str())
-                    || j.staged_path.as_deref().map(Path::new) == Some(target)
-            });
-        if !allowed {
+        .and_then(|t| t.capabilities.as_ref().map(|c| PathBuf::from(&c.ffmpeg_path)));
+    let db = state.scheduler.db.clone();
+    let previews = state.scheduler.previews.clone();
+
+    let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let target = Path::new(&media_path);
+        let jobs = db.list_all_jobs()?;
+        let path_matches_job = |j: &JobRecord| -> bool {
+            Path::new(&j.source_path) == target
+                || Path::new(&j.destination_path) == target
+                || j.staged_path.as_deref() == Some(media_path.as_str())
+                || j.staged_path.as_deref().map(Path::new) == Some(target)
+        };
+        let matched_job = jobs.iter().find(|j| match job_id.as_deref() {
+            Some(jid) => j.id == jid && path_matches_job(j),
+            None => path_matches_job(j),
+        });
+
+        let storyboards_dir = previews.preview_dir.join("storyboards");
+        let cache_path = if !full_resolution {
+            matched_job.map(|job| {
+                let mut h = blake3::Hasher::new();
+                h.update(media_path.as_bytes());
+                h.update(&job.input_bytes.to_le_bytes());
+                let ts_cs = (timestamp_secs * 100.0).round() as i64;
+                h.update(&ts_cs.to_le_bytes());
+                storyboards_dir.join(format!("{}.jpg", h.finalize().to_hex()))
+            })
+        } else {
+            None
+        };
+
+        if let Some(ref cp) = cache_path {
+            if cp.is_file() {
+                if let Ok(cached) = std::fs::read(cp) {
+                    if !cached.is_empty() {
+                        return Ok(cached);
+                    }
+                }
+            }
+        }
+
+        let ffmpeg_path = ffmpeg_opt.ok_or_else(|| "ffmpeg is not configured".to_string())?;
+        // Ensure media_path is either inside previews dir or an active job's source/destination
+        let canon = target.canonicalize().map_err(|e| e.to_string())?;
+        let preview_canon = previews
+            .preview_dir
+            .canonicalize()
+            .unwrap_or_else(|_| previews.preview_dir.clone());
+        if !canon.starts_with(&preview_canon) && !jobs.iter().any(path_matches_job) {
             return Err("Path is not an authorized preview or job media path.".to_string());
         }
-    }
-    let bytes = state.scheduler.previews.decode_comparison_frame(
-        &ffmpeg_path,
-        &canon,
-        timestamp_secs,
-        full_resolution,
-    )?;
+
+        let decoded = previews.decode_comparison_frame(
+            &ffmpeg_path,
+            &canon,
+            timestamp_secs,
+            full_resolution,
+        )?;
+        if let Some(ref cp) = cache_path {
+            if !decoded.is_empty() {
+                let _ = std::fs::create_dir_all(&storyboards_dir);
+                let _ = std::fs::write(cp, &decoded);
+            }
+        }
+        Ok(decoded)
+    })
+    .await
+    .map_err(|e| format!("get_comparison_frame task failed: {e}"))??;
+
     Ok(Response::new(bytes))
 }
 

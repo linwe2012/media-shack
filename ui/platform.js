@@ -6,6 +6,8 @@
   // Shared platform state & selection across Resource Tabs, Library, Organize, Duplicates, Repair
   const state = {
     currentView: "transcode",
+    activeOrgTool: null,
+    lastFacesEnabled: null,
     theme: localStorage.getItem("ms_theme") || "auto",
     viewMode: "table", // "table" | "grid"
     roots: [],
@@ -255,12 +257,16 @@
 
   window.addEventListener("ms-org-tool-activated", (e) => {
     const tool = e.detail?.tool;
+    state.activeOrgTool = tool || null;
     if (tool === "library") refreshLibrary();
     if (tool === "catalog_dups") refreshDuplicates();
     if (tool === "batch") renderOrganizeView();
     if (tool === "catalog_people") refreshPeopleView();
     if (tool === "integrity") refreshRepairView();
     if (tool === "tasks") refreshTasksView();
+  });
+  window.addEventListener("ms-org-tool-deactivated", () => {
+    state.activeOrgTool = null;
   });
 
   function openOrganizeSubtab(subtab) {
@@ -305,7 +311,15 @@
   // LIBRARY VIEW
   // =========================================================================
 
+  let libRefreshInFlight = false;
+  let libRefreshQueued = false;
+
   async function refreshLibrary() {
+    if (libRefreshInFlight) {
+      libRefreshQueued = true;
+      return;
+    }
+    libRefreshInFlight = true;
     try {
       const [roots, vols, cols, tags, stats, faceEnabled] = await Promise.all([
         invoke("catalog_list_roots"),
@@ -319,7 +333,11 @@
       state.volumes = vols;
       state.collections = cols;
       state.tags = tags;
-      window.dispatchEvent(new CustomEvent("ms-faces-enabled-changed", { detail: { enabled: Boolean(faceEnabled) } }));
+      const nextFaces = Boolean(faceEnabled);
+      if (state.lastFacesEnabled !== nextFaces) {
+        state.lastFacesEnabled = nextFaces;
+        window.dispatchEvent(new CustomEvent("ms-faces-enabled-changed", { detail: { enabled: nextFaces } }));
+      }
 
       $("lbl-catalog-footer").textContent =
         `Catalog: ${stats.total_files} files (${stats.online_files} online, ${stats.offline_files} offline) · ${fmtBytes(stats.total_bytes)} · ${stats.total_tags} tags`;
@@ -339,6 +357,12 @@
       updateSelectionPill();
     } catch (err) {
       console.error("refreshLibrary error:", err);
+    } finally {
+      libRefreshInFlight = false;
+      if (libRefreshQueued) {
+        libRefreshQueued = false;
+        refreshLibrary();
+      }
     }
   }
 
@@ -980,27 +1004,57 @@
   };
   $("sel-dup-filter").onchange = () => refreshDuplicates();
 
+  let dupRefreshInFlight = false;
+  let dupRefreshQueued = false;
+
   async function refreshDuplicates() {
-    const kind = $("sel-dup-filter").value;
-    state.dupGroups = await invoke("duplicates_list_groups", { matchKind: kind === "all" ? null : kind });
-    const list = $("dup-groups-list");
-    list.innerHTML = "";
-    let totalSave = 0;
-    state.dupGroups.forEach((g) => {
-      totalSave += g.estimated_savings_bytes;
-      const card = document.createElement("div");
-      card.className = "dup-group-card" + (state.selectedDupGroupId === g.group_id ? " active" : "");
-      card.innerHTML = `
-        <div><strong>${esc(g.match_kind)}</strong> · ${(g.confidence * 100).toFixed(0)}%</div>
-        <div class="muted">${g.members.length} files · Save ${fmtBytes(g.estimated_savings_bytes)}</div>`;
-      card.onclick = () => {
-        state.selectedDupGroupId = g.group_id;
+    if (dupRefreshInFlight) {
+      dupRefreshQueued = true;
+      return;
+    }
+    dupRefreshInFlight = true;
+    const summaryEl = $("lbl-dup-summary");
+    if (summaryEl) summaryEl.textContent = "Loading duplicate groups…";
+    try {
+      const kind = $("sel-dup-filter").value;
+      state.dupGroups = await invoke("duplicates_list_groups", { matchKind: kind === "all" ? null : kind });
+      const list = $("dup-groups-list");
+      list.innerHTML = "";
+      let totalSave = 0;
+      if (!state.selectedDupGroupId || !state.dupGroups.some((g) => g.group_id === state.selectedDupGroupId)) {
+        state.selectedDupGroupId = state.dupGroups[0]?.group_id || null;
+      }
+      state.dupGroups.forEach((g) => {
+        totalSave += g.estimated_savings_bytes;
+        const card = document.createElement("div");
+        card.dataset.groupId = g.group_id;
+        card.className = "dup-group-card" + (state.selectedDupGroupId === g.group_id ? " active" : "");
+        card.innerHTML = `
+          <div><strong>${esc(g.match_kind)}</strong> · ${(g.confidence * 100).toFixed(0)}%</div>
+          <div class="muted">${g.members.length} files · Save ${fmtBytes(g.estimated_savings_bytes)}</div>`;
+        card.onclick = () => {
+          state.selectedDupGroupId = g.group_id;
+          list.querySelectorAll(".dup-group-card").forEach((el) => {
+            el.classList.toggle("active", el.dataset.groupId === g.group_id);
+          });
+          renderDupDetail();
+        };
+        list.appendChild(card);
+      });
+      if (summaryEl) summaryEl.textContent = `${state.dupGroups.length} groups · Est. savings ${fmtBytes(totalSave)}`;
+      await renderDupDetail();
+    } catch (err) {
+      console.error("refreshDuplicates error:", err);
+      if (summaryEl) summaryEl.textContent = "Failed to load duplicate groups";
+      const pane = $("dup-detail-pane");
+      if (pane) pane.innerHTML = `<p class="muted">Failed loading Catalog Duplicates: ${esc(String(err))}</p>`;
+    } finally {
+      dupRefreshInFlight = false;
+      if (dupRefreshQueued) {
+        dupRefreshQueued = false;
         refreshDuplicates();
-      };
-      list.appendChild(card);
-    });
-    $("lbl-dup-summary").textContent = `${state.dupGroups.length} groups · Est. savings ${fmtBytes(totalSave)}`;
-    renderDupDetail();
+      }
+    }
   }
 
   async function renderDupDetail() {
@@ -1608,7 +1662,7 @@
   function renderUpdatesCardHtml() {
     const upd = state.updateCheck;
     const prog = state.updateProgress;
-    const curVer = upd?.current_version || "0.3.6";
+    const curVer = upd?.current_version || "0.3.7";
     const pct = prog?.percent != null ? Math.max(0, Math.min(100, prog.percent)) : null;
 
     let statusLine = `<span class="muted">Check GitHub Releases for newer builds.</span>`;
@@ -1931,8 +1985,8 @@
   }
 
   // Listen to backend catalog/tasks/duplicates events
-  event.listen("catalog_changed", () => { if (state.currentView === "library") refreshLibrary(); });
-  event.listen("duplicates_changed", () => { if (state.currentView === "duplicates") refreshDuplicates(); });
+  event.listen("catalog_changed", () => { if (state.currentView === "transcode" && state.activeOrgTool === "library") refreshLibrary(); });
+  event.listen("duplicates_changed", () => { if (state.currentView === "transcode" && state.activeOrgTool === "catalog_dups") refreshDuplicates(); });
   event.listen("tasks_changed", () => { refreshTasksView(); });
   event.listen("update_download_progress", (e) => {
     state.updateProgress = e.payload;
