@@ -566,14 +566,14 @@
                       <div class="min-w-0">
                         <div class="check-title" style="display:inline-flex;align-items:center;">
                           <label for="chk-ten-bit" style="cursor:pointer;">10-bit Color Depth</label>
-                          <button type="button" class="help-q-btn" data-help-toggle="help-tenbit-box" title="Why encode 8-bit sources in 10-bit?">?</button>
+                          <button type="button" class="help-q-btn" data-help-toggle="help-tenbit-box" title="What does 10-bit Color Depth ON vs OFF do?">?</button>
                         </div>
                         <div class="check-sub">On by default (HEVC Main 10 &amp; AV1)</div>
                       </div>
                       <input id="chk-ten-bit" type="checkbox" class="switch-chk" checked />
                     </div>
                     <div id="help-tenbit-box" class="help-tip-box hidden">
-                      <strong>Why 10-bit is ON by default:</strong> Stores 1024 shades/channel (<code>yuv420p10le</code>) instead of 256, preventing gradient banding in skies and dark fades. Because compression wastes fewer bits on banding noise, file size is typically <strong>the same or ~0–8% smaller</strong> than 8-bit (at ~15–25% slower CPU encode speed). Turn off to keep strict 8-bit for legacy players.
+                      <strong>10-bit Color Depth (default: ON):</strong><br>• <strong>On:</strong> Encodes in 10-bit (<code>yuv420p10le</code>, 1024 shades/channel) with smoother gradients, similar or slightly smaller files, and ~15–25% slower encoding.<br>• <strong>Off:</strong> Encodes in 8-bit (<code>yuv420p</code>, 256 shades/channel) for faster encoding and broader legacy player compatibility.
                     </div>
                   </div>
 
