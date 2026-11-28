@@ -512,3 +512,49 @@ fn test_non_destructive_restart_reconciliation_preserves_staging_files() {
         "Unexpected file inside .ffq-staging MUST NOT be wiped by recursive remove_dir_all!"
     );
 }
+
+#[test]
+fn test_listed_videos_isolated_from_queue_and_legacy_canceled_healing() {
+    let dir = TempDir::new().unwrap();
+    let db = Database::open(&dir.path().join("appdata")).unwrap();
+    let work = dir.path().join("videos");
+    std::fs::create_dir_all(&work).unwrap();
+
+    let v1 = work.join("ep01.mp4");
+    let v2 = work.join("ep02.mp4");
+    let v_legacy = work.join("legacy.mp4");
+    std::fs::write(&v1, b"ep1").unwrap();
+    std::fs::write(&v2, b"ep2").unwrap();
+    std::fs::write(&v_legacy, b"legacy").unwrap();
+
+    let mut q = make_queue("q-sep", "Videos", TabType::Encode, 0);
+    q.is_running = true;
+    db.upsert_queue(&q).unwrap();
+
+    let j1 = make_job("jl-1", "q-sep", &v1, "ep01.mp4", &work.join("out1.mkv"), JobStatus::Listed);
+    let j2 = make_job("jl-2", "q-sep", &v2, "ep02.mp4", &work.join("out2.mkv"), JobStatus::Listed);
+    let mut j_leg = make_job(
+        "jl-legacy",
+        "q-sep",
+        &v_legacy,
+        "legacy.mp4",
+        &work.join("out3.mkv"),
+        JobStatus::Canceled,
+    );
+    j_leg.status_reason = Some("Not selected".to_string());
+
+    db.upsert_job(&j1).unwrap();
+    db.upsert_job(&j2).unwrap();
+    db.upsert_job(&j_leg).unwrap();
+
+    // Launch reconciliation heals legacy "Not selected" Canceled items back into Listed videos
+    let _sched = Scheduler::new(db.clone());
+
+    let healed = db.get_job("jl-legacy").unwrap().unwrap();
+    assert_eq!(healed.status, JobStatus::Listed);
+    assert!(healed.status_reason.is_none());
+
+    // Listed jobs must NEVER be treated as Ready/Queued or picked up by the queue runner
+    let all = db.list_jobs_for_queue("q-sep").unwrap();
+    assert!(all.iter().all(|j| j.status == JobStatus::Listed));
+}

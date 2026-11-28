@@ -34,8 +34,8 @@
     },
     encode: {
       label: "Transcode",
-      fullLabel: "Transcode Queue",
-      desc: "Overnight HEVC / AV1 compression with verification and safe cleanup.",
+      fullLabel: "Videos to Transcode",
+      desc: "Filter & configure videos, then add selected files to the Encode Queue.",
       icon: `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>`,
     },
     organize: {
@@ -53,6 +53,14 @@
   };
 
   let snapshot = null;
+  // Rebuilt once per snapshot. Queue rows consult these O(1) indexes instead
+  // of scanning every job in every other tab during each table render.
+  let protectedSourceSet = new Set();
+  let sharedSourceQueue = new Map();
+  let encodeRowNodes = new Map();
+  let encodeJobsById = new Map();
+  let renderedEncodeJobs = [];
+  let renderedEncodeAllJobs = [];
   let selectedJobId = null;
   let sidebarOpen = true;
   let sidebarMode = "setup"; // "setup" | "job"
@@ -105,6 +113,10 @@
 
   const expandedJobIds = new Set();
   const checkedJobIds = new Set();
+  const queueCheckedIds = new Set();
+  let queuePageFilter = "all"; // "all" | "active" | "completed" | "failed"
+  let queuePageNodes = new Map();
+  let queueJobsById = new Map();
   const storyboardCache = new Map(); // job_id -> array of data/blob URLs
   const storyboardInflight = new Set();
   const repairLiveProgress = new Map(); // job_id -> progress obj
@@ -201,16 +213,38 @@
   }
 
   function isProtectedSource(sourcePath) {
-    return (snapshot?.protected_sources || []).includes(sourcePath);
+    return protectedSourceSet.has(sourcePath);
   }
 
   function sharedQueueName(j) {
     if (!snapshot) return null;
     if (isProtectedSource(j.source_path)) return "Protected ★";
-    const other = snapshot.queues.find((oq) =>
-      oq.id !== j.queue_id && snapshot.jobs.some((oj) => oj.queue_id === oq.id && oj.source_path === j.source_path && oj.status !== "completed")
-    );
-    return other ? other.name : null;
+    const owners = sharedSourceQueue.get(j.source_path);
+    if (!owners) return null;
+    if (owners.has(j.queue_id)) {
+      for (const [queueId, name] of owners) if (queueId !== j.queue_id) return name;
+      return null;
+    }
+    return owners.values().next().value || null;
+  }
+
+  function rebuildSourceLookups() {
+    protectedSourceSet = new Set(snapshot?.protected_sources || []);
+    sharedSourceQueue = new Map();
+    if (!snapshot) return;
+    const queueById = new Map(snapshot.queues.map((q) => [q.id, q]));
+    for (const job of snapshot.jobs) {
+      if (job.status === "completed" || !job.source_path) continue;
+      let owners = sharedSourceQueue.get(job.source_path);
+      if (!owners) sharedSourceQueue.set(job.source_path, owners = new Map());
+      if (!owners.has(job.queue_id)) owners.set(job.queue_id, queueById.get(job.queue_id)?.name || "Other tab");
+    }
+    const queueOrder = new Map(snapshot.queues.map((q, index) => [q.id, index]));
+    for (const [path, owners] of sharedSourceQueue) {
+      if (owners.size > 1) {
+        sharedSourceQueue.set(path, new Map([...owners].sort((a, b) => (queueOrder.get(a[0]) ?? 0) - (queueOrder.get(b[0]) ?? 0))));
+      }
+    }
   }
 
   function showToast(message, tone = "info", action = null) {
@@ -253,6 +287,7 @@
 
   async function refreshSnapshot() {
     snapshot = await invoke("get_snapshot");
+    rebuildSourceLookups();
     const jobs = activeQueueJobs();
     if (!selectedJobId || !jobs.some((j) => j.id === selectedJobId)) {
       selectedJobId = jobs[0]?.id || null;
@@ -296,11 +331,13 @@
   function renderAll() {
     if (!snapshot) return;
     renderTabs();
+    renderQueueBadges();
     renderActionBar();
     renderLineageBar();
     renderWorkspace();
     renderSidebar();
     renderFooter();
+    if (currentPlatformView === "queue") renderQueuePage();
   }
 
   function renderTabs() {
@@ -512,22 +549,29 @@
     cancelBtn.classList.add("hidden");
 
     if (mode === "encode") {
-      const selectable = (j) => ["queued", "ready", "canceled"].includes(j.status) && !j.error_message;
+      const selectable = (j) => isEncodeSelectableJob(j);
       const selectedReadyCount = jobs.filter((j) => checkedJobIds.has(j.id) && selectable(j) && j.plan?.is_ready).length;
       const selectedProbingCount = jobs.filter((j) => checkedJobIds.has(j.id) && selectable(j) && !j.plan).length;
-      const readyCount = jobs.filter((j) => ["queued", "ready"].includes(j.status)).length;
+      const queuedJobsAll = (snapshot.jobs || []).filter(isQueuedJob);
+      const activeOrWaitingCount = queuedJobsAll.filter((j) => ["ready", "queued", "probing", "encoding", "verifying", "publishing"].includes(j.status)).length;
       const attCount = jobs.filter((j) => j.status === "needs_attention").length;
-      const activeJob = jobs.find((j) => ["encoding", "verifying", "publishing"].includes(j.status));
-      const interruptedCount = jobs.filter((j) => j.status === "interrupted").length;
+      const activeJob = queuedJobsAll.find((j) => ["encoding", "verifying", "publishing"].includes(j.status));
 
-      if (readyCount > 0 || activeJob) {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = "pill-filter-btn" + (encodeFilters.status === "all" ? " active" : "");
-        b.textContent = activeJob ? `1 active · ${jobs.length} total` : `${jobs.length} files`;
-        b.onclick = () => { encodeFilters.status = "all"; renderWorkspace(); renderActionBar(); };
-        pills.appendChild(b);
+      const viewQueueBtn = $("btn-view-encode-queue");
+      if (viewQueueBtn) {
+        viewQueueBtn.classList.toggle("hidden", queuedJobsAll.length === 0);
+        viewQueueBtn.textContent = activeOrWaitingCount > 0
+          ? `View Queue (${activeOrWaitingCount}) →`
+          : `View Queue (${queuedJobsAll.length}) →`;
       }
+
+      const bAll = document.createElement("button");
+      bAll.type = "button";
+      bAll.className = "pill-filter-btn" + (encodeFilters.status === "all" ? " active" : "");
+      bAll.textContent = `${jobs.length} videos`;
+      bAll.onclick = () => { encodeFilters.status = "all"; renderWorkspace(); renderActionBar(); };
+      pills.appendChild(bAll);
+
       if (attCount > 0) {
         const b = document.createElement("button");
         b.type = "button";
@@ -541,25 +585,30 @@
         pills.appendChild(b);
       }
 
-      const runningActive = q.is_running && !q.is_paused && (activeJob || readyCount > 0);
-      if (runningActive && activeJob) {
+      if (activeJob && activeJob.queue_id === q.id) {
         pauseBtn.classList.remove("hidden");
         pauseBtn.textContent = q.pause_after_current ? "Pause scheduled" : "Pause after file";
         cancelBtn.classList.remove("hidden");
-        startBtn.disabled = false;
-        startBtn.textContent = "Queue Running";
-      } else if (q.is_paused || interruptedCount > 0) {
-        startBtn.disabled = false;
-        startBtn.textContent = "Resume Queue";
-      } else {
-        startBtn.disabled = selectedReadyCount === 0;
-        startBtn.textContent = selectedReadyCount > 0
-          ? `Encode ${selectedReadyCount} Selected`
-          : selectedProbingCount > 0
-            ? `Waiting Stats (${selectedProbingCount})…`
-            : "Select Files to Encode";
       }
-    } else if (mode === "explore") {
+
+      const queueAndStartBtn = $("btn-queue-and-start");
+      if (queueAndStartBtn) {
+        queueAndStartBtn.classList.toggle("hidden", selectedReadyCount === 0);
+      }
+
+      startBtn.disabled = selectedReadyCount === 0;
+      startBtn.textContent = selectedReadyCount > 0
+        ? `Add ${selectedReadyCount} to Queue`
+        : selectedProbingCount > 0
+          ? `Waiting Stats (${selectedProbingCount})…`
+          : "Select Videos to Queue";
+    } else {
+      const prevViewBtn = $("btn-view-encode-queue");
+      if (prevViewBtn) prevViewBtn.classList.add("hidden");
+      const qStartBtn = $("btn-queue-and-start");
+      if (qStartBtn) qStartBtn.classList.add("hidden");
+    }
+    if (mode === "explore") {
       const compCount = jobs.filter((j) => ["compress_balanced", "compress_compact"].includes(jobDecision(j))).length;
       startBtn.disabled = compCount === 0;
       startBtn.textContent = compCount > 0 ? `Send ${compCount} to Transcode` : "Tag Videos to Compress";
@@ -895,8 +944,42 @@
     return ["HEVC", "H265", "AV1"].includes((codecUpper || "").toUpperCase());
   }
 
+  function isQueuedJob(j) {
+    if (!j) return false;
+    if (["queued", "probing", "ready", "encoding", "verifying", "publishing", "completed", "below_savings_target", "failed", "interrupted"].includes(j.status)) {
+      return true;
+    }
+    if (j.status === "canceled" && j.status_reason !== "Not selected") return true;
+    if (j.status === "needs_attention" && ["encoding", "verifying", "publishing"].includes(j.error_stage)) {
+      return true;
+    }
+    return false;
+  }
+
   function isEncodeSelectableJob(j) {
-    return ["queued", "ready", "canceled"].includes(j.status) && !j.error_message;
+    return !isQueuedJob(j) && ["listed", "canceled"].includes(j.status) && !j.error_message;
+  }
+
+  function renderQueueBadges() {
+    const allQueued = (snapshot?.jobs || []).filter(isQueuedJob);
+    const activeOrWaiting = allQueued.filter((j) =>
+      ["ready", "queued", "probing", "encoding", "verifying", "publishing"].includes(j.status)
+    ).length;
+    const isRunning = allQueued.some((j) => ["encoding", "verifying", "publishing"].includes(j.status));
+    const badgeCount = activeOrWaiting > 0 ? activeOrWaiting : allQueued.length;
+
+    const hb = $("header-queue-badge");
+    if (hb) {
+      hb.textContent = String(badgeCount);
+      hb.classList.toggle("hidden", allQueued.length === 0);
+      hb.style.background = isRunning ? "var(--accent-soft)" : "";
+      hb.style.color = isRunning ? "var(--accent-text)" : "";
+    }
+    const nb = $("nav-queue-badge");
+    if (nb) {
+      nb.textContent = String(badgeCount);
+      nb.classList.toggle("hidden", allQueued.length === 0);
+    }
   }
 
   function closeColFilterPopover() {
@@ -1030,6 +1113,7 @@
     const targetKind = j.recipe.family === "remux" ? "remux" : String(j.recipe.codec || "").toLowerCase();
     if (encodeFilters.target !== "all" && targetKind !== encodeFilters.target) return false;
 
+    if (encodeFilters.status === "listed" && !(!isQueuedJob(j) && j.status === "listed")) return false;
     if (encodeFilters.status === "selected" && !(isEncodeSelectableJob(j) && checkedJobIds.has(j.id))) return false;
     if (encodeFilters.status === "ready" && !["queued", "ready"].includes(j.status)) return false;
     if (encodeFilters.status === "completed" && j.status !== "completed") return false;
@@ -1244,7 +1328,7 @@
       chips.push({ key: "target", col: "target", label: `Target: ${encodeFilters.target.toUpperCase()}` });
     }
     if (encodeFilters.status !== "all") {
-      const m = { selected: "Selected", ready: "Ready", completed: "Completed", needs_attention: "Needs Attention", failed: "Failed / Interrupted" };
+      const m = { listed: "Not Yet Queued", selected: "Checked", ready: "In Queue", completed: "Completed", needs_attention: "Needs Attention", failed: "Failed / Interrupted" };
       chips.push({ key: "status", col: "status", label: `Status: ${m[encodeFilters.status] || encodeFilters.status}` });
     }
 
@@ -1397,12 +1481,13 @@
         ],
       },
       status: {
-        title: "Filter Queue Status",
+        title: "Filter Status",
         field: "status",
         options: [
           ["all", "All Statuses"],
-          ["selected", "Selected"],
-          ["ready", "Ready / Queued"],
+          ["listed", "Not Yet Queued"],
+          ["selected", "Checked"],
+          ["ready", "In Queue"],
           ["completed", "Completed"],
           ["needs_attention", "Needs Attention"],
           ["failed", "Failed / Interrupted"],
@@ -1646,7 +1731,7 @@
     }
     syncEncodeFilterControls(searchMatcher);
 
-    const alreadyHevc = allJobs.filter((j) => ["queued", "ready"].includes(j.status) && isModernCodec(jobVideoInfo(j).codec));
+    const alreadyHevc = allJobs.filter((j) => !isQueuedJob(j) && j.status === "listed" && isModernCodec(jobVideoInfo(j).codec));
     const skipBtn = $("btn-triage-skip-hevc");
     skipBtn.classList.toggle("hidden", alreadyHevc.length === 0);
     if (alreadyHevc.length > 0) skipBtn.textContent = `Remove ${alreadyHevc.length} HEVC/AV1`;
@@ -1661,6 +1746,10 @@
 
     const rowsEl = $("queue-rows");
     rowsEl.innerHTML = "";
+    encodeRowNodes = new Map();
+    renderedEncodeJobs = jobs;
+    renderedEncodeAllJobs = allJobs;
+    encodeJobsById = new Map(jobs.map((job) => [job.id, job]));
     const activeProg = snapshot.active_progress;
 
     const selectableVisible = jobs.filter(isEncodeSelectableJob);
@@ -1703,7 +1792,7 @@
           ${colHdr("size", "Size", true, encodeFilters.minMb > 0)}
           ${colHdr("bitrate", "Bitrate", true, encodeFilters.minMbps > 0)}
           ${colHdr("target", "Target Recipe", false, encodeFilters.target !== "all")}
-          ${colHdr("status", "Queue Status", false, encodeFilters.status !== "all")}
+          ${colHdr("status", "Status", false, encodeFilters.status !== "all")}
           <th style="text-align:right;">Actions</th>
         </tr>
       </thead>
@@ -1716,7 +1805,38 @@
     masterChk.addEventListener("change", (e) => {
       if (e.target.checked) selectableVisible.forEach((j) => checkedJobIds.add(j.id));
       else selectableVisible.forEach((j) => checkedJobIds.delete(j.id));
-      renderQueueList(q, allJobs);
+      syncEncodeSelectionUi();
+      renderActionBar();
+      renderSidebar();
+    });
+
+    tbody.addEventListener("click", (e) => {
+      const row = e.target.closest("tr.tc-row");
+      if (!row) return;
+      const id = row.dataset.jobId;
+      const job = encodeJobsById.get(id);
+      if (!job) return;
+      if (e.target.closest(".job-chevron")) {
+        if (expandedJobIds.has(id)) expandedJobIds.delete(id);
+        else expandedJobIds.add(id);
+        renderQueueList(q, allJobs);
+        return;
+      }
+      if (e.target.closest("button, input")) return;
+      encodeRowNodes.get(selectedJobId)?.classList.remove("selected");
+      selectedJobId = id;
+      row.classList.add("selected");
+      sidebarMode = "job";
+      sidebarOpen = true;
+      renderSidebar();
+    });
+    tbody.addEventListener("change", (e) => {
+      if (!e.target.matches(".job-chk")) return;
+      const id = e.target.closest("tr.tc-row")?.dataset.jobId;
+      if (!id) return;
+      if (e.target.checked) checkedJobIds.add(id);
+      else checkedJobIds.delete(id);
+      syncEncodeSelectionUi();
       renderActionBar();
       renderSidebar();
     });
@@ -1764,7 +1884,7 @@
 
       let statusHtml = "";
       if (j.status === "completed" && j.output_bytes) {
-        statusHtml = `<span class="badge badge-ok">${fmtRatio(j.input_bytes, j.output_bytes)}</span>`;
+        statusHtml = `<span class="badge badge-ok">Done ${fmtRatio(j.input_bytes, j.output_bytes)}</span>`;
       } else if (prog) {
         const dur = prog.duration_secs || 1;
         const pct = Math.min(100, (prog.out_time_secs / dur) * 100);
@@ -1778,10 +1898,10 @@
         statusHtml = `<span class="badge badge-active">${escapeHtml(statusLabel(j.status))}</span>`;
       } else if (info.isPendingStats) {
         statusHtml = `<span class="badge">Computing stats…</span>`;
-      } else if (j.status === "canceled" && j.status_reason === "Not selected") {
-        statusHtml = isChecked ? `<span class="badge badge-active">Selected</span>` : `<span class="badge">Skipped</span>`;
-      } else if (j.status === "ready") {
-        statusHtml = isChecked ? `<span class="badge badge-active">Selected</span>` : `<span class="badge">Not Selected</span>`;
+      } else if (["ready", "queued"].includes(j.status)) {
+        statusHtml = `<span class="badge badge-active">In Queue</span>`;
+      } else if (j.status === "listed" || (j.status === "canceled" && j.status_reason === "Not selected")) {
+        statusHtml = isChecked ? `<span class="badge badge-active">Selected</span>` : `<span class="badge">Ready</span>`;
       } else {
         statusHtml = `<span class="badge ${statusBadgeClass(j.status)}">${escapeHtml(statusLabel(j.status))}</span>`;
       }
@@ -1789,6 +1909,7 @@
       const codecBadgeClass = isModernCodec(info.codec) ? "badge-warn" : "";
 
       const tr = document.createElement("tr");
+      tr.dataset.jobId = j.id;
       tr.className = "tc-row" + (isSel ? " selected" : "") + (canChk && !isChecked ? " tc-unchecked" : "");
       tr.innerHTML = `
         <td><input type="checkbox" class="job-chk" ${isChecked ? "checked" : ""} ${canChk ? "" : "disabled"} /></td>
@@ -1813,32 +1934,9 @@
         <td class="tabular-nums" style="text-align:right;font-weight:600;">${fmtBytes(j.input_bytes)}</td>
         <td class="tabular-nums muted" style="text-align:right;">${info.mbps > 0 ? `${info.mbps} Mbps` : "—"}</td>
         <td class="muted">${escapeHtml(targetDesc)}</td>
-        <td>${statusHtml}</td>
+        <td data-status-cell>${statusHtml}</td>
         <td style="text-align:right;"><div class="row-actions-slot inline-row" style="justify-content:flex-end;gap:3px;"></div></td>
       `;
-
-      tr.addEventListener("click", (e) => {
-        if (e.target.closest("button") || e.target.closest("input")) return;
-        selectedJobId = j.id;
-        sidebarMode = "job";
-        sidebarOpen = true;
-        renderAll();
-      });
-
-      tr.querySelector(".job-chk").addEventListener("change", (e) => {
-        if (e.target.checked) checkedJobIds.add(j.id);
-        else checkedJobIds.delete(j.id);
-        renderQueueList(q, allJobs);
-        renderActionBar();
-        renderSidebar();
-      });
-
-      tr.querySelector(".job-chevron").addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (expandedJobIds.has(j.id)) expandedJobIds.delete(j.id);
-        else expandedJobIds.add(j.id);
-        renderQueueList(q, allJobs);
-      });
 
       const acts = tr.querySelector(".row-actions-slot");
       if (j.status === "encoding") {
@@ -1865,17 +1963,25 @@
         b.onclick = (e) => { e.stopPropagation(); invoke("retry_jobs", { jobIds: [j.id] }); };
         acts.appendChild(b);
       }
-      if (canChk || ["needs_attention", "interrupted", "failed"].includes(j.status)) {
+      if (canChk || ["ready", "queued", "needs_attention", "interrupted", "failed", "completed", "below_savings_target"].includes(j.status)) {
         const rm = document.createElement("button");
         rm.type = "button";
         rm.className = "btn btn-ghost btn-sm";
         rm.textContent = "×";
-        rm.title = "Remove from tab (keeps original on disk)";
-        rm.onclick = (e) => { e.stopPropagation(); checkedJobIds.delete(j.id); invoke("remove_pending_jobs", { jobIds: [j.id] }); };
+        rm.title = isQueuedJob(j)
+          ? "Remove from Queue (returns video to list)"
+          : "Remove from tab (keeps file on disk)";
+        rm.onclick = (e) => {
+          e.stopPropagation();
+          checkedJobIds.delete(j.id);
+          if (isQueuedJob(j)) invoke("dequeue_jobs", { jobIds: [j.id] });
+          else invoke("remove_pending_jobs", { jobIds: [j.id] });
+        };
         acts.appendChild(rm);
       }
 
       tbody.appendChild(tr);
+      encodeRowNodes.set(j.id, tr);
 
       if (j.status === "needs_attention" && j.error_message) {
         const errTr = document.createElement("tr");
@@ -1912,6 +2018,387 @@
     });
 
     rowsEl.appendChild(tbl);
+  }
+
+  function syncEncodeSelectionUi() {
+    let checkedCount = 0;
+    let checkedBytes = 0;
+    let selectableVisible = 0;
+    let checkedVisible = 0;
+    for (const job of renderedEncodeAllJobs) {
+      if (checkedJobIds.has(job.id) && isEncodeSelectableJob(job)) {
+        checkedCount++;
+        checkedBytes += job.input_bytes || 0;
+      }
+    }
+    for (const job of renderedEncodeJobs) {
+      if (!isEncodeSelectableJob(job)) continue;
+      selectableVisible++;
+      const checked = checkedJobIds.has(job.id);
+      if (checked) checkedVisible++;
+      const row = encodeRowNodes.get(job.id);
+      if (!row) continue;
+      row.classList.toggle("tc-unchecked", !checked);
+      const box = row.querySelector(".job-chk");
+      if (box) box.checked = checked;
+      const status = row.querySelector("[data-status-cell]");
+      if (status && (job.status === "listed" || (job.status === "canceled" && job.status_reason === "Not selected"))) {
+        status.innerHTML = checked ? '<span class="badge badge-active">Selected</span>' : '<span class="badge">Ready</span>';
+      }
+    }
+    const pill = $("lbl-encode-sel-pill");
+    if (pill) {
+      pill.textContent = `${checkedCount} selected (${fmtBytes(checkedBytes)})`;
+      pill.classList.toggle("hidden", checkedCount === 0);
+    }
+    $("btn-desel-all")?.classList.toggle("hidden", checkedCount === 0);
+    const master = $("tc-chk-master");
+    if (master) {
+      master.checked = selectableVisible > 0 && checkedVisible === selectableVisible;
+      master.indeterminate = checkedVisible > 0 && checkedVisible < selectableVisible;
+    }
+  }
+
+  function updateEncodeProgressDom(progress) {
+    if (!progress?.job_id) return;
+    const row = encodeRowNodes.get(progress.job_id);
+    if (!row) return;
+    const job = encodeJobsById.get(progress.job_id);
+    if (!job || job.status !== "encoding") return;
+    const cell = row.querySelector("[data-status-cell]");
+    if (!cell) return;
+    const duration = progress.duration_secs || 1;
+    const pct = Math.min(100, (progress.out_time_secs / duration) * 100);
+    cell.innerHTML = `<div class="tabular-nums" style="min-width:120px;"><div style="font-size:11px;font-weight:600;color:var(--accent-text);">${pct.toFixed(1)}% · ETA ${progress.eta_secs ? fmtDuration(progress.eta_secs) : "—"}</div><div class="progress-track" style="height:5px;margin-top:3px;"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+  }
+
+  function updateQueuePageProgressDom(progress) {
+    if (!progress?.job_id) return;
+    const row = queuePageNodes.get(progress.job_id);
+    if (!row) return;
+    const job = queueJobsById.get(progress.job_id);
+    if (!job || job.status !== "encoding") return;
+    const cell = row.querySelector("[data-q-status-cell]");
+    if (!cell) return;
+    const duration = progress.duration_secs || 1;
+    const pct = Math.min(100, (progress.out_time_secs / duration) * 100);
+    cell.innerHTML = `<div class="tabular-nums" style="min-width:140px;"><div style="font-size:11px;font-weight:600;color:var(--accent-text);">${pct.toFixed(1)}%${progress.speed ? ` · ${progress.speed.toFixed(2)}x` : ""} · ETA ${progress.eta_secs ? fmtDuration(progress.eta_secs) : "—"}</div><div class="progress-track" style="height:5px;margin-top:3px;"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+  }
+
+  function openEnqueueConsentModal(q, resp, jobIds, startNow) {
+    openModal(
+      "Confirm Batch Source Cleanup",
+      `<p><strong>Automatic Trash is enabled for "${escapeHtml(q.name)}".</strong> Move ${resp.consent_jobs.length} verified originals (${fmtBytes(resp.consent_total_bytes)}) to OS Trash after full decode verification?</p>`,
+      [
+        {
+          label: "Keep originals (recommended)",
+          cls: "btn btn-primary",
+          onClick: async () => {
+            await invoke("update_queue_settings", {
+              queueId: q.id,
+              patch: { ...q, cleanup_policy: "keep_originals" },
+            });
+            closeModal();
+            await invoke("enqueue_jobs", { queueId: q.id, jobIds, startNow, consentConfirmed: false });
+          },
+        },
+        {
+          label: `Trash ${resp.consent_jobs.length} verified originals`,
+          cls: "btn btn-danger",
+          onClick: async () => {
+            closeModal();
+            await invoke("enqueue_jobs", { queueId: q.id, jobIds, startNow, consentConfirmed: true });
+          },
+        },
+      ]
+    );
+  }
+
+  function openStartAllConsentModal(resp) {
+    openModal(
+      "Confirm Automatic Cleanup for Queued Jobs",
+      `<p><strong>Trash after verification is enabled</strong> on ${resp.consent_jobs.length} queued file(s) (${fmtBytes(resp.consent_total_bytes)}).</p>`,
+      [
+        {
+          label: "Cancel",
+          cls: "btn btn-ghost",
+          onClick: closeModal,
+        },
+        {
+          label: `Confirm & Start Queue`,
+          cls: "btn btn-danger",
+          onClick: async () => {
+            closeModal();
+            await invoke("start_all_ready_queues", { consentConfirmed: true });
+          },
+        },
+      ]
+    );
+  }
+
+  function renderQueuePage() {
+    const el = $("view-queue");
+    if (!el || !snapshot) return;
+
+    const queuesById = new Map((snapshot.queues || []).map((q) => [q.id, q]));
+    const allQueued = (snapshot.jobs || [])
+      .filter(isQueuedJob)
+      .sort((a, b) => (a.position || 0) - (b.position || 0));
+
+    const activeList = allQueued.filter((j) =>
+      ["ready", "queued", "probing", "encoding", "verifying", "publishing"].includes(j.status)
+    );
+    const completedList = allQueued.filter((j) => j.status === "completed");
+    const failedList = allQueued.filter((j) =>
+      ["failed", "interrupted", "below_savings_target", "needs_attention", "canceled"].includes(j.status)
+    );
+
+    const visible = queuePageFilter === "active"
+      ? activeList
+      : queuePageFilter === "completed"
+        ? completedList
+        : queuePageFilter === "failed"
+          ? failedList
+          : allQueued;
+
+    const removableVisible = visible.filter((j) =>
+      !["probing", "encoding", "verifying", "publishing"].includes(j.status)
+    );
+    const checkedRemovable = allQueued.filter((j) =>
+      queueCheckedIds.has(j.id) && !["probing", "encoding", "verifying", "publishing"].includes(j.status)
+    );
+    const allChecked = removableVisible.length > 0 && removableVisible.every((j) => queueCheckedIds.has(j.id));
+    const someChecked = removableVisible.some((j) => queueCheckedIds.has(j.id)) && !allChecked;
+
+    const isEncodingNow = allQueued.find((j) => ["encoding", "verifying", "publishing"].includes(j.status));
+    const waitingReadyCount = allQueued.filter((j) => ["ready", "queued"].includes(j.status)).length;
+    const retryableIds = allQueued.filter((j) => ["failed", "interrupted", "canceled", "needs_attention"].includes(j.status)).map((j) => j.id);
+    const finishedIds = allQueued.filter((j) => ["completed", "below_savings_target", "canceled"].includes(j.status)).map((j) => j.id);
+    const activeProg = snapshot.active_progress;
+
+    el.innerHTML = `
+      <div class="queue-page-header">
+        <div>
+          <div class="inline-row" style="gap:10px;flex-wrap:wrap;">
+            <h2 style="margin:0;font-size:17px;">Encode Queue</h2>
+            <span class="counts-pill tabular-nums">${activeList.length} active/waiting · ${completedList.length} completed${failedList.length ? ` · ${failedList.length} failed` : ""}</span>
+          </div>
+          <div class="muted" style="font-size:12px;margin-top:3px;">Only files explicitly added to the Queue appear here. Removing an item takes it off the Queue while keeping it in your Video List.</div>
+        </div>
+        <div class="inline-row" style="gap:6px;flex-wrap:wrap;">
+          <button type="button" id="qp-back-videos" class="btn btn-sm btn-secondary">← Back to Video List</button>
+          ${isEncodingNow ? `<button type="button" id="qp-live" class="btn btn-sm btn-secondary"><span class="dot pulse"></span> Live Preview</button>` : ""}
+          ${isEncodingNow ? `<button type="button" id="qp-pause" class="btn btn-sm btn-warn-outline">Pause After File</button>` : ""}
+          ${isEncodingNow ? `<button type="button" id="qp-cancel" class="btn btn-sm btn-danger-outline">Cancel Current</button>` : ""}
+          ${(!isEncodingNow && waitingReadyCount > 0) ? `<button type="button" id="qp-start" class="btn btn-sm btn-primary">Start Queue (${waitingReadyCount})</button>` : ""}
+          ${retryableIds.length > 0 ? `<button type="button" id="qp-retry-all" class="btn btn-sm btn-secondary">Retry Failed (${retryableIds.length})</button>` : ""}
+          ${checkedRemovable.length > 0 ? `<button type="button" id="qp-remove-checked" class="btn btn-sm btn-danger-outline">Remove ${checkedRemovable.length} from Queue</button>` : ""}
+          ${finishedIds.length > 0 ? `<button type="button" id="qp-clear-finished" class="btn btn-sm btn-ghost">Clear Finished (${finishedIds.length})</button>` : ""}
+        </div>
+      </div>
+
+      <div class="queue-page-subbar">
+        <div class="inline-row" style="gap:6px;flex-wrap:wrap;">
+          <button type="button" class="pill-filter-btn ${queuePageFilter === "all" ? "active" : ""}" data-qp-flt="all">All (${allQueued.length})</button>
+          <button type="button" class="pill-filter-btn ${queuePageFilter === "active" ? "active" : ""}" data-qp-flt="active">Queued &amp; Active (${activeList.length})</button>
+          <button type="button" class="pill-filter-btn ${queuePageFilter === "completed" ? "active" : ""}" data-qp-flt="completed">Completed (${completedList.length})</button>
+          <button type="button" class="pill-filter-btn ${queuePageFilter === "failed" ? "active" : ""}" data-qp-flt="failed">Failed / Interrupted (${failedList.length})</button>
+        </div>
+      </div>
+
+      ${visible.length === 0 ? `
+        <div class="queue-empty-box">
+          <strong>${allQueued.length === 0 ? "Your Encode Queue is empty" : "No queued items match this filter"}</strong>
+          <p class="muted" style="font-size:12px;margin:6px 0 12px;">${allQueued.length === 0 ? "Select videos on the Transcode page and click \"Add to Queue\" to schedule them here." : "Switch filter pills above to inspect other queued items."}</p>
+          ${allQueued.length === 0 ? `<button type="button" id="qp-empty-back" class="btn btn-sm btn-primary">Browse Videos to Transcode</button>` : ""}
+        </div>
+      ` : `<div id="qp-table-wrap" class="transcode-table-wrap"></div>`}
+    `;
+
+    el.querySelector("#qp-back-videos")?.addEventListener("click", () => {
+      window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "transcode" } }));
+    });
+    el.querySelector("#qp-empty-back")?.addEventListener("click", () => {
+      window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "transcode" } }));
+    });
+    el.querySelectorAll("[data-qp-flt]").forEach((b) => {
+      b.onclick = () => { queuePageFilter = b.getAttribute("data-qp-flt"); renderQueuePage(); };
+    });
+    el.querySelector("#qp-start")?.addEventListener("click", async () => {
+      try {
+        const resp = await invoke("start_all_ready_queues", { consentConfirmed: null });
+        if (resp && resp.requires_cleanup_consent) openStartAllConsentModal(resp);
+      } catch (err) {
+        showToast(String(err), "warn");
+      }
+    });
+    el.querySelector("#qp-pause")?.addEventListener("click", () => {
+      if (isEncodingNow) invoke("pause_after_current", { queueId: isEncodingNow.queue_id });
+    });
+    el.querySelector("#qp-cancel")?.addEventListener("click", () => invoke("cancel_current_file", { jobId: null }));
+    el.querySelector("#qp-live")?.addEventListener("click", () => {
+      if (isEncodingNow) openLivePreviewModal(isEncodingNow.id);
+    });
+    el.querySelector("#qp-retry-all")?.addEventListener("click", () => {
+      if (retryableIds.length > 0) invoke("retry_jobs", { jobIds: retryableIds });
+    });
+    el.querySelector("#qp-remove-checked")?.addEventListener("click", async () => {
+      const ids = checkedRemovable.map((j) => j.id);
+      if (!ids.length) return;
+      await invoke("dequeue_jobs", { jobIds: ids });
+      ids.forEach((id) => queueCheckedIds.delete(id));
+      showToast(`Removed ${ids.length} item(s) from Queue (still in Video List).`, "info");
+    });
+    el.querySelector("#qp-clear-finished")?.addEventListener("click", async () => {
+      if (!finishedIds.length) return;
+      await invoke("dequeue_jobs", { jobIds: finishedIds });
+      finishedIds.forEach((id) => queueCheckedIds.delete(id));
+      showToast(`Cleared ${finishedIds.length} finished item(s) from Queue.`, "info");
+    });
+
+    const wrap = el.querySelector("#qp-table-wrap");
+    if (!wrap) return;
+
+    const tbl = document.createElement("table");
+    tbl.className = "transcode-table";
+    tbl.innerHTML = `
+      <thead>
+        <tr>
+          <th style="width:34px;"><input type="checkbox" id="qp-chk-master" ${allChecked ? "checked" : ""} ${removableVisible.length === 0 ? "disabled" : ""} /></th>
+          <th style="width:76px;">#</th>
+          <th>Video &amp; Tab</th>
+          <th>Target Recipe</th>
+          <th style="text-align:right;">Size</th>
+          <th>Queue Status</th>
+          <th style="text-align:right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    `;
+    const tbody = tbl.querySelector("tbody");
+    const masterChk = tbl.querySelector("#qp-chk-master");
+    if (masterChk) masterChk.indeterminate = someChecked;
+    masterChk?.addEventListener("change", (e) => {
+      if (e.target.checked) removableVisible.forEach((j) => queueCheckedIds.add(j.id));
+      else removableVisible.forEach((j) => queueCheckedIds.delete(j.id));
+      renderQueuePage();
+    });
+
+    queuePageNodes = new Map();
+    queueJobsById = new Map(visible.map((j) => [j.id, j]));
+
+    visible.forEach((j, idx) => {
+      const qObj = queuesById.get(j.queue_id);
+      const info = jobVideoInfo(j);
+      const isBusy = ["probing", "encoding", "verifying", "publishing"].includes(j.status);
+      const prog = activeProg && activeProg.job_id === j.id ? activeProg : null;
+      const targetDesc = j.recipe.family === "remux"
+        ? `Remux · ${j.recipe.container.toUpperCase()}`
+        : `${j.recipe.codec.toUpperCase()} CRF ${j.recipe.crf} · ${j.recipe.container.toUpperCase()}`;
+
+      let stHtml = "";
+      if (j.status === "completed" && j.output_bytes) {
+        stHtml = `<span class="badge badge-ok">Done ${fmtRatio(j.input_bytes, j.output_bytes)} · ${fmtBytes(j.output_bytes)}</span>`;
+      } else if (prog) {
+        const dur = prog.duration_secs || 1;
+        const pct = Math.min(100, (prog.out_time_secs / dur) * 100);
+        stHtml = `<div class="tabular-nums" style="min-width:140px;"><div style="font-size:11px;font-weight:600;color:var(--accent-text);">${pct.toFixed(1)}%${prog.speed ? ` · ${prog.speed.toFixed(2)}x` : ""} · ETA ${prog.eta_secs ? fmtDuration(prog.eta_secs) : "—"}</div><div class="progress-track" style="height:5px;margin-top:3px;"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+      } else if (["encoding", "verifying", "publishing", "probing"].includes(j.status)) {
+        stHtml = `<span class="badge badge-active">${escapeHtml(statusLabel(j.status))}</span>`;
+      } else if (["ready", "queued"].includes(j.status)) {
+        stHtml = `<span class="badge badge-active">${qObj?.is_running && !qObj?.is_paused ? "Queued (Running)" : "Queued"}</span>`;
+      } else {
+        stHtml = `<span class="badge ${statusBadgeClass(j.status)}">${escapeHtml(statusLabel(j.status))}</span>`;
+      }
+
+      const sameQWaiting = allQueued.filter((x) => x.queue_id === j.queue_id && ["ready", "queued"].includes(x.status));
+      const waitPos = sameQWaiting.findIndex((x) => x.id === j.id);
+      const canUp = waitPos > 0;
+      const canDn = waitPos >= 0 && waitPos < sameQWaiting.length - 1;
+
+      const tr = document.createElement("tr");
+      tr.className = "tc-row";
+      tr.dataset.jobId = j.id;
+      tr.innerHTML = `
+        <td><input type="checkbox" class="qp-row-chk" ${queueCheckedIds.has(j.id) ? "checked" : ""} ${isBusy ? "disabled" : ""} /></td>
+        <td class="tabular-nums">
+          <div class="inline-row" style="gap:3px;">
+            <span class="muted" style="min-width:18px;">${idx + 1}</span>
+            ${canUp ? `<button type="button" class="btn btn-ghost btn-sm qp-mv-up" title="Move earlier" style="padding:0 4px;">↑</button>` : ""}
+            ${canDn ? `<button type="button" class="btn btn-ghost btn-sm qp-mv-dn" title="Move later" style="padding:0 4px;">↓</button>` : ""}
+          </div>
+        </td>
+        <td class="min-w-0" style="max-width:300px;">
+          <div class="inline-row" style="gap:6px;">
+            ${jobStatusIconHtml(j.status)}
+            <div class="min-w-0" style="flex:1;">
+              <div class="inline-row" style="gap:6px;flex-wrap:wrap;">
+                <strong class="truncate" title="${escapeHtml(j.source_path)}">${escapeHtml(jobFileName(j))}</strong>
+                ${qObj ? `<span class="badge">${escapeHtml(qObj.name)}</span>` : ""}
+              </div>
+              <div class="mono muted truncate" style="font-size:10.5px;">${escapeHtml(info.codec)} · ${escapeHtml(info.res)} · ${info.dur > 0 ? fmtDuration(info.dur) : "—"}</div>
+            </div>
+          </div>
+        </td>
+        <td class="min-w-0" style="max-width:220px;">
+          <div>${escapeHtml(targetDesc)}</div>
+          <div class="mono muted truncate" style="font-size:10.5px;" title="${escapeHtml(j.destination_path)}">→ ${escapeHtml(j.destination_path.split(/[/\\]/).pop() || "")}</div>
+        </td>
+        <td class="tabular-nums" style="text-align:right;font-weight:600;">${fmtBytes(j.input_bytes)}</td>
+        <td data-q-status-cell>${stHtml}</td>
+        <td style="text-align:right;">
+          <div class="inline-row" style="justify-content:flex-end;gap:4px;">
+            ${j.status === "encoding" ? `<button type="button" class="btn btn-sm btn-secondary qp-act-live">Live</button>` : ""}
+            ${j.status === "completed" ? `<button type="button" class="btn btn-sm btn-secondary qp-act-show">Show</button>` : ""}
+            ${["failed", "interrupted", "canceled", "needs_attention"].includes(j.status) ? `<button type="button" class="btn btn-sm btn-secondary qp-act-retry">Retry</button>` : ""}
+            ${!isBusy ? `<button type="button" class="btn btn-sm btn-ghost qp-act-deq" title="Remove from Queue (keeps file in Video List)">Remove</button>` : ""}
+          </div>
+        </td>
+      `;
+
+      tr.querySelector(".qp-row-chk")?.addEventListener("change", (ev) => {
+        if (ev.target.checked) queueCheckedIds.add(j.id);
+        else queueCheckedIds.delete(j.id);
+        renderQueuePage();
+      });
+      tr.querySelector(".qp-mv-up")?.addEventListener("click", async () => {
+        const ids = (snapshot.jobs || []).filter((x) => x.queue_id === j.queue_id).map((x) => x.id);
+        const a = ids.indexOf(j.id);
+        const b = ids.indexOf(sameQWaiting[waitPos - 1].id);
+        if (a >= 0 && b >= 0) {
+          [ids[a], ids[b]] = [ids[b], ids[a]];
+          await invoke("reorder_jobs", { queueId: j.queue_id, orderedJobIds: ids });
+        }
+      });
+      tr.querySelector(".qp-mv-dn")?.addEventListener("click", async () => {
+        const ids = (snapshot.jobs || []).filter((x) => x.queue_id === j.queue_id).map((x) => x.id);
+        const a = ids.indexOf(j.id);
+        const b = ids.indexOf(sameQWaiting[waitPos + 1].id);
+        if (a >= 0 && b >= 0) {
+          [ids[a], ids[b]] = [ids[b], ids[a]];
+          await invoke("reorder_jobs", { queueId: j.queue_id, orderedJobIds: ids });
+        }
+      });
+      tr.querySelector(".qp-act-live")?.addEventListener("click", () => openLivePreviewModal(j.id));
+      tr.querySelector(".qp-act-show")?.addEventListener("click", () => invoke("reveal_output", { path: j.destination_path }));
+      tr.querySelector(".qp-act-retry")?.addEventListener("click", () => invoke("retry_jobs", { jobIds: [j.id] }));
+      tr.querySelector(".qp-act-deq")?.addEventListener("click", () => {
+        queueCheckedIds.delete(j.id);
+        invoke("dequeue_jobs", { jobIds: [j.id] });
+      });
+
+      tbody.appendChild(tr);
+      queuePageNodes.set(j.id, tr);
+
+      if (["failed", "needs_attention"].includes(j.status) && j.error_message) {
+        const errRow = document.createElement("tr");
+        errRow.className = "tc-subrow";
+        errRow.innerHTML = `<td colspan="7"><span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span></td>`;
+        tbody.appendChild(errRow);
+      }
+    });
+
+    wrap.appendChild(tbl);
   }
 
   function renderExpandedMediaHtml(j) {
@@ -3614,7 +4101,7 @@
   }
 
   function statusLabel(st) {
-    return { queued: "Queued", probing: "Probing", ready: "Ready", needs_attention: "Needs review", encoding: "Encoding", verifying: "Verifying", publishing: "Publishing", completed: "Verified", below_savings_target: "Kept original (<savings)", failed: "Failed", canceled: "Canceled", interrupted: "Interrupted" }[st] || st;
+    return { listed: "Ready", queued: "Queued", probing: "Probing", ready: "In Queue", needs_attention: "Needs review", encoding: "Encoding", verifying: "Verifying", publishing: "Publishing", completed: "Verified", below_savings_target: "Kept original (<savings)", failed: "Failed", canceled: "Canceled", interrupted: "Interrupted" }[st] || st;
   }
   function statusBadgeClass(st) {
     if (st === "completed") return "badge-ok";
@@ -4041,6 +4528,7 @@
     currentPlatformView = e.detail?.view || "transcode";
     if (currentPlatformView === "settings") settingsTabOpen = true;
     renderTabs();
+    if (currentPlatformView === "queue") renderQueuePage();
   });
   window.addEventListener("ms-open-tools-modal", openToolsModal);
 
@@ -4107,19 +4595,40 @@
       return;
     }
 
-    const isResume = q.is_paused || jobs.some((j) => j.status === "interrupted");
-    if (isResume) {
-      const resp = await invoke("resume_queue", { queueId: q.id, consentConfirmed: null });
-      if (resp && resp.requires_cleanup_consent) openCleanupConsentModal(q, resp, null);
-      return;
-    }
     const selectedIds = jobs.filter((j) => checkedJobIds.has(j.id) && isEncodeSelectableJob(j) && j.plan?.is_ready).map((j) => j.id);
     if (selectedIds.length === 0) {
-      return showToast("Check at least one file in the table (or use Criteria Select) before encoding.", "warn");
+      return showToast("Check at least one video in the list before adding to the Queue.", "warn");
     }
-    const resp = await invoke("start_queue", { queueId: q.id, consentConfirmed: null, selectedJobIds: selectedIds });
-    if (resp && resp.requires_cleanup_consent) openCleanupConsentModal(q, resp, selectedIds);
+    try {
+      await invoke("enqueue_jobs", { queueId: q.id, jobIds: selectedIds, startNow: false, consentConfirmed: null });
+      selectedIds.forEach((id) => checkedJobIds.delete(id));
+      showToast(`Added ${selectedIds.length} video${selectedIds.length === 1 ? "" : "s"} to the Encode Queue.`, "success");
+    } catch (err) {
+      showToast(String(err), "warn");
+    }
   };
+
+  $("btn-queue-and-start")?.addEventListener("click", async () => {
+    const q = activeQueue();
+    if (!q) return;
+    const jobs = activeQueueJobs();
+    const selectedIds = jobs.filter((j) => checkedJobIds.has(j.id) && isEncodeSelectableJob(j) && j.plan?.is_ready).map((j) => j.id);
+    if (selectedIds.length === 0) {
+      return showToast("Check at least one video first.", "warn");
+    }
+    try {
+      const resp = await invoke("enqueue_jobs", { queueId: q.id, jobIds: selectedIds, startNow: true, consentConfirmed: null });
+      selectedIds.forEach((id) => checkedJobIds.delete(id));
+      if (resp && resp.requires_cleanup_consent) openEnqueueConsentModal(q, resp, selectedIds, true);
+      else showToast(`Added ${selectedIds.length} video(s) and started Queue.`, "success");
+    } catch (err) {
+      showToast(String(err), "warn");
+    }
+  });
+
+  $("btn-view-encode-queue")?.addEventListener("click", () => {
+    window.dispatchEvent(new CustomEvent("ms-request-switch-view", { detail: { view: "queue" } }));
+  });
 
   $("btn-pause-after").onclick = () => invoke("pause_after_current", { queueId: activeQueue().id });
   $("btn-cancel-current").onclick = () => invoke("cancel_current_file", { jobId: null });
@@ -4300,7 +4809,7 @@
     renderSidebar();
   };
   $("btn-triage-skip-hevc").onclick = async () => {
-    const ids = activeQueueJobs().filter((j) => ["queued", "ready"].includes(j.status) && isModernCodec(jobVideoInfo(j).codec)).map((j) => j.id);
+    const ids = activeQueueJobs().filter((j) => !isQueuedJob(j) && j.status === "listed" && isModernCodec(jobVideoInfo(j).codec)).map((j) => j.id);
     if (ids.length > 0) {
       ids.forEach((id) => checkedJobIds.delete(id));
       await invoke("remove_pending_jobs", { jobIds: ids });
@@ -4313,7 +4822,7 @@
   };
   $("btn-clear-completed").onclick = () => {
     const ids = activeQueueJobs().filter((j) => ["completed", "below_savings_target", "canceled"].includes(j.status)).map((j) => j.id);
-    if (ids.length > 0) invoke("remove_pending_jobs", { jobIds: ids });
+    if (ids.length > 0) invoke("dequeue_jobs", { jobIds: ids });
   };
 
   // Segmented setup controls in sidebar
@@ -4334,7 +4843,7 @@
   $("btn-profile-menu").onclick = openProfilesModal;
   $("btn-apply-waiting").onclick = () => {
     const q = activeQueue();
-    const checkedWaiting = activeQueueJobs().filter((j) => checkedJobIds.has(j.id) && ["queued", "ready", "needs_attention", "interrupted", "failed", "canceled"].includes(j.status)).map((j) => j.id);
+    const checkedWaiting = activeQueueJobs().filter((j) => checkedJobIds.has(j.id) && ["listed", "queued", "ready", "needs_attention", "interrupted", "failed", "canceled"].includes(j.status)).map((j) => j.id);
     invoke("apply_queue_settings_to_waiting", { queueId: q.id, jobIds: checkedWaiting.length > 0 ? checkedWaiting : null });
   };
 
@@ -4447,8 +4956,8 @@
   event.listen("job_progress", (e) => {
     if (!snapshot) return;
     snapshot.active_progress = e.payload;
-    if (activeMode(activeQueue()) === "encode") renderQueueList(activeQueue(), activeQueueJobs());
-    renderFooter();
+    if (currentPlatformView === "queue") updateQueuePageProgressDom(e.payload);
+    if (activeMode(activeQueue()) === "encode") updateEncodeProgressDom(e.payload);
   });
   event.listen("sample_preview_progress", async () => {
     snapshot = await invoke("get_snapshot");

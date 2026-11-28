@@ -218,6 +218,7 @@
   const utilMenu = $("primary-nav-tabs");
   const utilBtn = $("btn-utility-menu");
   const backToTabsBtn = $("btn-back-to-tabs");
+  const openQueueBtn = $("btn-open-queue");
   const openSettingsTabBtn = $("btn-open-settings-tab");
   if (utilBtn && utilMenu) {
     utilBtn.addEventListener("click", (e) => {
@@ -233,6 +234,9 @@
   if (backToTabsBtn) {
     backToTabsBtn.addEventListener("click", () => switchView("transcode"));
   }
+  if (openQueueBtn) {
+    openQueueBtn.addEventListener("click", () => switchView("queue"));
+  }
   if (openSettingsTabBtn) {
     openSettingsTabBtn.addEventListener("click", () => {
       window.dispatchEvent(new CustomEvent("ms-open-settings-tab"));
@@ -244,6 +248,7 @@
     state.currentView = view;
     if (utilMenu) utilMenu.classList.add("hidden");
     if (backToTabsBtn) backToTabsBtn.classList.toggle("hidden", view === "transcode" || view === "settings");
+    if (openQueueBtn) openQueueBtn.classList.toggle("active", view === "queue");
     if (openSettingsTabBtn) openSettingsTabBtn.classList.toggle("active", view === "settings");
     document.querySelectorAll(".nav-tab").forEach((b) => {
       b.classList.toggle("active", b.dataset.view === view);
@@ -808,7 +813,7 @@
     const qid = snap.active_queue_id || snap.queues[0]?.id;
     if (!qid) return;
     const n = await invoke("transcode_enqueue_from_catalog", { queueId: qid, fileKeys: keys });
-    alert(`Added ${n} video(s) to transcode queue.`);
+    alert(`Added ${n} video(s) to Transcode list.`);
     switchView("transcode");
   }
 

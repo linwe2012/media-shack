@@ -218,7 +218,8 @@ fn find_blocking_job_reference(
         // Hold source while any referencing job still needs it (including retryable failures/pending items)
         let other_needs_source = matches!(
             other.status,
-            JobStatus::Queued
+            JobStatus::Listed
+                | JobStatus::Queued
                 | JobStatus::Probing
                 | JobStatus::Ready
                 | JobStatus::NeedsAttention

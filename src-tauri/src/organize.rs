@@ -1221,8 +1221,22 @@ fn sync_jobs_after_file_move(
         j.consent_id = None;
         if let Some(ref probe) = j.probe {
             let plan = build_track_plan(new_path, probe, &j.recipe, &j.compat_overrides);
-            if matches!(j.status, JobStatus::Ready | JobStatus::NeedsAttention) {
-                j.status = if plan.is_ready { JobStatus::Ready } else { JobStatus::NeedsAttention };
+            let was_listed = j.status == JobStatus::Listed
+                || (j.status == JobStatus::NeedsAttention
+                    && matches!(
+                        j.error_stage.as_deref(),
+                        Some("probe" | "planning" | "preflight") | None
+                    ));
+            if matches!(j.status, JobStatus::Listed | JobStatus::Ready | JobStatus::NeedsAttention) {
+                j.status = if plan.is_ready {
+                    if was_listed {
+                        JobStatus::Listed
+                    } else {
+                        JobStatus::Ready
+                    }
+                } else {
+                    JobStatus::NeedsAttention
+                };
             }
             j.plan = Some(plan);
         }

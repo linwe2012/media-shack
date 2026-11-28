@@ -738,7 +738,7 @@ pub fn transcode_enqueue_from_catalog(
                 Ok(pr) => {
                     let pl = build_track_plan(src_p, &pr, &q.recipe, &CompatOverrides::default());
                     let st = if pl.is_ready {
-                        JobStatus::Ready
+                        JobStatus::Listed
                     } else {
                         JobStatus::NeedsAttention
                     };
@@ -746,7 +746,7 @@ pub fn transcode_enqueue_from_catalog(
                 }
                 Err(e) => (None, None, JobStatus::NeedsAttention, Some(e)),
             },
-            None => (None, None, JobStatus::Queued, None),
+            None => (None, None, JobStatus::Listed, None),
         };
 
         let job = JobRecord {

@@ -3832,6 +3832,36 @@ input[type="radio"] {
   font-weight: 600;
 }
 
+#view-queue {
+  padding: 16px 22px 28px;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.queue-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.queue-page-subbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.queue-empty-box {
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  padding: 36px 20px;
+  text-align: center;
+  color: var(--muted);
+}
+
 .help-q-btn {
   display: inline-flex;
   align-items: center;

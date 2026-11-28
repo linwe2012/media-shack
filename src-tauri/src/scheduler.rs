@@ -222,6 +222,7 @@ impl Scheduler {
         }
 
         // 3. Reconcile any leftover jobs in active states without stale attempt rows
+        //    and migrate legacy "Canceled (Not selected)" rows back to clean Listed items.
         for mut job in self.db.list_all_jobs()? {
             if matches!(
                 job.status,
@@ -229,6 +230,13 @@ impl Scheduler {
             ) {
                 job.status = JobStatus::Interrupted;
                 job.status_reason = Some("Interrupted by previous exit".to_string());
+                job.updated_at = Utc::now().timestamp();
+                let _ = self.db.upsert_job(&job);
+            } else if job.status == JobStatus::Canceled
+                && job.status_reason.as_deref() == Some("Not selected")
+            {
+                job.status = JobStatus::Listed;
+                job.status_reason = None;
                 job.updated_at = Utc::now().timestamp();
                 let _ = self.db.upsert_job(&job);
             }

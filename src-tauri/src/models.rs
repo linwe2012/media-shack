@@ -289,6 +289,7 @@ pub struct QueueTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobStatus {
+    Listed,
     Queued,
     Probing,
     Ready,
@@ -306,6 +307,7 @@ pub enum JobStatus {
 impl JobStatus {
     pub fn as_str(self) -> &'static str {
         match self {
+            JobStatus::Listed => "listed",
             JobStatus::Queued => "queued",
             JobStatus::Probing => "probing",
             JobStatus::Ready => "ready",
@@ -323,6 +325,7 @@ impl JobStatus {
 
     pub fn from_str(s: &str) -> Self {
         match s {
+            "listed" => JobStatus::Listed,
             "queued" => JobStatus::Queued,
             "probing" => JobStatus::Probing,
             "ready" => JobStatus::Ready,
@@ -342,7 +345,8 @@ impl JobStatus {
     pub fn is_pending_editable(self) -> bool {
         matches!(
             self,
-            JobStatus::Queued
+            JobStatus::Listed
+                | JobStatus::Queued
                 | JobStatus::Ready
                 | JobStatus::NeedsAttention
                 | JobStatus::Interrupted
