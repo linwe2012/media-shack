@@ -793,9 +793,19 @@ fn integration_source_cleanup_contract_and_safety_cases() {
     // Note: reset cleanup_outcome back to Pending after prior rejected attempts
     job.cleanup_outcome = CleanupOutcome::Pending;
     db.upsert_job(&job).unwrap();
-    let done_job = execute_cleanup_for_job(&db, Some(&ffmpeg), &job.id, true).unwrap();
-    assert_eq!(done_job.cleanup_outcome, CleanupOutcome::Trashed);
-    assert!(!disp_src.exists());
+    #[cfg(target_os = "macos")]
+    {
+        let done_job = execute_cleanup_for_job(&db, Some(&ffmpeg), &job.id, true).unwrap();
+        assert_eq!(done_job.cleanup_outcome, CleanupOutcome::Trashed);
+        assert!(!disp_src.exists());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Recoverable-only OS Trash is disabled on Windows until strict Recycle Bin policy + FOFX_RECYCLEONDELETE checks are enabled
+        let res = execute_cleanup_for_job(&db, Some(&ffmpeg), &job.id, true);
+        assert!(res.is_err());
+        assert!(disp_src.exists());
+    }
     assert!(out_file.exists());
 
     // Clean up our test artifact from ~/.Trash on macOS so we leave user's Trash clean
