@@ -6,7 +6,7 @@
 - **Clean release build (`cargo tauri build`):** `54.09s` Rust compile, `74.24s` total including `.app` and `.dmg` bundling
 - **Incremental release build:** `26.25s`–`29.78s` Rust compile
 - **macOS `.app` bundle:** `11.88 MiB` (`src-tauri/target/release/bundle/macos/Media Shack.app`)
-- **macOS `.dmg` installer:** `4.43 MiB` (v0.1.0 baseline: `src-tauri/target/release/bundle/dmg/Media Shack_0.1.0_aarch64.dmg`; current release: `0.3.0`)
+- **macOS `.dmg` installer:** `4.43 MiB` (v0.1.0 baseline: `src-tauri/target/release/bundle/dmg/Media Shack_0.1.0_aarch64.dmg`; current release: `0.3.1`)
 - **Window Chrome:** Cross-platform Chrome-style overlay titlebar via `tauri-plugin-decorum` `1.1` (macOS `Overlay` traffic lights + fullscreen inset sync; Windows frameless Snap Layout controls)
 - **In-App Updates:** Checks GitHub Releases (`linwe2012/media-shack`), downloads matching platform `.dmg` / `.exe` installer with progress, and opens/reveals installer
 - **Workspace Navigation:** Removed global title-bar `Library & Tools` menu and global `Queue` view; Library Catalog, Catalog Duplicates, Batch Rename/AI, Catalog People, Integrity & PAR2, and Tasks & Budgets now live as sub-tabs inside `Organize`, and each Encode tab displays its own Queue inside the tab with real-time per-video compression ratio, current output size, and ETA

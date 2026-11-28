@@ -3034,7 +3034,7 @@
       },
     });
 
-    openModalEl(`Preview · ${name}`, wrap, buttons);
+    openModalEl(`Preview · ${name}`, wrap, buttons, { wide: true });
     loadFrame(seekT);
   }
 
@@ -4667,21 +4667,44 @@
   }
 
   // Shared Modal Utilities + Preview / Review / Live / Tools / Profiles
-  function openModal(title, html, buttons) {
+  function openModal(title, html, buttons, opts) {
     const div = document.createElement("div");
     div.innerHTML = html;
-    openModalEl(title, div, buttons);
+    openModalEl(title, div, buttons, opts);
   }
-  function openModalEl(title, bodyEl, buttons) {
+  function openModalEl(title, bodyEl, buttons, opts = {}) {
     const root = $("modal-root");
     const box = $("modal-box");
+    const wide = Boolean(opts && opts.wide);
+    const keepExpanded = !root.classList.contains("hidden") && wide && box.classList.contains("modal-preview") && box.classList.contains("modal-expanded");
+    box.classList.toggle("modal-preview", wide);
+    box.classList.toggle("modal-expanded", keepExpanded);
     box.innerHTML = "";
     const head = document.createElement("div");
     head.className = "modal-head";
     head.innerHTML = `<h2>${escapeHtml(title)}</h2>`;
+    const headActions = document.createElement("div");
+    headActions.className = "modal-head-actions";
+    if (wide) {
+      const expBtn = document.createElement("button");
+      expBtn.type = "button";
+      expBtn.className = "btn btn-ghost btn-sm";
+      expBtn.title = "Toggle larger / fullscreen preview";
+      const syncExpLabel = () => {
+        const exp = box.classList.contains("modal-expanded");
+        expBtn.textContent = exp ? "⤡ Restore" : "⤢ Expand";
+      };
+      syncExpLabel();
+      expBtn.onclick = () => {
+        box.classList.toggle("modal-expanded");
+        syncExpLabel();
+      };
+      headActions.appendChild(expBtn);
+    }
     const xBtn = document.createElement("button");
     xBtn.type = "button"; xBtn.className = "btn btn-ghost btn-sm"; xBtn.textContent = "×"; xBtn.onclick = closeModal;
-    head.appendChild(xBtn);
+    headActions.appendChild(xBtn);
+    head.appendChild(headActions);
     const body = document.createElement("div");
     body.className = "modal-body";
     body.appendChild(bodyEl);
@@ -4699,6 +4722,8 @@
   }
   function closeModal() {
     $("modal-root").classList.add("hidden");
+    const box = $("modal-box");
+    if (box) box.classList.remove("modal-preview", "modal-expanded");
     openSampleRefresh = null;
     if (livePreviewTimer) { clearInterval(livePreviewTimer); livePreviewTimer = null; }
     if (currentLiveJobId) { invoke("stop_live_preview").catch(() => {}); currentLiveJobId = null; }
@@ -4808,6 +4833,7 @@
     let seekOffset = 0;
     let zoom100 = false;
     let usingFrameFallback = false;
+    let soloPane = null;
 
     const draw = async () => {
       const sp = snapshot.sample_preview && snapshot.sample_preview.job_id === job.id ? snapshot.sample_preview : null;
@@ -4837,13 +4863,13 @@
               <span id="cmp-delta-stats" class="muted tabular-nums" style="font-size:11px;"></span>
             </div>
             <div id="cmp-grid" class="compare-grid">
-              <div class="compare-pane ${zoom100 ? "zoom-100" : ""}"><div class="compare-label">Reference (Original)</div><video id="vid-orig" controls muted playsinline></video><img id="img-orig" class="hidden" /></div>
-              <div class="compare-pane ${zoom100 ? "zoom-100" : ""}"><div class="compare-label">Test (Encoded · ${escapeHtml(sp.recipe_snapshot.codec.toUpperCase())} CRF ${sp.recipe_snapshot.crf})</div><video id="vid-enc" controls muted playsinline></video><img id="img-enc" class="hidden" /></div>
-              <div id="pane-cmp-delta" class="compare-pane ${zoom100 ? "zoom-100" : ""} hidden"><div class="compare-label">Delta (Amplified Diff)</div><img id="img-cmp-delta" /></div>
+              <div id="pane-cmp-orig" class="compare-pane ${zoom100 ? "zoom-100" : ""}"><div class="compare-label"><span>Reference (Original)</span><button type="button" class="compare-pane-expand-btn" data-solo-pane="orig">Expand</button></div><video id="vid-orig" controls muted playsinline></video><img id="img-orig" class="hidden" /></div>
+              <div id="pane-cmp-enc" class="compare-pane ${zoom100 ? "zoom-100" : ""}"><div class="compare-label"><span>Test (Encoded · ${escapeHtml(sp.recipe_snapshot.codec.toUpperCase())} CRF ${sp.recipe_snapshot.crf})</span><button type="button" class="compare-pane-expand-btn" data-solo-pane="enc">Expand</button></div><video id="vid-enc" controls muted playsinline></video><img id="img-enc" class="hidden" /></div>
+              <div id="pane-cmp-delta" class="compare-pane ${zoom100 ? "zoom-100" : ""} hidden"><div class="compare-label"><span>Delta (Amplified Diff)</span><button type="button" class="compare-pane-expand-btn" data-solo-pane="delta">Expand</button></div><img id="img-cmp-delta" /></div>
             </div>`;
         }
       }
-      openModalEl(`15-Second Sample — ${jobFileName(job)}`, wrap, [{ label: "Done", cls: "btn btn-primary", onClick: closeModal }]);
+      openModalEl(`15-Second Sample — ${jobFileName(job)}`, wrap, [{ label: "Done", cls: "btn btn-primary", onClick: closeModal }], { wide: true });
       wrap.querySelector("#smp-start").onchange = (e) => { startInput = Number(e.target.value); wrap.querySelector("#smp-scrub").value = startInput; };
       wrap.querySelector("#smp-scrub").oninput = (e) => { startInput = Number(e.target.value); wrap.querySelector("#smp-start").value = startInput; };
       wrap.querySelector("#smp-run").onclick = async () => { await invoke("request_sample_preview", { jobId: job.id, startSecs: startInput }); await refreshSnapshot(); draw(); };
@@ -4851,6 +4877,23 @@
       if (sp && sp.status === "ready") {
         const vo = wrap.querySelector("#vid-orig"), ve = wrap.querySelector("#vid-enc"), io = wrap.querySelector("#img-orig"), ie = wrap.querySelector("#img-enc");
         const deltaPane = wrap.querySelector("#pane-cmp-delta"), deltaImg = wrap.querySelector("#img-cmp-delta"), deltaChk = wrap.querySelector("#cmp-delta-chk"), deltaGain = wrap.querySelector("#cmp-delta-gain"), deltaStats = wrap.querySelector("#cmp-delta-stats"), cmpGrid = wrap.querySelector("#cmp-grid");
+        const syncSoloState = () => {
+          if (soloPane === "delta" && deltaPane.classList.contains("hidden")) soloPane = null;
+          cmpGrid.classList.toggle("has-solo", Boolean(soloPane));
+          for (const key of ["orig", "enc", "delta"]) {
+            wrap.querySelector(`#pane-cmp-${key}`)?.classList.toggle("pane-solo", soloPane === key);
+            const btn = wrap.querySelector(`[data-solo-pane="${key}"]`);
+            if (btn) btn.textContent = soloPane === key ? "Split View" : "Expand";
+          }
+        };
+        wrap.querySelectorAll("[data-solo-pane]").forEach((btn) => {
+          btn.onclick = () => {
+            const key = btn.getAttribute("data-solo-pane");
+            soloPane = soloPane === key ? null : key;
+            syncSoloState();
+          };
+        });
+        syncSoloState();
         const protoBase = navigator.userAgent.includes("Windows") ? "http://preview.localhost" : "preview://localhost";
         vo.src = `${protoBase}/${encodeURIComponent(`${job.id}/original_sample.mp4`)}`;
         ve.src = `${protoBase}/${encodeURIComponent(`${job.id}/encoded_sample.${sp.recipe_snapshot.container}`)}`;
@@ -4880,6 +4923,7 @@
             cmpGrid.classList.remove("cols-3");
             if (deltaStats) deltaStats.textContent = "";
           }
+          syncSoloState();
         };
         deltaChk?.addEventListener("change", () => {
           deltaGain?.classList.toggle("hidden", !deltaChk.checked);
@@ -4890,6 +4934,7 @@
             deltaPane.classList.add("hidden");
             cmpGrid.classList.remove("cols-3");
             if (deltaStats) deltaStats.textContent = "";
+            syncSoloState();
           }
         });
         deltaGain?.addEventListener("change", () => { if (deltaChk?.checked) loadExactFrames(seekOffset).catch(() => {}); });
@@ -4911,6 +4956,7 @@
     let showSideBySide = true;
     let showDelta = false;
     let deltaGain = 4;
+    let soloPane = null;
 
     const wrap = document.createElement("div");
     wrap.innerHTML = `
@@ -4924,34 +4970,53 @@
       </div>
       <div id="lp-grid" class="compare-grid">
         <div id="lp-pane-orig" class="compare-pane">
-          <div class="compare-label">Reference (Original)</div>
+          <div class="compare-label"><span>Reference (Original)</span><button type="button" class="compare-pane-expand-btn" data-lp-solo="orig">Expand</button></div>
           <img id="lp-img-orig" alt="Reference frame" />
         </div>
         <div id="lp-pane-enc" class="compare-pane">
-          <div class="compare-label">Test (Encoded Live)</div>
+          <div class="compare-label"><span>Test (Encoded Live)</span><button type="button" class="compare-pane-expand-btn" data-lp-solo="enc">Expand</button></div>
           <img id="lp-img-enc" alt="Live encoded frame" />
         </div>
         <div id="lp-pane-delta" class="compare-pane hidden">
-          <div class="compare-label" id="lp-delta-lbl">Delta (Amplified 4× Diff)</div>
+          <div class="compare-label"><span id="lp-delta-lbl">Delta (Amplified 4× Diff)</span><button type="button" class="compare-pane-expand-btn" data-lp-solo="delta">Expand</button></div>
           <img id="lp-img-delta" alt="Delta difference frame" />
         </div>
       </div>
     `;
-    openModalEl("Live Comparison Preview (Silent)", wrap, [{ label: "Hide preview", cls: "btn btn-primary", onClick: closeModal }]);
+    openModalEl("Live Comparison Preview (Silent)", wrap, [{ label: "Hide preview", cls: "btn btn-primary", onClick: closeModal }], { wide: true });
 
     const syncGridLayout = () => {
       const grid = $("lp-grid");
       const pOrig = $("lp-pane-orig");
+      const pEnc = $("lp-pane-enc");
       const pDelta = $("lp-pane-delta");
-      if (!grid || !pOrig || !pDelta) return;
+      if (!grid || !pOrig || !pEnc || !pDelta) return;
       pOrig.classList.toggle("hidden", !showSideBySide);
       pDelta.classList.toggle("hidden", !showDelta);
+      if ((soloPane === "orig" && !showSideBySide) || (soloPane === "delta" && !showDelta)) {
+        soloPane = null;
+      }
       grid.classList.remove("cols-1", "cols-3");
       const panesVisible = (showSideBySide ? 1 : 0) + 1 + (showDelta ? 1 : 0);
       if (panesVisible === 1) grid.classList.add("cols-1");
       else if (panesVisible === 3) grid.classList.add("cols-3");
+      grid.classList.toggle("has-solo", Boolean(soloPane));
+      pOrig.classList.toggle("pane-solo", soloPane === "orig");
+      pEnc.classList.toggle("pane-solo", soloPane === "enc");
+      pDelta.classList.toggle("pane-solo", soloPane === "delta");
+      wrap.querySelectorAll("[data-lp-solo]").forEach((btn) => {
+        const key = btn.getAttribute("data-lp-solo");
+        btn.textContent = soloPane === key ? "Split View" : "Expand";
+      });
       if ($("lp-delta-lbl")) $("lp-delta-lbl").textContent = `Delta (Amplified ${deltaGain}× Diff)`;
     };
+    wrap.querySelectorAll("[data-lp-solo]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.getAttribute("data-lp-solo");
+        soloPane = soloPane === key ? null : key;
+        syncGridLayout();
+      });
+    });
 
     const sbsChk = $("lp-sbs-chk");
     const deltaChk = $("lp-delta-chk");
