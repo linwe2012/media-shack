@@ -2000,6 +2000,100 @@ pub fn get_live_preview_frame(state: State<'_, AppState>) -> Result<Response, St
 }
 
 #[tauri::command]
+pub fn get_live_comparison_bundle(
+    state: State<'_, AppState>,
+    include_delta: Option<bool>,
+    delta_gain: Option<f64>,
+) -> Result<LiveComparisonBundle, String> {
+    Ok(state.scheduler.previews.get_live_comparison_bundle(
+        include_delta.unwrap_or(false),
+        delta_gain.unwrap_or(4.0),
+    ))
+}
+
+#[tauri::command]
+pub fn get_sample_comparison_pair(
+    state: State<'_, AppState>,
+    source_path: String,
+    encoded_path: String,
+    orig_ts: f64,
+    enc_ts: f64,
+    full_resolution: bool,
+    include_delta: bool,
+    delta_gain: Option<f64>,
+) -> Result<FrameComparisonPair, String> {
+    let ffmpeg_path = state
+        .scheduler
+        .tool_status
+        .lock()
+        .ok()
+        .and_then(|t| t.capabilities.as_ref().map(|c| PathBuf::from(&c.ffmpeg_path)))
+        .ok_or_else(|| "ffmpeg is not configured".to_string())?;
+
+    let jobs = state.scheduler.db.list_all_jobs()?;
+    let preview_canon = state
+        .scheduler
+        .previews
+        .preview_dir
+        .canonicalize()
+        .unwrap_or_else(|_| state.scheduler.previews.preview_dir.clone());
+    let validate_path = |raw: &str| -> Result<PathBuf, String> {
+        let target = Path::new(raw);
+        let canon = target.canonicalize().map_err(|e| e.to_string())?;
+        if canon.starts_with(&preview_canon)
+            || jobs
+                .iter()
+                .any(|j| Path::new(&j.source_path) == target || Path::new(&j.destination_path) == target)
+        {
+            Ok(canon)
+        } else {
+            Err("Path is not an authorized preview or job media path.".to_string())
+        }
+    };
+
+    let src_canon = validate_path(&source_path)?;
+    let enc_canon = validate_path(&encoded_path)?;
+
+    let orig_bytes = state.scheduler.previews.decode_comparison_frame(
+        &ffmpeg_path,
+        &src_canon,
+        orig_ts,
+        full_resolution,
+    )?;
+    let enc_bytes = state.scheduler.previews.decode_comparison_frame(
+        &ffmpeg_path,
+        &enc_canon,
+        enc_ts,
+        full_resolution,
+    )?;
+
+    let (delta_data_url, mae_pct, psnr_db) = if include_delta {
+        match crate::preview::compute_frame_delta_jpeg(
+            &orig_bytes,
+            &enc_bytes,
+            delta_gain.unwrap_or(4.0),
+        ) {
+            Ok((dj, mae, psnr)) => (
+                Some(crate::preview::jpeg_data_url(&dj)),
+                Some(mae),
+                Some(psnr),
+            ),
+            Err(_) => (None, None, None),
+        }
+    } else {
+        (None, None, None)
+    };
+
+    Ok(FrameComparisonPair {
+        orig_data_url: crate::preview::jpeg_data_url(&orig_bytes),
+        enc_data_url: crate::preview::jpeg_data_url(&enc_bytes),
+        delta_data_url,
+        mae_pct,
+        psnr_db,
+    })
+}
+
+#[tauri::command]
 pub fn check_close_status(state: State<'_, AppState>) -> Result<bool, String> {
     let has_active = state
         .scheduler

@@ -193,6 +193,8 @@ pub fn run() {
             commands::start_live_preview,
             commands::stop_live_preview,
             commands::get_live_preview_frame,
+            commands::get_live_comparison_bundle,
+            commands::get_sample_comparison_pair,
             commands::check_close_status,
             commands::stop_and_quit,
             catalog_commands::catalog_add_root,

@@ -629,6 +629,8 @@ impl Scheduler {
             job.recipe.container,
             pkt_buf.clone(),
         );
+        self.previews
+            .set_active_encode_source_path(&job.id, Path::new(&job.source_path));
 
         let progress_arc = self.active_progress.clone();
         let speed_hist_arc = self.active_speed_history.clone();

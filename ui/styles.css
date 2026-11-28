@@ -509,9 +509,9 @@ select, input[type="number"], input[type="text"] {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
-  max-width: 860px;
+  max-width: 980px;
   width: 100%;
-  max-height: 88vh;
+  max-height: 90vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -539,6 +539,17 @@ select, input[type="number"], input[type="text"] {
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
+.compare-grid.cols-1 {
+  grid-template-columns: 1fr;
+}
+.compare-grid.cols-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+@media (max-width: 780px) {
+  .compare-grid.cols-3 {
+    grid-template-columns: 1fr;
+  }
+}
 .compare-pane {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -547,7 +558,8 @@ select, input[type="number"], input[type="text"] {
 }
 .compare-pane video, .compare-pane img {
   width: 100%;
-  max-height: 300px;
+  max-height: 320px;
+  min-height: 120px;
   object-fit: contain;
   display: block;
 }

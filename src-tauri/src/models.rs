@@ -745,6 +745,26 @@ pub struct SamplePreviewState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveComparisonBundle {
+    pub info: Option<LivePreviewInfo>,
+    pub matched_ts_secs: Option<f64>,
+    pub enc_data_url: Option<String>,
+    pub orig_data_url: Option<String>,
+    pub delta_data_url: Option<String>,
+    pub mae_pct: Option<f64>,
+    pub psnr_db: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrameComparisonPair {
+    pub orig_data_url: String,
+    pub enc_data_url: String,
+    pub delta_data_url: Option<String>,
+    pub mae_pct: Option<f64>,
+    pub psnr_db: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LivePreviewInfo {
     pub job_id: String,
     pub active: bool,

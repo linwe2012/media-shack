@@ -4474,15 +4474,19 @@
         } else if (sp.status === "ready") {
           const proj = sp.projected_bytes ? ` · Projected full file: ${fmtBytes(sp.projected_bytes)} (~${fmtDuration(sp.projected_secs)})` : "";
           wrap.innerHTML += `<p><strong>Sample ready:</strong> ${fmtBytes(sp.measured_bytes)} in ${sp.elapsed_secs?.toFixed(1)}s${proj}</p>
-            <div class="inline-row" style="gap:8px;margin-bottom:8px;">
+            <div class="inline-row" style="gap:8px;margin-bottom:8px;flex-wrap:wrap;">
               <button id="cmp-play" class="btn btn-sm" type="button">Play / Pause</button>
-              <input id="cmp-seek" type="range" min="0" max="${sp.duration_secs.toFixed(1)}" step="0.2" value="${seekOffset}" style="flex:1" />
+              <input id="cmp-seek" type="range" min="0" max="${sp.duration_secs.toFixed(1)}" step="0.2" value="${seekOffset}" style="flex:1;min-width:120px;" />
               <button id="cmp-zoom" class="btn btn-sm" type="button">${zoom100 ? "Fit" : "100%"}</button>
               <button id="cmp-frames" class="btn btn-sm" type="button">Exact frames</button>
+              <label class="inline-row" style="gap:4px;font-size:12px;cursor:pointer;"><input type="checkbox" id="cmp-delta-chk" /> Show Delta</label>
+              <select id="cmp-delta-gain" class="hidden" style="width:74px;font-size:11px;"><option value="4" selected>4× diff</option><option value="8">8× diff</option><option value="16">16× diff</option></select>
+              <span id="cmp-delta-stats" class="muted tabular-nums" style="font-size:11px;"></span>
             </div>
-            <div class="compare-grid">
-              <div class="compare-pane ${zoom100 ? "zoom-100" : ""}"><div class="compare-label">Original</div><video id="vid-orig" controls muted playsinline></video><img id="img-orig" class="hidden" /></div>
-              <div class="compare-pane ${zoom100 ? "zoom-100" : ""}"><div class="compare-label">Encoded (${escapeHtml(sp.recipe_snapshot.codec.toUpperCase())} CRF ${sp.recipe_snapshot.crf})</div><video id="vid-enc" controls muted playsinline></video><img id="img-enc" class="hidden" /></div>
+            <div id="cmp-grid" class="compare-grid">
+              <div class="compare-pane ${zoom100 ? "zoom-100" : ""}"><div class="compare-label">Reference (Original)</div><video id="vid-orig" controls muted playsinline></video><img id="img-orig" class="hidden" /></div>
+              <div class="compare-pane ${zoom100 ? "zoom-100" : ""}"><div class="compare-label">Test (Encoded · ${escapeHtml(sp.recipe_snapshot.codec.toUpperCase())} CRF ${sp.recipe_snapshot.crf})</div><video id="vid-enc" controls muted playsinline></video><img id="img-enc" class="hidden" /></div>
+              <div id="pane-cmp-delta" class="compare-pane ${zoom100 ? "zoom-100" : ""} hidden"><div class="compare-label">Delta (Amplified Diff)</div><img id="img-cmp-delta" /></div>
             </div>`;
         }
       }
@@ -4493,23 +4497,53 @@
 
       if (sp && sp.status === "ready") {
         const vo = wrap.querySelector("#vid-orig"), ve = wrap.querySelector("#vid-enc"), io = wrap.querySelector("#img-orig"), ie = wrap.querySelector("#img-enc");
+        const deltaPane = wrap.querySelector("#pane-cmp-delta"), deltaImg = wrap.querySelector("#img-cmp-delta"), deltaChk = wrap.querySelector("#cmp-delta-chk"), deltaGain = wrap.querySelector("#cmp-delta-gain"), deltaStats = wrap.querySelector("#cmp-delta-stats"), cmpGrid = wrap.querySelector("#cmp-grid");
         const protoBase = navigator.userAgent.includes("Windows") ? "http://preview.localhost" : "preview://localhost";
         vo.src = `${protoBase}/${encodeURIComponent(`${job.id}/original_sample.mp4`)}`;
         ve.src = `${protoBase}/${encodeURIComponent(`${job.id}/encoded_sample.${sp.recipe_snapshot.container}`)}`;
         const loadExactFrames = async (t) => {
           usingFrameFallback = true;
-          const [b1, b2] = await Promise.all([
-            invoke("get_comparison_frame", { mediaPath: job.source_path, timestampSecs: sp.start_secs + t, fullResolution: zoom100 }),
-            invoke("get_comparison_frame", { mediaPath: sp.encoded_sample_path, timestampSecs: t, fullResolution: zoom100 }),
-          ]);
-          io.src = URL.createObjectURL(new Blob([new Uint8Array(b1)], { type: "image/jpeg" }));
-          ie.src = URL.createObjectURL(new Blob([new Uint8Array(b2)], { type: "image/jpeg" }));
+          const showDelta = Boolean(deltaChk?.checked);
+          const gain = Number(deltaGain?.value || 4);
+          const pair = await invoke("get_sample_comparison_pair", {
+            sourcePath: job.source_path,
+            encodedPath: sp.encoded_sample_path,
+            origTs: sp.start_secs + t,
+            encTs: t,
+            fullResolution: zoom100,
+            includeDelta: showDelta,
+            deltaGain: gain,
+          });
+          io.src = pair.orig_data_url;
+          ie.src = pair.enc_data_url;
           vo.classList.add("hidden"); ve.classList.add("hidden"); io.classList.remove("hidden"); ie.classList.remove("hidden");
+          if (showDelta && pair.delta_data_url) {
+            deltaImg.src = pair.delta_data_url;
+            deltaPane.classList.remove("hidden");
+            cmpGrid.classList.add("cols-3");
+            if (deltaStats) deltaStats.textContent = `Diff MAE ${pair.mae_pct?.toFixed(2) ?? "—"}% · PSNR ${pair.psnr_db?.toFixed(1) ?? "—"} dB`;
+          } else {
+            deltaPane.classList.add("hidden");
+            cmpGrid.classList.remove("cols-3");
+            if (deltaStats) deltaStats.textContent = "";
+          }
         };
+        deltaChk?.addEventListener("change", () => {
+          deltaGain?.classList.toggle("hidden", !deltaChk.checked);
+          if (deltaChk.checked) {
+            vo.pause(); ve.pause();
+            loadExactFrames(seekOffset).catch(() => {});
+          } else {
+            deltaPane.classList.add("hidden");
+            cmpGrid.classList.remove("cols-3");
+            if (deltaStats) deltaStats.textContent = "";
+          }
+        });
+        deltaGain?.addEventListener("change", () => { if (deltaChk?.checked) loadExactFrames(seekOffset).catch(() => {}); });
         ve.onerror = () => loadExactFrames(seekOffset).catch(() => {});
         vo.onerror = () => loadExactFrames(seekOffset).catch(() => {});
         wrap.querySelector("#cmp-play").onclick = () => { if (vo.paused) { vo.play().catch(() => {}); ve.play().catch(() => {}); } else { vo.pause(); ve.pause(); } };
-        wrap.querySelector("#cmp-seek").oninput = (e) => { seekOffset = Number(e.target.value); vo.currentTime = seekOffset; ve.currentTime = seekOffset; if (usingFrameFallback) loadExactFrames(seekOffset).catch(() => {}); };
+        wrap.querySelector("#cmp-seek").oninput = (e) => { seekOffset = Number(e.target.value); vo.currentTime = seekOffset; ve.currentTime = seekOffset; if (usingFrameFallback || deltaChk?.checked) loadExactFrames(seekOffset).catch(() => {}); };
         wrap.querySelector("#cmp-zoom").onclick = () => { zoom100 = !zoom100; usingFrameFallback = zoom100; draw(); };
         wrap.querySelector("#cmp-frames").onclick = () => loadExactFrames(seekOffset);
       }
@@ -4521,35 +4555,99 @@
   async function openLivePreviewModal(jobId) {
     currentLiveJobId = jobId;
     await invoke("start_live_preview", { jobId });
+    let showSideBySide = true;
+    let showDelta = false;
+    let deltaGain = 4;
+
     const wrap = document.createElement("div");
-    wrap.innerHTML = `<div id="lp-meta" style="margin-bottom:8px">Waiting for first encoded frame…</div><img id="lp-img" class="live-preview-img" alt="Live encoded preview" />`;
-    openModalEl("Live Encoded Preview (Silent)", wrap, [{ label: "Hide preview", cls: "btn btn-primary", onClick: closeModal }]);
-    let prevUrl = null;
-    livePreviewTimer = setInterval(async () => {
+    wrap.innerHTML = `
+      <div class="inline-row" style="justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+        <div id="lp-meta" class="tabular-nums" style="font-size:12px;">Waiting for first decodable frame…</div>
+        <div class="inline-row" style="gap:10px;flex-wrap:wrap;">
+          <label class="inline-row" style="gap:4px;font-size:12px;cursor:pointer;"><input type="checkbox" id="lp-sbs-chk" checked /> Ref | Test side-by-side</label>
+          <label class="inline-row" style="gap:4px;font-size:12px;cursor:pointer;"><input type="checkbox" id="lp-delta-chk" /> Show Delta</label>
+          <select id="lp-delta-gain" class="hidden" style="width:74px;font-size:11px;"><option value="4" selected>4× diff</option><option value="8">8× diff</option><option value="16">16× diff</option></select>
+        </div>
+      </div>
+      <div id="lp-grid" class="compare-grid">
+        <div id="lp-pane-orig" class="compare-pane">
+          <div class="compare-label">Reference (Original)</div>
+          <img id="lp-img-orig" alt="Reference frame" />
+        </div>
+        <div id="lp-pane-enc" class="compare-pane">
+          <div class="compare-label">Test (Encoded Live)</div>
+          <img id="lp-img-enc" alt="Live encoded frame" />
+        </div>
+        <div id="lp-pane-delta" class="compare-pane hidden">
+          <div class="compare-label" id="lp-delta-lbl">Delta (Amplified 4× Diff)</div>
+          <img id="lp-img-delta" alt="Delta difference frame" />
+        </div>
+      </div>
+    `;
+    openModalEl("Live Comparison Preview (Silent)", wrap, [{ label: "Hide preview", cls: "btn btn-primary", onClick: closeModal }]);
+
+    const syncGridLayout = () => {
+      const grid = $("lp-grid");
+      const pOrig = $("lp-pane-orig");
+      const pDelta = $("lp-pane-delta");
+      if (!grid || !pOrig || !pDelta) return;
+      pOrig.classList.toggle("hidden", !showSideBySide);
+      pDelta.classList.toggle("hidden", !showDelta);
+      grid.classList.remove("cols-1", "cols-3");
+      const panesVisible = (showSideBySide ? 1 : 0) + 1 + (showDelta ? 1 : 0);
+      if (panesVisible === 1) grid.classList.add("cols-1");
+      else if (panesVisible === 3) grid.classList.add("cols-3");
+      if ($("lp-delta-lbl")) $("lp-delta-lbl").textContent = `Delta (Amplified ${deltaGain}× Diff)`;
+    };
+
+    const sbsChk = $("lp-sbs-chk");
+    const deltaChk = $("lp-delta-chk");
+    const gainSel = $("lp-delta-gain");
+    sbsChk?.addEventListener("change", () => { showSideBySide = sbsChk.checked; syncGridLayout(); });
+    deltaChk?.addEventListener("change", () => {
+      showDelta = deltaChk.checked;
+      gainSel?.classList.toggle("hidden", !showDelta);
+      syncGridLayout();
+    });
+    gainSel?.addEventListener("change", () => { deltaGain = Number(gainSel.value || 4); syncGridLayout(); });
+    syncGridLayout();
+
+    const pollOnce = async () => {
       try {
-        const snap = await invoke("get_snapshot");
-        const li = snap.live_preview;
-        const ap = snap.active_progress && snap.active_progress.job_id === jobId ? snap.active_progress : null;
-        const bytes = await invoke("get_live_preview_frame");
+        const bundle = await invoke("get_live_comparison_bundle", {
+          includeDelta: showDelta,
+          deltaGain,
+        });
+        const li = bundle?.info;
+        const ap = snapshot?.active_progress && snapshot.active_progress.job_id === jobId ? snapshot.active_progress : null;
         if ($("lp-meta")) {
           const lpParts = [];
-          if (li && !li.waiting_first_frame) lpParts.push(`${fmtDuration(li.media_time_secs)} · Frame #${li.frame_seq} · ${li.mode}`);
-          else lpParts.push("Waiting for first encoded frame…");
+          if (li && !li.waiting_first_frame) {
+            const ts = bundle.matched_ts_secs != null ? bundle.matched_ts_secs : li.media_time_secs;
+            lpParts.push(`${fmtDuration(ts)} · Frame #${li.frame_seq} · ${li.mode}`);
+          } else if (li?.limitation) {
+            lpParts.push(li.limitation);
+          } else {
+            lpParts.push("Waiting for first decodable frame…");
+          }
           if (ap) {
             if (ap.bytes_written > 0) lpParts.push(`Output ${fmtBytes(ap.bytes_written)}`);
             if (ap.est_final_ratio) lpParts.push(`Est. Ratio ${ap.est_final_ratio.toFixed(2)}:1`);
             if (ap.speed) lpParts.push(`${ap.speed.toFixed(2)}x${ap.fps ? ` (${ap.fps.toFixed(1)} fps)` : ""}`);
           }
+          if (showDelta && bundle?.mae_pct != null) {
+            lpParts.push(`MAE ${bundle.mae_pct.toFixed(2)}% · PSNR ${bundle.psnr_db?.toFixed(1) ?? "—"} dB`);
+          }
           $("lp-meta").textContent = lpParts.join(" · ");
         }
-        if (bytes && bytes.byteLength > 0 && $("lp-img")) {
-          const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }));
-          if (prevUrl) URL.revokeObjectURL(prevUrl);
-          prevUrl = url;
-          $("lp-img").src = url;
-        }
+        if (bundle?.enc_data_url && $("lp-img-enc")) $("lp-img-enc").src = bundle.enc_data_url;
+        if (bundle?.orig_data_url && $("lp-img-orig")) $("lp-img-orig").src = bundle.orig_data_url;
+        if (showDelta && bundle?.delta_data_url && $("lp-img-delta")) $("lp-img-delta").src = bundle.delta_data_url;
       } catch (_) {}
-    }, 500);
+    };
+
+    pollOnce();
+    livePreviewTimer = setInterval(pollOnce, 550);
   }
 
   function openTrashReviewModal(plan, onConfirm) {
