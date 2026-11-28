@@ -8,8 +8,8 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Manifest = Join-Path $RepoRoot "src-tauri\Cargo.toml"
 
 if (-not $SkipBuild) {
-    Write-Host "Building release binaries (media-shack, video-recover)..."
-    cargo build --release --manifest-path $Manifest --bin media-shack --bin video-recover
+    Write-Host "Building release binaries (media-shack with embedded UI, video-recover)..."
+    cargo build --release --manifest-path $Manifest --features tauri/custom-protocol --bin media-shack --bin video-recover
     if ($LASTEXITCODE -ne 0) {
         throw "Cargo release build failed with exit code $LASTEXITCODE"
     }
