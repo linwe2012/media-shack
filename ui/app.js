@@ -2322,8 +2322,7 @@
               <div class="inline-row" style="gap:6px;">
                 ${recoverable ? `
                   <button type="button" class="btn btn-sm btn-secondary" data-open-staged="${j.id}">Open Staged Folder</button>
-                  <button type="button" class="btn btn-sm btn-primary" data-resolve-staged="${j.id}">Resolve / Save…</button>
-                  ${sameGroup.length > 1 ? `<button type="button" class="btn btn-sm btn-secondary" data-resolve-same="${j.id}">Resolve All ${sameGroup.length} Same…</button>` : ""}
+                  ${sameGroup.length > 1 ? `<button type="button" class="btn btn-sm btn-primary" data-resolve-same="${j.id}">Resolve All ${sameGroup.length} Same…</button>` : ""}
                 ` : `
                   <button type="button" class="btn btn-sm btn-secondary" data-fwd-rep="${j.id}">Send to Repair</button>
                   ${canMkv ? `<button type="button" class="btn btn-sm btn-primary" data-fix-mkv="${j.id}">Use MKV</button>` : ""}
@@ -2335,10 +2334,6 @@
         errTr.querySelector("[data-open-staged]")?.addEventListener("click", (e) => {
           e.stopPropagation();
           invoke("reveal_staged_file", { jobId: j.id }).catch((err) => showToast(String(err), "warn"));
-        });
-        errTr.querySelector("[data-resolve-staged]")?.addEventListener("click", (e) => {
-          e.stopPropagation();
-          openResolveStagedModal(j.id);
         });
         errTr.querySelector("[data-resolve-same]")?.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -3250,9 +3245,8 @@
         errRow.className = "tc-subrow";
         if (isPublishRecoverableJob(j)) {
           const sameGroup = allQueued.filter((x) => isPublishRecoverableJob(x) && errorGroupKey(x) === errorGroupKey(j));
-          errRow.innerHTML = `<td colspan="8"><div class="inline-row" style="justify-content:space-between;gap:8px;flex-wrap:wrap;"><span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span><div class="inline-row" style="gap:6px;"><button type="button" class="btn btn-sm btn-secondary qp-err-finder">Open Staged Folder</button><button type="button" class="btn btn-sm btn-primary qp-err-resolve">Choose How to Save…</button>${sameGroup.length > 1 ? `<button type="button" class="btn btn-sm btn-secondary qp-err-batch">Resolve All ${sameGroup.length} Same…</button>` : ""}</div></div></td>`;
+          errRow.innerHTML = `<td colspan="8"><div class="inline-row" style="justify-content:space-between;gap:8px;flex-wrap:wrap;"><span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span><div class="inline-row" style="gap:6px;"><button type="button" class="btn btn-sm btn-secondary qp-err-finder">Open Staged Folder</button>${sameGroup.length > 1 ? `<button type="button" class="btn btn-sm btn-primary qp-err-batch">Resolve All ${sameGroup.length} Same…</button>` : ""}</div></div></td>`;
           errRow.querySelector(".qp-err-finder")?.addEventListener("click", () => invoke("reveal_staged_file", { jobId: j.id }).catch((e) => showToast(String(e), "warn")));
-          errRow.querySelector(".qp-err-resolve")?.addEventListener("click", () => openResolveStagedModal(j.id));
           errRow.querySelector(".qp-err-batch")?.addEventListener("click", () => openBatchResolveModal(sameGroup.map((x) => x.id)));
         } else {
           errRow.innerHTML = `<td colspan="8"><span style="font-size:11.5px;color:var(--warn);"><strong>${escapeHtml(j.error_message)}</strong></span></td>`;
